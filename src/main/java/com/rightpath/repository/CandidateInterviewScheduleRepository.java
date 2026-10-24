@@ -15,6 +15,13 @@ import com.rightpath.enums.AttemptStatus;
 
 public interface CandidateInterviewScheduleRepository extends JpaRepository<CandidateInterviewSchedule, Long> {
 
+	/**
+	 * Just the status. The phone asks whether its interview is over every few seconds, and loading the whole
+	 * row for that drags in the transcript, evaluation and recording columns.
+	 */
+	@Query("SELECT c.attemptStatus FROM CandidateInterviewSchedule c WHERE c.id = :id")
+	Optional<AttemptStatus> findAttemptStatusById(@Param("id") Long id);
+
 	Optional<CandidateInterviewSchedule> findByJobPrefixAndEmail(String jobPrefix, String email);
 
 	Optional<CandidateInterviewSchedule> findFirstByJobPrefixAndEmailOrderByAssignedAtDesc(String jobPrefix, String email);

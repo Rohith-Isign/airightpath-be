@@ -150,7 +150,16 @@ public class MobilePairingService {
         if (pairing == null) {
             return "unknown";
         }
-        return Boolean.TRUE.equals(pairing.getRevoked()) ? "closed" : "open";
+        if (Boolean.TRUE.equals(pairing.getRevoked())) {
+            return "closed";
+        }
+        // The interview is over. Told to the phone here as well as over the socket, because the socket
+        // message is the one that goes astray, and a phone never told keeps its recording open: nothing is
+        // closed off, so the reviewer finds no phone video.
+        boolean over = scheduleRepository.findAttemptStatusById(pairing.getInterviewScheduleId())
+                .map(status -> status == com.rightpath.enums.AttemptStatus.COMPLETED)
+                .orElse(false);
+        return over ? "ended" : "open";
     }
 
     /** The pairing a token stands for, or a refusal. Unknown and expired look the same to the caller. */
