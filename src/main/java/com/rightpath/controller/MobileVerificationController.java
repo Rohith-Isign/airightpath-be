@@ -88,6 +88,38 @@ public class MobileVerificationController {
                 "checkable", result.checkable()));
     }
 
+    /**
+     * The room scan: the photos the phone took while the candidate panned it round the room, kept as
+     * evidence for the reviewer.
+     *
+     * <p>Nothing is sent to OpenAI. The desktop's own room scan during the exam and the interview
+     * works this way (capture, store, let a person look), and the phone now matches it. The AI check
+     * it replaces failed candidates for reasons they could not fix, and an OpenAI outage or an
+     * exhausted quota stopped every phone from verifying at all.</p>
+     *
+     * <p>Unlike {@link #verifyRoom} this does not swallow a refused token: the photos are the whole
+     * point, so a pairing that cannot be resolved (closed, expired, never registered) answers 403 and
+     * the phone tells the candidate to scan the code again.</p>
+     */
+    @PostMapping("/room-scan")
+    public ResponseEntity<Map<String, Object>> roomScan(@RequestParam String token,
+                                                        @RequestParam("photos") java.util.List<MultipartFile> photos) {
+        var pairing = pairingService.resolve(token);
+        if (photos == null || photos.isEmpty()) {
+            throw new IllegalArgumentException("At least one room photo is required");
+        }
+        if (photos.size() > MAX_ROOM_SCAN_PHOTOS) {
+            throw new IllegalArgumentException("A room scan holds at most " + MAX_ROOM_SCAN_PHOTOS + " photos");
+        }
+        for (MultipartFile photo : photos) {
+            captureService.saveForPairing(pairing.getInterviewScheduleId(), "ROOM_PHOTO", photo);
+        }
+        pairingService.recordEvent(pairing, "mobile_room_scan", "Phone room scan saved (" + photos.size() + " photos)");
+        return ResponseEntity.ok(Map.of("saved", photos.size(), "valid", true));
+    }
+
+    private static final int MAX_ROOM_SCAN_PHOTOS = 30;
+
     @PostMapping("/monitor")
     public ResponseEntity<Map<String, Object>> monitor(@RequestParam String token,
                                                       @RequestParam("photo") MultipartFile photo) throws IOException {

@@ -59,6 +59,7 @@ public class MobileCaptureService {
     @Value("${proctoring.capture.max-file-size-bytes:5242880}")
     private long maxFileSizeBytes;
 
+
     public MobileCaptureService(InterviewMobileCaptureRepository captureRepository,
             CandidateInterviewScheduleRepository scheduleRepository, StorageService storageService) {
         this.captureRepository = captureRepository;
@@ -113,7 +114,7 @@ public class MobileCaptureService {
         }
 
         int frameIndex = (int) existing;
-        String extension = contentType.equals("image/png") ? ".png" : contentType.equals("image/webp") ? ".webp" : ".jpg";
+        String extension = extensionFor(contentType);
         // Time and index in the name: a repeat capture never overwrites the one
         // before it, which is the point of keeping them as evidence.
         String fileName = "mobile-capture/interview/" + scheduleId + "/" + normalisedKind.toLowerCase() + "-"
@@ -150,8 +151,16 @@ public class MobileCaptureService {
         byte[] bytes = storageService.downloadFile(capture.getContainerName(), capture.getFileName());
         String contentType = capture.getContentType() != null ? capture.getContentType() : "image/jpeg";
         String downloadName = "phone-" + capture.getKind().toLowerCase() + "-" + capture.getInterviewScheduleId() + "-"
-                + capture.getFrameIndex() + (contentType.equals("image/png") ? ".png" : ".jpg");
+                + capture.getFrameIndex() + extensionFor(contentType);
         return new ProctoringCaptureImage(bytes, contentType, downloadName);
+    }
+
+    private static String extensionFor(String contentType) {
+        return switch (contentType) {
+            case "image/png" -> ".png";
+            case "image/webp" -> ".webp";
+            default -> ".jpg";
+        };
     }
 
     /** The browser's clock if it parses, otherwise now. A bad stamp must not cost the photo. */

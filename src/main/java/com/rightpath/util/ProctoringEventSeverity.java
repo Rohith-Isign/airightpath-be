@@ -69,6 +69,7 @@ public final class ProctoringEventSeverity {
 			// What the browser did to the microphone. A fact about the device, never conduct.
 			"mic_processing",
 			// The phone's own recording, reported by the phone.
+			"mobile_room_scan",
 			"mobile_recording_started",
 			"mobile_recording_not_started",
 			"mobile_recording_issue",
