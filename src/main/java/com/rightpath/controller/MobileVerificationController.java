@@ -92,10 +92,19 @@ public class MobileVerificationController {
     public ResponseEntity<Map<String, Object>> monitor(@RequestParam String token,
                                                       @RequestParam("photo") MultipartFile photo) throws IOException {
         keepPhoto(token, "MONITOR_FRAME", photo);
-        String result = openAiVisionService.analyzeRoom(photo.getBytes());
-        JsonNode node = objectMapper.readTree(result);
-        String status = node.get("status").asText();
-        String reason = node.get("reason").asText();
+        String status;
+        String reason;
+        try {
+            JsonNode node = objectMapper.readTree(openAiVisionService.analyzeRoom(photo.getBytes()));
+            status = node.path("status").asText("");
+            reason = node.path("reason").asText("");
+        } catch (Exception e) {
+            // A periodic check that could not run is not a finding. It used to answer 500, which the phone
+            // logged as an error on every tick of an OpenAI outage.
+            org.slf4j.LoggerFactory.getLogger(MobileVerificationController.class)
+                    .warn("Room monitoring could not be run: {}", e.getMessage());
+            return ResponseEntity.ok(Map.of("status", "UNAVAILABLE", "reason", "The room check could not be run."));
+        }
 
         if ("FAILED".equalsIgnoreCase(status)) {
             // Find desktop session for this token

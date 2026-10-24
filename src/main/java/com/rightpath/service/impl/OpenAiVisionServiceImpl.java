@@ -19,7 +19,22 @@ public class OpenAiVisionServiceImpl implements OpenAiVisionService {
 		    @Value("${openai.api.key}")
 		    private String apiKey;
 		
-		    private final RestTemplate restTemplate = new RestTemplate();
+		    @Value("${openai.api.base-url:https://api.openai.com/v1}")
+		    private String baseUrl;
+
+		    /**
+		     * With timeouts. The default RestTemplate waits forever, so a stalled OpenAI connection held the
+		     * phone's room check open until its own browser gave up with "could not reach the room check".
+		     */
+		    private final RestTemplate restTemplate = buildRestTemplate();
+
+		    private static RestTemplate buildRestTemplate() {
+		        org.springframework.http.client.SimpleClientHttpRequestFactory factory =
+		                new org.springframework.http.client.SimpleClientHttpRequestFactory();
+		        factory.setConnectTimeout(10_000);
+		        factory.setReadTimeout(45_000);
+		        return new RestTemplate(factory);
+		    }
 		
 		    @Override
 		    public String analyzeRoom(byte[] imageBytes) {
@@ -69,7 +84,7 @@ public class OpenAiVisionServiceImpl implements OpenAiVisionService {
 		
 		            ResponseEntity<String> response =
 		                    restTemplate.postForEntity(
-		                            "https://api.openai.com/v1/chat/completions",
+		                            baseUrl + "/chat/completions",
 		                            request,
 		                            String.class
 		                    );
@@ -85,6 +100,12 @@ public class OpenAiVisionServiceImpl implements OpenAiVisionService {
 		                    .get("content")
 		                    .asText();
 		
+		        } catch (org.springframework.web.client.HttpStatusCodeException e) {
+		            // The status and body say why: a bad key, no quota, a retired model. Without them the log
+		            // read only "AI verification failed" and every cause looked the same.
+		            org.slf4j.LoggerFactory.getLogger(OpenAiVisionServiceImpl.class)
+		                    .error("OpenAI refused the room photo: {} {}", e.getStatusCode(), e.getResponseBodyAsString());
+		            throw new RuntimeException("AI verification failed: OpenAI answered " + e.getStatusCode(), e);
 		        } catch (Exception e) {
 		            throw new RuntimeException("AI verification failed", e);
 		        }
