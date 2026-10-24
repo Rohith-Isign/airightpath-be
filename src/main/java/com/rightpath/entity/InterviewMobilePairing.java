@@ -60,6 +60,14 @@ public class InterviewMobilePairing {
     @Column(name = "revoked")
     private Boolean revoked;
 
+    /**
+     * When the phone's room scan was saved. The candidate's page reads this to know the phone is verified,
+     * so the Begin button does not depend on the live socket reaching it: the scan is on the server's record
+     * whether or not any message got through. Nullable: rows from before this existed read as not verified.
+     */
+    @Column(name = "verified_at")
+    private LocalDateTime verifiedAt;
+
     /** Recording bytes accepted so far, so a token cannot be used to fill the bucket. */
     @Column(name = "bytes_received", nullable = false)
     @Builder.Default

@@ -114,6 +114,7 @@ public class MobileVerificationController {
         for (MultipartFile photo : photos) {
             captureService.saveForPairing(pairing.getInterviewScheduleId(), "ROOM_PHOTO", photo);
         }
+        pairingService.markVerified(pairing);
         pairingService.recordEvent(pairing, "mobile_room_scan", "Phone room scan saved (" + photos.size() + " photos)");
         return ResponseEntity.ok(Map.of("saved", photos.size(), "valid", true));
     }

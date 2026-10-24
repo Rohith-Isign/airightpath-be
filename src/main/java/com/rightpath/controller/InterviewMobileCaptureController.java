@@ -51,6 +51,19 @@ public class InterviewMobileCaptureController {
 		return ResponseEntity.ok().build();
 	}
 
+	/**
+	 * Whether the phone behind this token has finished its room scan. The candidate's page asks this every few
+	 * seconds, so the Begin button follows what the server has recorded and not whether a live message happened
+	 * to arrive.
+	 */
+	@GetMapping("/{interviewScheduleId}/mobile-pairing/state")
+	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
+	public ResponseEntity<java.util.Map<String, Boolean>> pairingState(@PathVariable Long interviewScheduleId,
+			@RequestParam String token, Authentication authentication) {
+		return ResponseEntity.ok(java.util.Map.of("verified",
+				mobilePairingService.isVerified(interviewScheduleId, authentication.getName(), token)));
+	}
+
 	/** The candidate is starting without a phone: close pairing for this interview. */
 	@PostMapping("/{interviewScheduleId}/mobile-pairing/revoke")
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")

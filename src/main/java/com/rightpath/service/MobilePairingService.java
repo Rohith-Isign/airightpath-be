@@ -122,6 +122,28 @@ public class MobilePairingService {
         log.info("Phone pairing closed for interview {}: started without a phone", scheduleId);
     }
 
+    /** The phone's room scan is saved: record it where the candidate's page can read it. */
+    public void markVerified(InterviewMobilePairing pairing) {
+        if (pairing.getVerifiedAt() == null) {
+            pairing.setVerifiedAt(LocalDateTime.now(ZoneOffset.UTC));
+            pairingRepository.save(pairing);
+        }
+    }
+
+    /**
+     * Whether this candidate's phone has completed its room scan. The candidate must own the interview and
+     * the token must belong to it; anything else reads as not verified rather than leaking that a token exists.
+     */
+    public boolean isVerified(Long scheduleId, String actorEmail, String token) {
+        InterviewMobilePairing pairing = token == null ? null : pairingRepository.findById(token).orElse(null);
+        if (pairing == null || !pairing.getInterviewScheduleId().equals(scheduleId)
+                || actorEmail == null || !actorEmail.equalsIgnoreCase(pairing.getCandidateEmail())
+                || Boolean.TRUE.equals(pairing.getRevoked())) {
+            return false;
+        }
+        return pairing.getVerifiedAt() != null;
+    }
+
     /** open, closed or unknown: what a phone is told about its token before it opens the camera. */
     public String state(String token) {
         InterviewMobilePairing pairing = token == null ? null : pairingRepository.findById(token).orElse(null);
