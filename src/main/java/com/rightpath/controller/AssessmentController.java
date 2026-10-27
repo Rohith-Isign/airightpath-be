@@ -282,8 +282,8 @@ public class AssessmentController {
 	    @RequestParam(required = false) Double percentage,
 	    @RequestParam(required = false) Double totalMarks
 	) {
-	    String message = assessmentService.resultAssessment(candidateEmail, assessmentType, score, resultsJson,
-	            jobPrefix, assessmentId, percentage, totalMarks);
+	    String message = com.rightpath.util.OptimisticRetry.run(() -> assessmentService.resultAssessment(
+	            candidateEmail, assessmentType, score, resultsJson, jobPrefix, assessmentId, percentage, totalMarks));
 
 	    Map<String, Object> response = new HashMap<>();
 	    response.put("message", message);
@@ -303,7 +303,7 @@ public class AssessmentController {
 	public ResponseEntity<Map<String, Object>> submitAssessment(@PathVariable Long id) {
 		try {
 			// Call service method to submit assessment
-			String message = assessmentService.submitAssessment(id);
+			String message = com.rightpath.util.OptimisticRetry.run(() -> assessmentService.submitAssessment(id));
 
 			// Prepare success response
 			Map<String, Object> response = new HashMap<>();

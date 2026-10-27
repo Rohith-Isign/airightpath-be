@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -339,6 +340,15 @@ public class GlobalExceptionHandler {
         logger.warn("Data integrity violation at {}: {}", req.getRequestURI(), ex.getMostSpecificCause().getMessage());
         return build(HttpStatus.CONFLICT, ErrorCodes.CONFLICT,
                 "The request conflicts with existing data.", req, null);
+    }
+
+    /** Another request (often on another pod) changed the same row first; the caller should reload and retry. */
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ApiError> handleOptimisticLock(ObjectOptimisticLockingFailureException ex,
+            HttpServletRequest req) {
+        logger.warn("Optimistic lock conflict at {}: {}", req.getRequestURI(), ex.getMessage());
+        return build(HttpStatus.CONFLICT, ErrorCodes.CONFLICT,
+                "This record was changed by someone else. Please reload and try again.", req, null);
     }
 
     // ---------------------------------------------------------------------
