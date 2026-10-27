@@ -45,45 +45,39 @@ public class WhatsAppController {
         @RequestParam(required = false) String params
     ) {
         logger.info("Sending {} message to {}", type, to);
-        
-        try {
-            // Handle different message types
-            switch(type) {
-                case REGISTRATION_SUCCESS:
-                    String[] names = params.split(",");
-                    whatsAppService.sendWhatsAppMessage(to, type, names[0], names[1]);
-                    break;
-                    
-                case JOB_APPLIED:
-                    String[] jobParams = params.split(",");
-                    whatsAppService.sendWhatsAppMessage(to, type, 
-                        jobParams[0], jobParams[1], jobParams[2], jobParams[3]);
-                    break;
-                    
-                case EXAM_SCHEDULE:
-                    String[] times = params.split(",");
-                    LocalDateTime start = LocalDateTime.parse(times[0]);
-                    LocalDateTime end = LocalDateTime.parse(times[1]);
-                    whatsAppService.sendWhatsAppMessage(to, type, start, end);
-                    break;
-                    
-                case OTP:
-                    whatsAppService.sendWhatsAppMessage(to, type, params);
-                    break;
-                    
-                case SHORTLIST:
-                    whatsAppService.sendWhatsAppMessage(to, type, params);
-                    break;
-                    
-                default:
-                    whatsAppService.sendWhatsAppMessage(to, type);
-            }
-            
-            return ResponseEntity.ok().body(type + " message sent successfully");
-            
-        } catch (Exception e) {
-            logger.error("Failed to send message: {}", e.getMessage());
-            return ResponseEntity.badRequest().body("Error: " + e.getMessage());
+
+        // Handle different message types
+        switch(type) {
+            case REGISTRATION_SUCCESS:
+                String[] names = params.split(",");
+                whatsAppService.sendWhatsAppMessage(to, type, names[0], names[1]);
+                break;
+
+            case JOB_APPLIED:
+                String[] jobParams = params.split(",");
+                whatsAppService.sendWhatsAppMessage(to, type,
+                    jobParams[0], jobParams[1], jobParams[2], jobParams[3]);
+                break;
+
+            case EXAM_SCHEDULE:
+                String[] times = params.split(",");
+                LocalDateTime start = LocalDateTime.parse(times[0]);
+                LocalDateTime end = LocalDateTime.parse(times[1]);
+                whatsAppService.sendWhatsAppMessage(to, type, start, end);
+                break;
+
+            case OTP:
+                whatsAppService.sendWhatsAppMessage(to, type, params);
+                break;
+
+            case SHORTLIST:
+                whatsAppService.sendWhatsAppMessage(to, type, params);
+                break;
+
+            default:
+                whatsAppService.sendWhatsAppMessage(to, type);
         }
+
+        return ResponseEntity.ok().body(type + " message sent successfully");
     }
 }

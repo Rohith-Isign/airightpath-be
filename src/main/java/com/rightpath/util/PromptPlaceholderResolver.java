@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import com.rightpath.entity.JobPost;
+import com.rightpath.enums.InterviewRound;
 import com.rightpath.repository.JobPostRepository;
 
 @Component
@@ -60,13 +61,13 @@ public class PromptPlaceholderResolver {
             "\\[\\s*[Yy]our\\s+[Nn]ame\\s*\\]");
 
     public String resolveAllInterviewPlaceholders(String template, String jobPrefix, String email,
-                                                    String interviewerName) {
+                                                    String interviewerName, InterviewRound round) {
         String resolved = resolveJobPlaceholders(template, jobPrefix);
         String safeName = safe(interviewerName);
         resolved = resolved
                 .replace("{{email}}", safe(email))
                 .replace("{{interviewerName}}", safeName)
-                .replace("{{categories}}", categoryFormatter.buildStartPromptCategorySection(jobPrefix));
+                .replace("{{categories}}", categoryFormatter.buildStartPromptCategorySection(jobPrefix, round));
         // Handle all variations: [Your Name], [your name], [Your  Name], [ Your Name ], etc.
         resolved = YOUR_NAME_PATTERN.matcher(resolved).replaceAll(safeName);
         return resolved;

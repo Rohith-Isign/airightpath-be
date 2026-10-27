@@ -12,6 +12,8 @@ import com.twilio.rest.api.v2010.account.Message;
 @Service
 public class WhatsAppService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WhatsAppService.class);
+
     @Value("${twilio.account.sid}")
     private String accountSid;
 
@@ -51,6 +53,13 @@ public class WhatsAppService {
      *               - SHORTLIST: fullName
      */
     public void sendWhatsAppMessage(String toNumber, MessageType messageType, Object... params) {
+        // Twilio is optional. Without credentials every call failed with
+        // "Authentication Error - No credentials provided" and a stack trace;
+        // skip quietly instead, so OTP/notification flows are unaffected.
+        if (accountSid == null || accountSid.isBlank() || authToken == null || authToken.isBlank()) {
+            log.debug("WhatsApp disabled (no Twilio credentials); skipping {}", messageType);
+            return;
+        }
         Twilio.init(accountSid, authToken);
 
         String formattedNumber = formatIndianMobileNumber(toNumber);

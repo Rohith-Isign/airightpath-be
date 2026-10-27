@@ -23,6 +23,7 @@ import com.rightpath.dto.CodeSubmissionResponseDTO;
 import com.rightpath.dto.TestCaseDTO;
 import com.rightpath.entity.CodeSubmission;
 import com.rightpath.entity.TestResultEntity;
+import com.rightpath.enums.ExecutionStatus;
 import com.rightpath.rbac.PermissionName;
 import com.rightpath.repository.CodeSubmissionRepository;
 import com.rightpath.service.impl.CompilerServiceDiffL;
@@ -80,124 +81,51 @@ public class CompilerController {
 		entity.setCreatedAt(dto.getCreatedAt());
 		entity.setQuestionId(dto.getQuestionId());
 		entity.setJobPrefix(dto.getJobPrefix());
+		entity.setAssessmentId(dto.getAssessmentId());
 
-		CodeSubmissionResponseDTO response = new CodeSubmissionResponseDTO();
-		response.setLanguage(dto.getLanguage());
-		response.setScript(dto.getScript());
-		response.setUserEmail(dto.getUserEmail());
-		response.setCreatedAt(dto.getCreatedAt());
+		// One path for all three shapes of request. Test cases, a candidate's own
+		// input and neither differ only in what reaches stdin and whether there is
+		// anything to compare the output against — the service handles both, runs
+		// the compile once, and saves exactly once.
+		CodeSubmissionResponseDTO response = compilerService.runSubmission(entity, dto.getTestCases(),
+				dto.getCustomInput());
 
-		try {
-			// Case 1: Custom input provided
-			if ((dto.getTestCases() == null || dto.getTestCases().isEmpty()) && dto.getCustomInput() != null
-					&& !dto.getCustomInput().trim().isEmpty()) {
+		log.debug("Execution finished with status {} ({} / {} passed) in {}ms", response.getStatus(),
+				response.getPassedCount(), response.getTotalCount(), response.getExecutionTimeMs());
 
-				log.debug("Processing custom input execution");
-				return processCustomInputExecution(entity, dto, response);
-			}
-
-			// Case 2: Test cases provided
-			if (dto.getTestCases() != null && !dto.getTestCases().isEmpty()) {
-				log.debug("Processing test case execution with {} test cases", dto.getTestCases().size());
-				return processTestCasesExecution(entity, dto, response);
-			}
-
-			// Case 3: No test cases or custom input - run with empty input
-			log.debug("Processing default execution with empty input");
-			return processDefaultExecution(entity, dto, response);
-
-		} catch (Exception e) {
-			log.error("Error during code execution: {}", e.getMessage());
-			return ResponseEntity.internalServerError().body(response);
-		}
-	}
-
-	private ResponseEntity<CodeSubmissionResponseDTO> processCustomInputExecution(CodeSubmission entity,
-			CodeSubmissionRequestDTO dto, CodeSubmissionResponseDTO response) {
-
-		TestResultEntity result = compilerService.executeSingleInput(entity, dto.getCustomInput());
-		result.setSubmission(entity);
-		result.setPassed(false);
-
-		entity.setTestResults(List.of(result));
-		codeSubmissionRepository.save(entity);
-
-		TestCaseDTO customCase = createTestCaseDTO(result, dto.getCustomInput(), null);
-		response.setTestResults(List.of(customCase));
-
-		log.debug("Custom input execution completed successfully");
-		return ResponseEntity.ok(response);
-	}
-
-	private ResponseEntity<CodeSubmissionResponseDTO> processTestCasesExecution(CodeSubmission entity,
-			CodeSubmissionRequestDTO dto, CodeSubmissionResponseDTO response) {
-
-		List<TestResultEntity> testEntities = dto.getTestCases().stream().map(tc -> createTestResultEntity(tc, entity))
-				.collect(Collectors.toList());
-
-		entity.setTestResults(testEntities);
-		List<TestResultEntity> results = compilerService.executeCode(entity);
-
-		evaluateTestResults(testEntities, results);
-		codeSubmissionRepository.save(entity);
-
-		response.setTestResults(mapToTestCaseDTOs(results, dto.getLanguage()));
-		log.debug("Test case execution completed with {} results", results.size());
-
-		return ResponseEntity.ok(response);
-	}
-
-	private ResponseEntity<CodeSubmissionResponseDTO> processDefaultExecution(CodeSubmission entity,
-			CodeSubmissionRequestDTO dto, CodeSubmissionResponseDTO response) {
-
-		TestResultEntity defaultResult = compilerService.executeSingleInput(entity, "");
-		defaultResult.setSubmission(entity);
-		defaultResult.setInput("");
-		defaultResult.setExpectedOutput(defaultResult.getActualOutput());
-		defaultResult.setPassed(true);
-
-		entity.setTestResults(List.of(defaultResult));
-		codeSubmissionRepository.save(entity);
-
-		TestCaseDTO defaultCase = createTestCaseDTO(defaultResult, "", defaultResult.getExpectedOutput());
-		response.setTestResults(List.of(defaultCase));
-
-		log.debug("Default execution completed successfully");
 		return ResponseEntity.ok(response);
 	}
 
 	@PostMapping("/saveUnattemptedSubmissions")
 	@PreAuthorize("hasAuthority('COMPILER_RUN')")
 	public ResponseEntity<?> saveUnattemptedSubmissions(@RequestBody List<CodeSubmissionRequestDTO> unattemptedDtos) {
-		try {
-			for (CodeSubmissionRequestDTO dto : unattemptedDtos) {
-				boolean exists = codeSubmissionRepository.findTopByUserEmailAndJobPrefixAndQuestionIdOrderByIdDesc(
-						dto.getUserEmail(), dto.getJobPrefix(), dto.getQuestionId()).isPresent();
+		for (CodeSubmissionRequestDTO dto : unattemptedDtos) {
+			boolean exists = codeSubmissionRepository.findTopByUserEmailAndJobPrefixAndQuestionIdOrderByIdDesc(
+					dto.getUserEmail(), dto.getJobPrefix(), dto.getQuestionId()).isPresent();
 
-				// ❌ Skip if already exists
-				if (exists)
-					continue;
+			// ❌ Skip if already exists
+			if (exists)
+				continue;
 
-				// ✅ Create new record
-				CodeSubmission entity = new CodeSubmission();
-				entity.setLanguage(dto.getLanguage());
-				entity.setScript(dto.getScript());
-				entity.setUserEmail(dto.getUserEmail());
-				entity.setJobPrefix(dto.getJobPrefix());
-				entity.setQuestionId(dto.getQuestionId());
-				entity.setCreatedAt(LocalDateTime.now());
-				entity.setPassed(false);
-				entity.setAttempted(true);
-				entity.setTestResults(List.of());
+			// ✅ Create new record
+			CodeSubmission entity = new CodeSubmission();
+			entity.setLanguage(dto.getLanguage());
+			entity.setScript(dto.getScript());
+			entity.setUserEmail(dto.getUserEmail());
+			entity.setJobPrefix(dto.getJobPrefix());
+			entity.setQuestionId(dto.getQuestionId());
+			// Without this these rows belong to no attempt, so a re-sit cannot be told
+			// apart from the sitting before it.
+			entity.setAssessmentId(dto.getAssessmentId());
+			entity.setCreatedAt(LocalDateTime.now());
+			entity.setPassed(false);
+			entity.setAttempted(true);
+			entity.setTestResults(List.of());
 
-				codeSubmissionRepository.save(entity);
-			}
-
-			return ResponseEntity.ok("Unattempted submissions saved successfully (existing skipped).");
-		} catch (Exception e) {
-			e.printStackTrace();
-			return ResponseEntity.internalServerError().body("Error saving unattempted submissions");
+			codeSubmissionRepository.save(entity);
 		}
+
+		return ResponseEntity.ok("Unattempted submissions saved successfully (existing skipped).");
 	}
 
 	/**
@@ -330,52 +258,17 @@ public class CompilerController {
 		return ResponseEntity.ok(results);
 	}
 
-	// Helper methods
-	private TestResultEntity createTestResultEntity(TestCaseDTO tc, CodeSubmission submission) {
-		TestResultEntity t = new TestResultEntity();
-		t.setInput(tc.getInput());
-		t.setExpectedOutput(tc.getExpectedOutput());
-		t.setSubmission(submission);
-		return t;
-	}
-
-	private void evaluateTestResults(List<TestResultEntity> testEntities, List<TestResultEntity> results) {
-		for (int i = 0; i < results.size(); i++) {
-			String expected = testEntities.get(i).getExpectedOutput();
-			String actual = results.get(i).getActualOutput();
-			testEntities.get(i).setActualOutput(actual);
-			testEntities.get(i).setPassed(expected != null && expected.trim().equals(actual.trim()));
-		}
-	}
-
-	private TestCaseDTO createTestCaseDTO(TestResultEntity result, String input, String expectedOutput) {
-		TestCaseDTO dto = new TestCaseDTO();
-		dto.setInput(input);
-		dto.setExpectedOutput(expectedOutput);
-		dto.setActualOutput(result.getActualOutput());
-		dto.setPassed(Boolean.TRUE.equals(result.getPassed()));
-
-		if (result.getActualOutput() != null && result.getActualOutput().startsWith("Runtime Error:")) {
-			CodeErrorInfo errorInfo = compilerService.parseErrorInfo(result.getActualOutput(),
-					result.getSubmission().getLanguage());
-			if (errorInfo != null && !errorInfo.getMessage().isBlank()) {
-				dto.setErrorInfo(errorInfo);
-			}
-		}
-		return dto;
-	}
-
-	private List<TestCaseDTO> mapToTestCaseDTOs(List<TestResultEntity> results, String language) {
-		return results.stream().map(r -> createTestCaseDTO(r, r.getInput(), r.getExpectedOutput()))
-				.collect(Collectors.toList());
-	}
-
 	private List<CodeSubmissionResponseDTO> mapSubmissionsToDTOs(List<CodeSubmission> submissions) {
 		return submissions.stream().map(this::mapSubmissionToDTO).collect(Collectors.toList());
 	}
 
 	private CodeSubmissionResponseDTO mapSubmissionToDTO(CodeSubmission submission) {
 		CodeSubmissionResponseDTO dto = new CodeSubmissionResponseDTO();
+		// The row's own identity, and the attempt it belongs to. Both were declared on
+		// the DTO and never populated, so every submission came back with a null id and
+		// no way to tell which sitting produced it.
+		dto.setId(submission.getId());
+		dto.setAssessmentId(submission.getAssessmentId());
 		dto.setLanguage(submission.getLanguage());
 		dto.setScript(submission.getScript());
 		dto.setUserEmail(submission.getUserEmail());
@@ -396,6 +289,23 @@ public class CompilerController {
 		dto.setActualOutput(result.getActualOutput());
 		dto.setQuestionId(result.getQuestionId());
 		dto.setPassed(result.getPassed());
+		dto.setExecutionTimeMs(result.getExecutionTimeMs());
+
+		// Rows written before per-case status existed carry neither, and read back
+		// exactly as they did before.
+		if (result.getStatus() != null) {
+			try {
+				dto.setStatus(ExecutionStatus.valueOf(result.getStatus()));
+			} catch (IllegalArgumentException e) {
+				log.debug("Unrecognised stored status '{}' on test result {}", result.getStatus(), result.getId());
+			}
+		}
+		if (result.getErrorMessage() != null) {
+			CodeErrorInfo errorInfo = new CodeErrorInfo();
+			errorInfo.setCategory(dto.getStatus());
+			errorInfo.setMessage(result.getErrorMessage());
+			dto.setErrorInfo(errorInfo);
+		}
 		return dto;
 	}
 

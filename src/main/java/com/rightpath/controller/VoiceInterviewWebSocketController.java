@@ -21,6 +21,7 @@ import com.rightpath.repository.CandidateInterviewScheduleRepository;
 import com.rightpath.repository.ProctoringEventRepository;
 import com.rightpath.service.AudioTranscriptionService;
 import com.rightpath.service.VoiceInterviewService;
+import com.rightpath.util.ProctoringEventSeverity;
 import com.rightpath.websocket.WebSocketAuthInterceptor;
 
 @Controller
@@ -194,9 +195,19 @@ public class VoiceInterviewWebSocketController {
         String eventType = payload.get("type");
         String details = payload.get("details");
 
-        log.warn("Proctoring event for schedule {}: {} - {}", scheduleId, eventType, details);
+        boolean countsAsWarning = ProctoringEventSeverity.countsAsWarning(eventType);
 
-        // Item 15: Save proctoring event to database
+        if (countsAsWarning) {
+            log.warn("Proctoring event for schedule {}: {} - {}", scheduleId, eventType, details);
+        } else {
+            // Not a warning, so not logged as one. An upload audit at WARN
+            // made every clean interview look like it had something wrong
+            // with it.
+            log.info("Proctoring record for schedule {}: {} - {}", scheduleId, eventType, details);
+        }
+
+        // Item 15: Save proctoring event to database. Saved whatever its
+        // severity — the recording audit is only useful because it is kept.
         try {
             ProctoringEvent event = ProctoringEvent.builder()
                     .schedule(scheduleRepo.getReferenceById(scheduleId))
@@ -206,6 +217,13 @@ public class VoiceInterviewWebSocketController {
             proctoringEventRepository.save(event);
         } catch (Exception e) {
             log.error("Failed to save proctoring event for schedule {}", scheduleId, e);
+        }
+
+        // Only an actual violation moves the count that fails the interview.
+        // This used to run for every event, so a candidate collected a warning
+        // for each recording that uploaded *successfully*.
+        if (!countsAsWarning) {
+            return;
         }
 
         try {

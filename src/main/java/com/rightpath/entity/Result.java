@@ -40,7 +40,25 @@ public class Result {
 	private AssessmentType assessmentType;
 
 	private LocalDateTime submittedAt;
+
+	/**
+	 * Raw marks earned — NOT a percentage. Aptitude sums the marks per correct
+	 * answer, so a 17-out-of-20 paper stores 17; coding has no marks and stores 0.
+	 * Grading off this directly is what produced a FAILED badge beside an 85%
+	 * score, so use {@link #percentage} for any pass decision.
+	 */
 	private Double score;
+
+	/** What the paper was out of, so {@link #score} can be read as a fraction. */
+	@Column(name = "total_marks")
+	private Double totalMarks;
+
+	/**
+	 * The attempt as a 0-100 percentage — the number the pass mark is compared
+	 * against. Null on results recorded before it was captured; those fall back to
+	 * whatever the client can derive.
+	 */
+	private Double percentage;
 
 	@Enumerated(EnumType.STRING)
 	private ResultStatus status;

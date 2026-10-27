@@ -1,10 +1,12 @@
 package com.rightpath.service;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import org.springframework.stereotype.Service;
 
 import com.rightpath.dto.JobApplicationForCandidateDTO;
+import com.rightpath.dto.ScreeningResponseDTO;
 import com.rightpath.entity.JobApplicationForCandidate;
 
 @Service
@@ -49,12 +51,32 @@ public interface JobApplicationForCandidateService {
     List<JobApplicationForCandidateDTO> filterCandidates(Long jobPostId);
 
     /**
-     * Filters candidates using the job prefix.
+     * Screens every applicant on a job, persisting each shortlist decision.
      *
      * @param jobPrefix Unique identifier for the job.
      * @return A list of filtered candidate applications by job prefix.
+     * @deprecated Prefer {@link #screenCandidates(String, List)}, which can screen a
+     *             subset and reports per-candidate outcomes. This method screens the
+     *             whole job on every call, which makes it unsafe to invoke from a read
+     *             path; it remains only for the existing {@code GET /filterByPrefix} route.
      */
+    @Deprecated(since = "2026-08")
     List<JobApplicationForCandidateDTO> filterCandidatesByPrefix(String jobPrefix);
+
+    /**
+     * Runs ATS screening over a chosen set of candidates, or the whole job.
+     *
+     * <p>Only applications still in the screening phase are re-evaluated: APPLIED
+     * rows, and ATS-produced SHORTLISTED/REJECTED rows that have not been closed by a
+     * finalised rejection. Anything further along the pipeline (ACKNOWLEDGED onward)
+     * is reported as skipped and left untouched, so screening can never walk a
+     * candidate backwards out of an exam or interview.</p>
+     *
+     * @param jobPrefix Unique identifier for the job.
+     * @param emails    Candidates to screen; null or empty screens every applicant.
+     * @return Per-candidate outcomes plus summary counts for the run.
+     */
+    ScreeningResponseDTO screenCandidates(String jobPrefix, List<String> emails);
 
     /**
      * Retrieves applicants by job post ID.
@@ -93,10 +115,10 @@ public interface JobApplicationForCandidateService {
      *
      * @param jobPrefix Job identifier.
      * @param email Candidate's email.
-     * @param date Date of communication.
-     * @param time Time of communication.
+     * @param examSlot Scheduled exam date-time as business-zone wall-clock time,
+     *                 already validated as present and not in the past by the caller.
      */
-    void sendAcknowledgementMailAndUpdateStatus(String jobPrefix, String email, String date, String time);
+    void sendAcknowledgementMailAndUpdateStatus(String jobPrefix, String email, LocalDateTime examSlot);
 
     /**
      * Acknowledges a candidate manually and returns a response.
@@ -131,6 +153,47 @@ public interface JobApplicationForCandidateService {
     void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDTO dto);
 
     /**
+     * Updates the referral verification status of a candidate's application.
+     *
+     * @param jobPrefix Job identifier.
+     * @param email Candidate's email.
+     * @param referralStatus New status; must be a valid {@link com.rightpath.enums.ReferralStatus}
+     *                       value (PENDING/VERIFIED/REJECTED), case-insensitive.
+     * @return The updated application as a DTO.
+     */
+    JobApplicationForCandidateDTO updateReferralStatus(String jobPrefix, String email, String referralStatus);
+
+    /**
+     * Manually shortlists a single candidate without running ATS screening, honouring
+     * the normal transition rules. Equivalent to
+     * {@link #shortlistCandidateWithoutAts(String, String, boolean)} with no override.
+     *
+     * @param jobPrefix Job identifier.
+     * @param email Candidate's email.
+     */
+    void shortlistCandidateWithoutAts(String jobPrefix, String email);
+
+    /**
+     * Manually shortlists a single candidate without running ATS screening.
+     *
+     * <p>Only an APPLIED application can transition to SHORTLISTED; any other current
+     * status throws, so the caller can report it as failed. On success the candidate
+     * is notified (shortlist email + WhatsApp), best-effort.</p>
+     *
+     * <p>{@code override} is the one exception: it reopens a REJECTED application
+     * ("Shortlist Anyway"), which the forward-only pipeline otherwise treats as
+     * terminal. The override clears the finalised-rejection marker so the row returns
+     * to the screening phase and can be re-screened later, and is logged with the
+     * acting recruiter. It has no effect on any other status — a SELECTED or
+     * mid-pipeline application still throws.</p>
+     *
+     * @param jobPrefix Job identifier.
+     * @param email Candidate's email.
+     * @param override Whether to reopen a REJECTED application.
+     */
+    void shortlistCandidateWithoutAts(String jobPrefix, String email, boolean override);
+
+    /**
      * Updates the written test status for aptitude and programming tests.
      *
      * @param jobPrefix Job identifier.
@@ -163,8 +226,10 @@ public interface JobApplicationForCandidateService {
      *
      * @param jobPrefix Job identifier.
      * @param email Candidate's email.
-     * @param dateTime Combined date-time string (e.g. "2025-03-15T14:30").
+     * @param examSlot Scheduled start as business-zone wall-clock time, already
+     *                 validated as not in the past by the caller; {@code null}
+     *                 starts the exam window now.
      */
-    void sendExamLink(String jobPrefix, String email, String dateTime);
+    void sendExamLink(String jobPrefix, String email, LocalDateTime examSlot);
 
 }

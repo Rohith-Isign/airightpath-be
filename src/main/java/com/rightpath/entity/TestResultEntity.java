@@ -37,8 +37,25 @@ public class TestResultEntity {
 
 	@Column(nullable = true)
 	private Boolean passed;
-	
-	   private String questionId; 
+
+	/**
+	 * Why this case ended the way it did, as an {@link com.rightpath.enums.ExecutionStatus}
+	 * name. A false {@code passed} covers a wrong answer, a crash and a timeout
+	 * alike; a reviewer looking at the attempt later needs to tell them apart.
+	 * Null on rows written before per-case status was recorded.
+	 */
+	@Column(name = "status", length = 32)
+	private String status;
+
+	/** The one-line explanation shown to the candidate at the time. */
+	@Column(name = "error_message", columnDefinition = "TEXT")
+	private String errorMessage;
+
+	/** Wall-clock milliseconds for this run. */
+	@Column(name = "execution_time_ms")
+	private Long executionTimeMs;
+
+	   private String questionId;
 
 	
 	 @ManyToOne(fetch = FetchType.LAZY)

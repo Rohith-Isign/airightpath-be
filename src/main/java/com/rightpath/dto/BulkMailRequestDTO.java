@@ -9,6 +9,16 @@ public class BulkMailRequestDTO {
     private String dateTime;
     private String content;
 
+    /**
+     * Manual shortlist only: reopen a REJECTED application ("Shortlist Anyway").
+     *
+     * <p>REJECTED is terminal in the pipeline, so without this flag a rejected
+     * candidate cannot be shortlisted and the request is reported as failed. Set it
+     * to record a deliberate recruiter override; it is ignored for every other
+     * current status, which still goes through the normal transition rules.</p>
+     */
+    private boolean override;
+
     public BulkMailRequestDTO() {}
 
     public List<String> getEmails() {
@@ -41,5 +51,13 @@ public class BulkMailRequestDTO {
 
     public void setContent(String content) {
         this.content = content;
+    }
+
+    public boolean isOverride() {
+        return override;
+    }
+
+    public void setOverride(boolean override) {
+        this.override = override;
     }
 }

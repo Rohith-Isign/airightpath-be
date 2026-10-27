@@ -26,7 +26,7 @@ public class RefreshToken {
     @Column(name = "id", nullable = false, updatable = false)
     private UUID id;
 
-    @Column(name = "user_email", nullable = false, length = 60)
+    @Column(name = "user_email", nullable = false, length = 254)
     private String userEmail;
 
     @ManyToOne(fetch = FetchType.LAZY)

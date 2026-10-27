@@ -17,6 +17,17 @@ public class VoiceAnswerRequest {
     private String codeContent;
     private String codeLanguage;
 
+    /**
+     * What the code printed when the candidate ran it — compiler errors included.
+     *
+     * <p>The editor has had a Compile &amp; Run button all along, but its output
+     * stayed on the candidate's screen: only the source was ever submitted. So
+     * the interviewer judged code it had never seen execute and could not tell
+     * working code from code that does not compile. Null means they never
+     * pressed Run, which is itself worth knowing.</p>
+     */
+    private String codeOutput;
+
     @Data
     @NoArgsConstructor
     @AllArgsConstructor

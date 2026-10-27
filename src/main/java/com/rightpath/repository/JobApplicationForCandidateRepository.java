@@ -28,6 +28,21 @@ public interface JobApplicationForCandidateRepository extends JpaRepository<JobA
     List<JobApplicationForCandidate> findByUserEmail(@Param("email") String email);
 
     /**
+     * Retrieves the candidate's job applications that actually carry a resume,
+     * ordered newest-first. A candidate may have applied to several jobs (and so
+     * have several rows); ordering by descending id — the identity key is
+     * monotonic with creation — makes "which resume do we serve?" deterministic:
+     * the most recently submitted application wins. Used by the view-resume flow.
+     *
+     * @param email the email of the candidate
+     * @return resume-bearing applications, most recent first (empty if none)
+     */
+    @Query("SELECT app FROM JobApplicationForCandidate app "
+            + "WHERE app.user.email = :email AND app.resumeData IS NOT NULL "
+            + "ORDER BY app.id DESC")
+    List<JobApplicationForCandidate> findResumeBearingApplicationsByEmail(@Param("email") String email);
+
+    /**
      * Retrieves all job applications associated with a specific job prefix.
      *
      * @param jobPrefix the prefix identifier of the job

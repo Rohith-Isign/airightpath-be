@@ -15,6 +15,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory; // For logging
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy; // Lazy loads beans
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.authentication.AuthenticationManager; // Used for authenticating users
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken; // Used for passing authentication data
 import org.springframework.security.core.Authentication; // Represents authentication token
@@ -25,13 +30,13 @@ import org.springframework.security.core.userdetails.UserDetailsService; // Load
 import org.springframework.security.core.userdetails.UsernameNotFoundException; // Thrown if user is not found
 import org.springframework.security.crypto.password.PasswordEncoder; // Interface for encoding passwords
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile; // Represents uploaded file
 
 // Import custom project classes
 import com.rightpath.dto.Login;
 import com.rightpath.dto.UsersDto;
 import com.rightpath.entity.Users;
-import com.rightpath.exceptions.CustomException;
 import com.rightpath.exceptions.InactiveUserException;
 import com.rightpath.exceptions.UserAlreadyInDatabaseException;
 import com.rightpath.exceptions.StorageException;
@@ -39,6 +44,7 @@ import com.rightpath.exceptions.UserNotFoundDbException;
 import com.rightpath.repository.RoleRepository;
 import com.rightpath.repository.UserRoleRepository;
 import com.rightpath.repository.UsersRepository;
+import com.rightpath.rbac.UserRoleName;
 import com.rightpath.service.EmailService;
 import com.rightpath.service.rbac.RbacAuthorityService;
 import com.rightpath.util.ThreadLocalUserContext;
@@ -123,18 +129,29 @@ public class UserDetailsServiceImpl implements UserDetailsService {
 				grantedAuthorities);
 	}
 
-	// Add a new user to the system
+	/**
+	 * Registers a new user.
+	 *
+	 * <p>Transactional because the account and its default role have to land
+	 * together or not at all. Without it, {@code save} committed on its own and
+	 * anything that failed afterwards left the row behind: the caller saw the
+	 * registration fail, and every retry from then on answered 409 "Email already
+	 * exists" for an account that had never finished being created and could not
+	 * be logged into. Email is the primary key, so there is no second row to
+	 * create and no way for the candidate to clear it themselves.</p>
+	 */
+	@Transactional
 	public Map<String, String> addUser(UsersDto usersDto) {
 	    logger.info("Attempting to add new user: {}", usersDto.getEmail());
 
 	    // ✅ 1. Check if email already exists
 	    if (userRepository.existsByEmail(usersDto.getEmail())) {
-	        throw new CustomException("Email already exists");
+	        throw new UserAlreadyInDatabaseException("Email already exists");
 	    }
 
 	    // ✅ 2. Check if mobile number already exists
 	    if (userRepository.existsByMobileNumber(usersDto.getMobileNumber())) {
-	        throw new CustomException("Mobile number already exists");
+	        throw new UserAlreadyInDatabaseException("Mobile number already exists");
 	    }
 
 	    // ✅ 3. Validate password strength
@@ -182,8 +199,18 @@ public class UserDetailsServiceImpl implements UserDetailsService {
 	        throw e;
 	    }
 
-	    // ✅ 7. Send email
-	    emailService.sendSuccessRegistrationEmail(user.getEmail(), user.getLastName(), user.getFirstName(),user.getMobileNumber());
+	    // ✅ 7. Send the welcome email — best effort.
+	    // The account exists at this point. A greylisted or timed-out SMTP send used
+	    // to throw from here, which failed the registration the user had already
+	    // completed; unlike an exam link, a welcome mail is a courtesy and nothing
+	    // downstream depends on it having arrived.
+	    try {
+	        emailService.sendSuccessRegistrationEmail(user.getEmail(), user.getLastName(), user.getFirstName(),
+	                user.getMobileNumber());
+	    } catch (Exception e) {
+	        logger.warn("Welcome email failed for {}; the account was still created: {}",
+	                user.getEmail(), e.getMessage());
+	    }
 
 	    // ✅ 8. Return success
 	    return Map.of("message", "success");
@@ -317,9 +344,193 @@ public class UserDetailsServiceImpl implements UserDetailsService {
 
 	// Fetch users who are not admins
 	public List<UsersDto> getNonAdminUsers() {
-		logger.debug("Fetching non-admin users");
-		List<Users> nonAdminUsers = userRepository.findAllNonAdminUsers(com.rightpath.rbac.RoleName.ADMIN);
-		return nonAdminUsers.stream().map(UsersDto::new).collect(Collectors.toList());
+		logger.debug("Fetching candidate users (excluding roles={})", STAFF_ROLES);
+		// Unpaged callers get the first page at the maximum size rather than the
+		// whole table: the query this replaced took MySQL out of sort memory, and
+		// an unbounded list is how it got there.
+		return getCandidateUsers(PageRequest.of(0, MAX_PAGE_SIZE, EMAIL_ASC)).getContent();
+	}
+
+	/** Page size when a request does not ask for one. */
+	public static final int DEFAULT_PAGE_SIZE = 20;
+	/** Ceiling on a requested page size, so one caller cannot ask for the table. */
+	public static final int MAX_PAGE_SIZE = 100;
+
+	/**
+	 * Email ascending — the only ordering that makes these pages stable.
+	 *
+	 * <p>Email is the primary key, so it is unique and never null. Paging an
+	 * unordered query lets the database return rows in any order per call, which
+	 * shows one account on two pages and hides another entirely.</p>
+	 */
+	private static final Sort EMAIL_ASC = Sort.by(Sort.Direction.ASC, "email");
+
+	/** Clamps a requested page and size into something safe to execute. */
+	public static Pageable toPageable(Integer page, Integer size) {
+		int resolvedPage = (page == null || page < 0) ? 0 : page;
+		int requested = (size == null || size < 1) ? DEFAULT_PAGE_SIZE : size;
+		return PageRequest.of(resolvedPage, Math.min(requested, MAX_PAGE_SIZE), EMAIL_ASC);
+	}
+
+	/** One page of candidates — every account holding no staff role. */
+	public Page<UsersDto> getCandidateUsers(Pageable pageable) {
+		return toDtoPage(userRepository.findPageExcludingActiveRoleIn(STAFF_ROLES, pageable), pageable);
+	}
+
+	/** One page of staff — every account holding ADMIN or SUPER_ADMIN. */
+	public Page<UsersDto> getStaffUsersPage(Pageable pageable) {
+		return toDtoPage(userRepository.findPageByActiveRoleIn(STAFF_ROLES, pageable), pageable);
+	}
+
+	/**
+	 * One page of the whole roster, for the admin user screen.
+	 *
+	 * <p>Staff and candidates in one sorted, filterable list. The two role-scoped
+	 * endpoints keep their own semantics; this exists because merging two
+	 * independent pagers client-side cannot give stable page boundaries — a row
+	 * ends up on two pages or on none.</p>
+	 *
+	 * @param role   narrow to one role, or null for every account
+	 * @param search free text matched against email and full name, or null
+	 */
+	public Page<UsersDto> getDirectory(com.rightpath.rbac.RoleName role, String search, Pageable pageable) {
+		// Normalised here rather than in the query so the JPQL stays a plain
+		// LIKE: null means "no text filter", and a blank box means the same.
+		String term = (search == null || search.isBlank())
+				? null
+				: "%" + search.trim().toLowerCase() + "%";
+
+		Page<UsersDto> page = (role == null)
+				? userRepository.findDirectory(term, pageable)
+				: userRepository.findDirectoryByRole(role, term, pageable);
+		return toDtoPage(page, pageable);
+	}
+
+	/**
+	 * Attaches roles to a page the query already projected.
+	 *
+	 * <p>Not {@code page.map(...)}: that maps one element at a time, so filling
+	 * each row's roles individually would cost a query per row — a page of 100
+	 * accounts turning into 100 round trips for one column. {@link #attachRoles}
+	 * batches the whole page, and the total comes from the original page so the
+	 * count reflects the query rather than the slice.</p>
+	 */
+	private Page<UsersDto> toDtoPage(Page<UsersDto> page, Pageable pageable) {
+		return new PageImpl<>(attachRoles(page.getContent()), pageable, page.getTotalElements());
+	}
+
+	/** The roles that make an account staff rather than a candidate. */
+	private static final java.util.List<com.rightpath.rbac.RoleName> STAFF_ROLES =
+			java.util.List.of(com.rightpath.rbac.RoleName.SUPER_ADMIN, com.rightpath.rbac.RoleName.ADMIN);
+
+	/**
+	 * Every staff account — anyone holding ADMIN or SUPER_ADMIN.
+	 *
+	 * <p>Complements {@link #getNonAdminUsers()}: that one answers "who are the
+	 * candidates?", this one "who runs this system?". Both carry roles, because
+	 * on a staff list the role <em>is</em> the point.</p>
+	 */
+	public List<UsersDto> getStaffUsers() {
+		logger.debug("Fetching staff users (roles={})", STAFF_ROLES);
+		// Bounded like the candidate equivalent: the first page at the maximum
+		// size, never the whole table. Staff lists are short, so in practice this
+		// still returns everyone while refusing to grow without limit.
+		return getStaffUsersPage(PageRequest.of(0, MAX_PAGE_SIZE, EMAIL_ASC)).getContent();
+	}
+
+	/**
+	 * Creates an account and grants it a staff role in one transaction.
+	 *
+	 * <p>{@link #addUser(UsersDto)} hardcodes the USER role, which is right for
+	 * self-registration and useless here. This runs the same duplicate, strength
+	 * and encoding checks, then assigns the requested role instead — atomically,
+	 * so a failure part-way cannot leave an account with no role at all, which
+	 * would be a candidate login nobody intended to create.</p>
+	 *
+	 * <p>Deliberately sends no welcome email: that template greets a candidate
+	 * and points at the candidate portal, which is the wrong thing to send an
+	 * administrator. Whoever creates the account passes on the credentials.</p>
+	 *
+	 * @param usersDto the account to create; its password is encoded here
+	 * @param role     the role to grant — caller is responsible for authorising it
+	 * @throws UserAlreadyInDatabaseException if the email or mobile is taken
+	 */
+	@Transactional
+	public void createStaffUser(UsersDto usersDto, com.rightpath.rbac.RoleName role) {
+		logger.info("Creating staff account {} with role {}", usersDto.getEmail(), role);
+
+		if (userRepository.existsByEmail(usersDto.getEmail())) {
+			throw new UserAlreadyInDatabaseException("Email already exists");
+		}
+		if (userRepository.existsByMobileNumber(usersDto.getMobileNumber())) {
+			throw new UserAlreadyInDatabaseException("Mobile number already exists");
+		}
+
+		passwordValidator.passwordSizeChecker(usersDto.getPassword());
+
+		Users user = new Users(
+				usersDto.getEmail(),
+				usersDto.getFirstName(),
+				usersDto.getLastName(),
+				bCryptPasswordEncoder.encode(usersDto.getPassword()),
+				// Staff accounts are created ready to use; a disabled admin
+				// cannot sign in to be enabled by anyone.
+				Boolean.TRUE,
+				usersDto.getMobileNumber());
+		userRepository.save(user);
+
+		// Seeded by RbacSeedConfig, but created on demand for the same reason
+		// addUser does it: a fresh database must not fail to make its first admin.
+		com.rightpath.entity.Role roleEntity = roleRepository.findByName(role)
+				.orElseGet(() -> {
+					logger.warn("Role {} not found; creating it on the fly", role);
+					com.rightpath.entity.Role r = new com.rightpath.entity.Role();
+					r.setName(role);
+					return roleRepository.save(r);
+				});
+
+		com.rightpath.entity.UserRole assignment = new com.rightpath.entity.UserRole();
+		assignment.setUser(user);
+		assignment.setRole(roleEntity);
+		assignment.setActive(true);
+		userRoleRepository.save(assignment);
+
+		logger.info("Staff account {} created with role {}", user.getEmail(), role);
+	}
+
+	/**
+	 * Attaches each user's active roles to an already-projected page.
+	 *
+	 * <p>Roles come from one batch query rather than a lookup per user: a role
+	 * column would otherwise cost a query per row, which is a query per candidate
+	 * on a screen built to show hundreds.</p>
+	 *
+	 * <p>Every user gets a list, empty where they hold no role — so a client can
+	 * tell "no roles" from "roles were never looked up", which stays null.</p>
+	 *
+	 * <p>Takes DTOs, not entities. The list queries project the six columns a
+	 * roster displays, which leaves the BCrypt hash and the LONGBLOB avatar
+	 * unread rather than read and then discarded.</p>
+	 */
+	private List<UsersDto> attachRoles(List<UsersDto> users) {
+		if (users.isEmpty()) {
+			return List.of();
+		}
+
+		List<String> emails = users.stream().map(UsersDto::getEmail).collect(Collectors.toList());
+		// Null-safe on both halves of the pair. Neither column is nullable, so a
+		// null here means the data is already wrong — but Collectors.groupingBy
+		// throws on a null key, which would turn one bad assignment row into a
+		// 500 for the entire list. Skipping the row costs that user a badge;
+		// throwing costs everyone the page.
+		Map<String, List<String>> rolesByEmail = userRoleRepository.findActiveRolesByEmails(emails).stream()
+				.filter(pair -> pair != null && pair.userEmail() != null && pair.role() != null)
+				.collect(Collectors.groupingBy(
+						UserRoleName::userEmail,
+						Collectors.mapping(pair -> pair.role().name(), Collectors.toList())));
+
+		users.forEach(user -> user.setRoles(rolesByEmail.getOrDefault(user.getEmail(), List.of())));
+		return users;
 	}
 
 	// Check if email is already registered
@@ -352,7 +563,7 @@ public class UserDetailsServiceImpl implements UserDetailsService {
 		Optional<Users> optionalUser = userRepository.findByEmail(email);
 		if (optionalUser.isEmpty()) {
 			logger.error("User not found: {}", email);
-			throw new IllegalArgumentException("User not found");
+			throw new UserNotFoundDbException("User not found");
 		}
 
 		Users user = optionalUser.get();

@@ -1,0 +1,288 @@
+# =====================================================================
+# UAT profile  (activate with: --spring.profiles.active=uat
+#               or SPRING_PROFILES_ACTIVE=uat)
+# User Acceptance Testing environment. Production-like configuration for
+# client sign-off, with Swagger enabled and SQL logging off. Provide hosts
+# and secrets via environment variables; the defaults below are placeholders.
+# =====================================================================
+
+server:
+  port: 8083
+  tomcat:
+    connection-timeout: 120s
+    keep-alive-timeout: 300s
+    max-http-form-post-size: 104857600
+    # Read and discard the body of a rejected upload instead of resetting the
+    # connection. Tomcat stops reading at 2MB by default, so an oversize
+    # recording never got its 413 back — the browser saw a reset mid-request
+    # and reported a CORS failure, which sent the investigation somewhere else
+    # entirely. -1 means read it all, so the real status reaches the client.
+    max-swallow-size: -1
+    max-http-header-size: 65536
+    threads:
+      max: 200
+      min-spare: 20
+    accept-count: 200
+    max-connections: 10000
+  compression:
+    enabled: true
+    min-response-size: 1024
+    mime-types: application/json,application/text,text/plain
+
+spring:
+  application:
+    name: rightpath
+  datasource:
+    url: "jdbc:mysql://${MYSQL_HOST:ai-rightpath-db-uat.cxeq082ue6js.ap-south-1.rds.amazonaws.com}:${MYSQL_PORT:3306}/Rightpath-uat?createDatabaseIfNotExist=true&useSSL=true"
+    username: ${MYSQL_USER:db-user}
+    password: ${MYSQL_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+        dialect: org.hibernate.dialect.MySQLDialect
+  mail:
+    host: ${MAIL_HOST:smtp.hostinger.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:Mahesh.konamoni@isigntech.com}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+  servlet:
+    multipart:
+      enabled: true
+      # Sized for the longest interview the timer allows. 60 minutes of shared
+      # screen at the capped bitrate is ~704 MB (1.5 Mbit video + 64 kbit audio
+      # over 3600 s) and the camera is ~337 MB; 500MB cut the screen off at
+      # roughly 42 minutes, and it failed at the very end of the interview with
+      # the whole recording already captured and nowhere to put it. 2 GB leaves
+      # room for a longer session or a higher bitrate, and stays well under
+      # S3's 5 GB single-PUT ceiling.
+      max-file-size: 2048MB
+      max-request-size: 2048MB
+      # Spill to disk immediately rather than buffering in heap. This is
+      # already Spring's default; stated because the value that is wrong here
+      # costs a gigabyte of heap per concurrent upload.
+      file-size-threshold: 0
+  websocket:
+    session:
+      timeout: 0
+  mvc:
+    async:
+      request-timeout: 300000
+
+# Password validator
+password:
+  minsize: 8
+  maxsize: 20
+
+# JWT Token
+jwt:
+  token: "${JWT_TOKEN:2v/++UPDcxJ8awevhoGybYEdWlvmwt1GRr1W/SbvgBVqNXzfdtAh8mtOtCucY5TSneWKF6K8XhKTOC3xwrPpUw==}"
+
+# V2 Auth (Access + Refresh). If secret is empty, falls back to jwt.token.
+rightpath:
+  security:
+    v2:
+      jwt:
+        secret: ${V2_JWT_SECRET:}
+        issuer: arightpath.com
+        audience: rightpath-web
+        access-ttl-minutes: 10080
+        clock-skew-seconds: 60
+      refresh:
+        ttl-days: 14
+        cookie-name: refresh_token
+        cookie-secure: false
+        cookie-samesite: Lax
+        cookie-path: /api
+
+    # First administrator, created at startup when nobody holds SUPER_ADMIN yet.
+    # Supply both from the environment — with either left blank the bootstrap
+    # logs a warning and skips, rather than standing up a guessable account.
+    # Idempotent: it never resets the password of an account already present.
+    super-admin:
+      enabled: true
+      email: ${SUPER_ADMIN_EMAIL:}
+      password: ${SUPER_ADMIN_PASSWORD:}
+      first-name: Super
+      last-name: Admin
+      mobile-number: ${SUPER_ADMIN_MOBILE:0000000000}
+
+logging:
+  level:
+    org.springframework.security: WARN
+    org.hibernate.SQL: "OFF"
+    org.hibernate.type.descriptor.sql.BasicBinder: "OFF"
+    com.rightpath: INFO
+
+twilio:
+  account:
+    sid: ${TWILIO_SID:}
+  auth:
+    token: ${TWILIO_TOKEN:}
+  from:
+    number: "whatsapp:+14155238886"
+
+openai:
+  api:
+    key: ${OPENAI_API_KEY:}
+    base-url: https://api.openai.com/v1
+  model: gpt-4o
+  audio:
+    model: whisper-1
+    # Pinned rather than auto-detected: answers are transcribed as
+    # short fragments, and per-fragment detection mangles them.
+    language: en
+  question:
+    timeout-seconds: 180
+    generation:
+      timeout-seconds: 300
+  tts:
+    model: tts-1-hd
+    voice: nova
+
+# AWS S3 Storage
+aws:
+  s3:
+    bucket-name: ${AWS_S3_BUCKET:airightpath-interview-uat}
+    region: ap-south-1
+    access-key: ${AWS_ACCESS_KEY:}
+    secret-key: ${AWS_SECRET_KEY:}
+    prefix:
+      interview: interview
+      exam: exam
+      proctoring: proctoring
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+      enabled: false
+
+app:
+  base:
+    url: ${APP_BASE_URL:https://api-uat.airightpath.com}
+  cors:
+    allowed-origins: "${APP_CORS_ALLOWED_ORIGINS:https://uat.airightpath.com,https://www.airightpath.com,https://airightpath.com,http://localhost:4200,http://localhost:5173}"
+
+  # ── Candidate-facing email branding ────────────────────────────────
+  # Every template in EmailServiceImpl reads from here. Held per environment
+  # rather than in application.properties because candidate-portal-url has to
+  # point at *this* environment's front end: a link mailed from uat that
+  # lands on production would send a test candidate into real data.
+  #
+  # Each key also has a code-side default, so a missing entry degrades to the
+  # production wording rather than failing startup — which is exactly why the
+  # non-production sender names below are explicit about not being production.
+
+  mail:
+    from-name: "${APP_MAIL_FROM_NAME:RightPath Careers (UAT)}"
+    company-name: "${APP_MAIL_COMPANY_NAME:RightPath}"
+    # Blank sends replies to spring.mail.username.
+    support-email: "${APP_MAIL_SUPPORT_EMAIL:}"
+    website: "${APP_MAIL_WEBSITE:https://www.airightpath.com}"
+    company-address: "${APP_MAIL_COMPANY_ADDRESS:ISIGN TECH PRIVATE LIMITED, 1st floor, Plot No: 2-87/3, Mn Rd, beside Reliance Trends, Sreeramaaramam, Narsingi, Hyderabad, Telangana 500089}"
+    # Target of the "Start my test" / "Go to my dashboard" buttons.
+    candidate-portal-url: "${APP_MAIL_CANDIDATE_PORTAL_URL:https://uat.airightpath.com}"
+    # Shown on every on-site test mail, so all three quote one address.
+    test-venue: "${APP_MAIL_TEST_VENUE:ISIGN TECH PRIVATE LIMITED, 1st floor, Plot No: 2-87/3, Mn Rd, beside Reliance Trends, Sreeramaaramam, Narsingi, Hyderabad, Telangana 500089}"
+
+# Terminal WebSocket Configuration
+terminal:
+  execution:
+    timeout-seconds: 60
+  max-sessions-per-user: 3
+
+# ATS Screening Configuration
+ats:
+  screening:
+    threshold: 60.0
+
+# Voice Interview / TTS Configuration
+interview:
+  max-duration-minutes: 60
+  max-warnings: 5
+  # Reaching max-warnings does NOT end the interview; it flags it for a
+  # person to look at. Ending one on a count is a hiring decision made by a
+  # threshold, and the signals feeding the count are not good enough to carry
+  # it. Set true to restore automatic termination.
+  terminate-on-max-warnings: false
+  context-window-size: 4
+  # How many questions a dynamic interview asks. The model writes every question
+  # from the conversation so far, so it needs a floor (enough signal to score
+  # on) and a ceiling (it cannot run forever). Below the floor it is told to
+  # keep going; at the ceiling the interview is closed whether it asked to or
+  # not. Stated in every profile, not just dev: these are product behaviour, and
+  # a value tuned here that is missing from a deployed profile silently falls
+  # back to the compiled default instead.
+  questions:
+    min: 10
+    max: 20
+  # When an interview is cut short for poor performance.
+  early-termination:
+    min-questions: 4
+    skip-ratio-threshold: 0.5
+    min-avg-word-count: 15
+    min-confidence-score: 30.0
+    consecutive-skip-threshold: 2
+    consecutive-short-answer-threshold: 3
+  # An incomplete answer and a wrong one need opposite responses, so the
+  # interviewer can press on the same question (follow-up) or put it another way
+  # (rephrase). Both are capped per question: past the cap it stops being an
+  # interview technique and becomes an interrogation of one topic while the rest
+  # of the syllabus goes unasked. Probes spend a turn from questions.max but do
+  # not count towards questions.min — ten follow-ups on one question is not ten
+  # questions' worth of evidence.
+  follow-up:
+    max-per-question: 2
+  rephrase:
+    max-per-question: 1
+  # The next question is pitched from the interviewer's own 0-10 ratings of the
+  # last few answers, not from how fluently they were delivered — a confident
+  # wrong answer scores well on word count and vocal confidence alike. The gap
+  # between the two thresholds stops a candidate hovering near a single cut-off
+  # being pushed harder and easier on alternate questions.
+  difficulty:
+    window: 3
+    min-scored-answers: 2
+    raise-above: 7.5
+    lower-below: 4.5
+  review:
+    # A finished interview is flagged for a person to look at when the grader
+    # says it is unsure, when there was too little said to judge on, when the
+    # interview ended early or on warnings, when the recommendation is one of
+    # the "lean" ones, or when the candidate tried to instruct the interviewer.
+    # 0.7 rather than 0.5: a needless review costs minutes, a missed one costs
+    # a hiring decision taken on a verdict the grader itself doubted.
+    min-confidence: 0.7
+    min-answers: 5
+  topics:
+    # Evaluation categories at or above this weight (%) hold the interview open
+    # until they have been asked about. Lighter ones are not worth blocking a
+    # close for — the score rests mostly on the heavy ones.
+    required-weight-threshold: 10
+
+# Swagger / OpenAPI (enabled in UAT for client testing)
+#   UI: /swagger-ui.html   JSON: /v3/api-docs
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    operationsSorter: method
+    tagsSorter: alpha
+    display-request-duration: true

@@ -53,6 +53,11 @@
 			<scope>runtime</scope>
 		</dependency>
 		<dependency>
+		    <groupId>software.amazon.awssdk</groupId>
+		    <artifactId>rekognition</artifactId>
+		    <version>2.29.15</version>
+		</dependency>
+		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>
 			<version>${lombok.version}</version>
@@ -138,9 +143,9 @@
     <artifactId>spring-boot-starter-webflux</artifactId>
 </dependency>
 <dependency>
-	<groupId>software.amazon.awssdk</groupId>
-	<artifactId>s3</artifactId>
-	<version>2.25.26</version>
+    <groupId>software.amazon.awssdk</groupId>
+    <artifactId>s3</artifactId>
+    <version>2.29.15</version>
 </dependency>
 <dependency>
     <groupId>org.springframework.boot</groupId>
@@ -161,6 +166,13 @@
     <groupId>com.squareup.okhttp3</groupId>
     <artifactId>okhttp-sse</artifactId>
     <version>4.12.0</version>
+</dependency>
+
+<!-- Swagger / OpenAPI (springdoc) - enabled in dev & stage, disabled in prod -->
+<dependency>
+    <groupId>org.springdoc</groupId>
+    <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+    <version>2.7.0</version>
 </dependency>
 
 	</dependencies>

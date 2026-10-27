@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 
 import com.rightpath.enums.ApplicationStatus;
+import com.rightpath.enums.ReferralStatus;
 
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -43,6 +44,17 @@ public class JobApplicationForCandidate {
 	    private String jobRole;
 	    private String resumeFileName;
 	    private String mobileNumber;
+
+	    // Optional referral details captured at apply time. Both nullable: a candidate
+	    // may apply with neither, or supply who referred them (id and/or name).
+	    private String referralId;
+	    private String referralName;
+
+	    // Verification state of the referral. Defaults to PENDING at apply time when
+	    // referral details are supplied; null when there is no referral. Updated later
+	    // by a recruiter (VERIFIED / REJECTED).
+	    @Enumerated(EnumType.STRING)
+	    private ReferralStatus referralStatus;
 	    
 
 	    @Lob
@@ -62,8 +74,13 @@ public class JobApplicationForCandidate {
 	    
 	    @Enumerated(EnumType.STRING)
 	    private ApplicationStatus status;
-	    
-	    private String confirmationStatus; 
+
+	    // ATS resume-scan outcome (e.g. "Screening Completed") — independent of shortlisting.
+	    private String atsScanStatus;
+	    // Shortlisting outcome after ATS screening (e.g. "Shortlisted" / "Not Shortlisted").
+	    private String shortlistStatus;
+
+	    private String confirmationStatus;
 	    private String acknowledgedStatus;
 	    private String reconfirmationStatus;
 	    private String examLinkStatus;

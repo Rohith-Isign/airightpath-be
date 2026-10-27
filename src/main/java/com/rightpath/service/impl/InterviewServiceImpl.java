@@ -1,6 +1,9 @@
 package com.rightpath.service.impl;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,7 +24,9 @@ import com.rightpath.entity.InterviewSession;
 import com.rightpath.entity.JobApplicationForCandidate;
 import com.rightpath.enums.ApplicationStatus;
 import com.rightpath.enums.AttemptStatus;
+import com.rightpath.enums.EmailType;
 import com.rightpath.enums.InterviewResult;
+import com.rightpath.exceptions.ResourceNotFoundException;
 import com.rightpath.repository.CandidateInterviewScheduleRepository;
 import com.rightpath.repository.InterviewQuestionRepository;
 import com.rightpath.repository.JobApplicationForCandidateRepository;
@@ -30,14 +35,18 @@ import com.rightpath.service.InterviewService;
 import com.rightpath.service.JobPromptService;
 import com.rightpath.service.OpenAiService;
 import com.rightpath.service.StorageService;
-import com.rightpath.util.PromptService;
 import com.rightpath.util.StatusTransitionValidator;
 
 @Service
+@lombok.extern.slf4j.Slf4j
 public class InterviewServiceImpl implements InterviewService {
 
 	@Value("${aws.s3.prefix.interview:interview}")
 	private String interviewPrefix;
+
+	/** Every recording upload in flight, so an abandoned one can be finished by the server. */
+	@Autowired
+	private com.rightpath.service.RecordingUploadCoordinator recordingUploads;
 	
 	@Autowired
 	private InterviewQuestionsServiceImpl interviewQuestionsService;
@@ -55,7 +64,7 @@ public class InterviewServiceImpl implements InterviewService {
 	private final com.rightpath.service.EmailAsyncService emailAsyncService;
 
 	public InterviewServiceImpl(OpenAiService openAiService, CandidateInterviewScheduleRepository scheduleRepo,
-			JobApplicationForCandidateRepository jobAppRepo, PromptService promptService,
+			JobApplicationForCandidateRepository jobAppRepo,
 			InterviewReportService interviewReportService, StorageService storageService,
 			JobPromptService jobPromptService, com.rightpath.service.EmailAsyncService emailAsyncService) {
 
@@ -81,7 +90,7 @@ public class InterviewServiceImpl implements InterviewService {
 	    // fetch schedule
 	    CandidateInterviewSchedule schedule = scheduleRepo
 	            .findTopByJobPrefixAndEmailOrderByAssignedAtDesc(jobPrefix, email)
-	            .orElseThrow(() -> new RuntimeException("Interview not assigned"));
+	            .orElseThrow(() -> new ResourceNotFoundException("Interview not assigned"));
 
 	    Long interviewScheduleId = schedule.getId();
 
@@ -126,7 +135,7 @@ public class InterviewServiceImpl implements InterviewService {
 	            InterviewQuestionInfo first = questions.stream()
 	                    .filter(q -> q.getUniqueId().equals(uniqueId))
 	                    .findFirst()
-	                    .orElseThrow(() -> new RuntimeException("Question not found for uniqueId: " + uniqueId));
+	                    .orElseThrow(() -> new ResourceNotFoundException("Question not found for uniqueId: " + uniqueId));
 
 	            InterviewQuestion newQ = new InterviewQuestion();
 	            newQ.setInterviewScheduleId(scheduleId);
@@ -160,12 +169,26 @@ public class InterviewServiceImpl implements InterviewService {
 //	}
 	
 	@Override
+	@Deprecated
 	public String answer(Long interviewScheduleId,
 	                     String answerText,
 	                     boolean finalAnswer,
 	                     String jobPrefix,
 	                     String codeContent,
 	                     String codeLanguage) {
+	    // Kept for callers that predate run-output capture. Treated as "the
+	    // candidate never ran their code", which is what the absence means.
+	    return answer(interviewScheduleId, answerText, finalAnswer, jobPrefix, codeContent, codeLanguage, null);
+	}
+
+	@Override
+	public String answer(Long interviewScheduleId,
+	                     String answerText,
+	                     boolean finalAnswer,
+	                     String jobPrefix,
+	                     String codeContent,
+	                     String codeLanguage,
+	                     String codeOutput) {
 
 	    InterviewSession session = getSession(interviewScheduleId);
 	    List<InterviewQuestionInfo> questions = session.getQuestions();
@@ -270,19 +293,41 @@ public class InterviewServiceImpl implements InterviewService {
 	
 	@Override
 	public CandidateInterviewSchedule assignInterview(String jobPrefix, String email, LocalDateTime assignedAt,
-			LocalDateTime deadlineTime) {
+	        LocalDateTime deadlineTime, LocalDate questionsFromDate, LocalDate questionsToDate) {
 
-		JobApplicationForCandidate application = jobAppRepo.findByJobPost_JobPrefixAndUser_Email(jobPrefix, email)
-				.orElseThrow(() -> new RuntimeException("Application not found"));
+	    requireDeadline(deadlineTime);
 
-		application.setInterview("Scheduled");
-		jobAppRepo.save(application);
+	    JobApplicationForCandidate application = jobAppRepo.findByJobPost_JobPrefixAndUser_Email(jobPrefix, email)
+	            .orElseThrow(() -> new ResourceNotFoundException("Application not found"));
 
-		CandidateInterviewSchedule schedule = CandidateInterviewSchedule.builder().jobPrefix(jobPrefix).email(email)
-				.attemptStatus(AttemptStatus.NOT_ATTEMPTED).interviewResult(InterviewResult.PENDING)
-				.assignedAt(assignedAt).deadlineTime(deadlineTime).build();
+	    application.setInterview("Scheduled");
+	    jobAppRepo.save(application);
 
-		return scheduleRepo.save(schedule);
+	    CandidateInterviewSchedule schedule = CandidateInterviewSchedule.builder()
+	            .jobPrefix(jobPrefix)
+	            .email(email)
+	            .attemptStatus(AttemptStatus.NOT_ATTEMPTED)
+	            .interviewResult(InterviewResult.PENDING)
+	            .assignedAt(assignedAt)
+	            .deadlineTime(deadlineTime)
+	            .questionsFromDate(questionsFromDate != null ? questionsFromDate.atStartOfDay() : null)
+	            .questionsToDate(questionsToDate != null ? questionsToDate.atTime(23, 59, 59) : null)
+	            .build();
+
+	    return scheduleRepo.save(schedule);
+	}
+
+	
+	
+	/**
+	 * An interview without a date and time has no deadline: it never expires, never
+	 * chases the candidate, and cannot be tracked. The scheduling screens ask for it,
+	 * but nothing on the server stopped a request that left it out.
+	 */
+	private static void requireDeadline(LocalDateTime deadlineTime) {
+		if (deadlineTime == null) {
+			throw new IllegalArgumentException("Date and time is required to assign an interview");
+		}
 	}
 
 	@Override
@@ -291,49 +336,110 @@ public class InterviewServiceImpl implements InterviewService {
 	}
 
 	@Override
-	public List<CandidateInterviewSchedule> assignInterviewBulk(String jobPrefix, java.util.List<String> emails,
-			LocalDateTime assignedAt, LocalDateTime deadlineTime, boolean sendEmail) {
-
-		if (emails == null || emails.isEmpty()) {
-			throw new IllegalArgumentException("emails must be provided");
-		}
-
-		java.util.List<CandidateInterviewSchedule> schedules = new java.util.ArrayList<>();
-
-		for (String email : emails) {
-			JobApplicationForCandidate application = jobAppRepo
-					.findByJobPost_JobPrefixAndUser_Email(jobPrefix, email)
-					.orElseThrow(() -> new RuntimeException("Application not found for " + email));
-
-			application.setInterview("Scheduled");
-			jobAppRepo.save(application);
-
-			CandidateInterviewSchedule schedule = CandidateInterviewSchedule.builder().jobPrefix(jobPrefix)
-					.email(email).attemptStatus(AttemptStatus.NOT_ATTEMPTED).interviewResult(InterviewResult.PENDING)
-					.assignedAt(assignedAt).deadlineTime(deadlineTime).build();
-
-			schedules.add(schedule);
-		}
-
-		schedules = scheduleRepo.saveAll(schedules);
-
-		if (sendEmail) {
-			String subject = "Interview Scheduled - " + jobPrefix;
-			for (CandidateInterviewSchedule s : schedules) {
-				String body = "Your interview for job " + jobPrefix + " is scheduled. Deadline: " + deadlineTime;
-				emailAsyncService.sendInterviewEmail(s.getEmail(), subject, body);
-			}
-		}
-
-		return schedules;
+	@Deprecated
+	public List<CandidateInterviewSchedule> assignInterviewBulk(String jobPrefix, List<String> emails,
+	        LocalDateTime assignedAt, LocalDateTime deadlineTime, boolean sendEmail,
+	        LocalDate questionsFromDate, LocalDate questionsToDate) {
+	    return assignInterviewBulk(jobPrefix, emails, assignedAt, deadlineTime, sendEmail,
+	            questionsFromDate, questionsToDate, null);
 	}
+
+	@Override
+	public List<CandidateInterviewSchedule> assignInterviewBulk(String jobPrefix, List<String> emails,
+	        LocalDateTime assignedAt, LocalDateTime deadlineTime, boolean sendEmail,
+	        LocalDate questionsFromDate, LocalDate questionsToDate,
+	        com.rightpath.enums.InterviewRound round) {
+
+	    if (emails == null || emails.isEmpty()) {
+	        throw new IllegalArgumentException("emails must be provided");
+	    }
+	    requireDeadline(deadlineTime);
+
+	    List<CandidateInterviewSchedule> schedules = new ArrayList<>();
+	    // Kept so the invitation can address the candidate by name and quote the
+	    // role, instead of the bare job prefix they never see anywhere else.
+	    Map<String, JobApplicationForCandidate> applicationsByEmail = new HashMap<>();
+
+	    for (String email : emails) {
+	        JobApplicationForCandidate application = jobAppRepo
+	                .findByJobPost_JobPrefixAndUser_Email(jobPrefix, email)
+	                .orElseThrow(() -> new ResourceNotFoundException("Application not found for " + email));
+
+	        application.setInterview("Scheduled");
+
+	        // Advance the pipeline, not just the free-text column.
+	        //
+	        // Scheduling an interview used to set `interview = "Scheduled"` and
+	        // leave `status` on EXAM_COMPLETED, so the candidate sat in the exam
+	        // stage forever while a second field claimed otherwise — and every
+	        // screen that reads status showed them as not yet progressed.
+	        //
+	        // Guarded rather than validated: re-scheduling an interview is a
+	        // normal thing to do, and INTERVIEW_SCHEDULED → INTERVIEW_SCHEDULED is
+	        // not a legal move, so throwing here would make the second attempt
+	        // fail and create no schedule at all.
+	        if (StatusTransitionValidator.isAllowed(application.getStatus(), ApplicationStatus.INTERVIEW_SCHEDULED)) {
+	            application.setStatus(ApplicationStatus.INTERVIEW_SCHEDULED);
+	        }
+
+	        jobAppRepo.save(application);
+	        applicationsByEmail.put(email, application);
+
+	        CandidateInterviewSchedule schedule = CandidateInterviewSchedule.builder()
+	                .jobPrefix(jobPrefix)
+	                .email(email)
+	                .attemptStatus(AttemptStatus.NOT_ATTEMPTED)
+	                .interviewResult(InterviewResult.PENDING)
+	                .assignedAt(assignedAt)
+	                .deadlineTime(deadlineTime)
+	                .questionsFromDate(questionsFromDate != null ? questionsFromDate.atStartOfDay() : null)
+	                .questionsToDate(questionsToDate != null ? questionsToDate.atTime(23, 59, 59) : null)
+	                // Normalised rather than stored as null, so a schedule created
+	                // now always says which interview it is. Only rows predating
+	                // the column read as null.
+	                .round(com.rightpath.enums.InterviewRound.orDefault(round))
+	                .build();
+
+	        schedules.add(schedule);
+	    }
+
+	    schedules = scheduleRepo.saveAll(schedules);
+
+	    if (sendEmail) {
+	        for (CandidateInterviewSchedule s : schedules) {
+	            JobApplicationForCandidate application = applicationsByEmail.get(s.getEmail());
+
+	            Map<String, Object> emailParams = new HashMap<>();
+	            emailParams.put("recipientEmail", s.getEmail());
+	            emailParams.put("jobPrefix", jobPrefix);
+	            // The template formats these for display; never hand it a pre-formatted
+	            // or ISO string.
+	            emailParams.put("startTime", assignedAt);
+	            emailParams.put("endTime", deadlineTime);
+	            if (application != null) {
+	                emailParams.put("firstName", application.getFirstName());
+	                emailParams.put("lastName", application.getLastName());
+	                emailParams.put("mobileNumber", application.getMobileNumber());
+	                if (application.getJobPost() != null) {
+	                    emailParams.put("jobTitle", application.getJobPost().getJobTitle());
+	                }
+	            }
+
+	            emailAsyncService.sendTemplatedEmail(EmailType.INTERVIEW_SCHEDULE, emailParams);
+	        }
+	    }
+
+	    return schedules;
+	}
+
+	
 
 	@Transactional
 	@Override
 	public void markCompleted(Long interviewScheduleId, AttemptStatus attemptStatus, InterviewResult interviewResult,
 			String summaryRef) {
 		CandidateInterviewSchedule schedule = scheduleRepo.findById(interviewScheduleId)
-				.orElseThrow(() -> new RuntimeException("Interview not found"));
+				.orElseThrow(() -> new ResourceNotFoundException("Interview not found"));
 
 		schedule.setAttemptStatus(attemptStatus);
 		schedule.setInterviewResult(interviewResult);
@@ -355,60 +461,248 @@ public class InterviewServiceImpl implements InterviewService {
 		}
 	}
 
+	// Deliberately not @Transactional. The upload to S3 takes as long as the file
+	// is big, and a transaction around it held a database connection for all of
+	// that and, worse, a copy of the interview row that was stale by the time it
+	// was written back. The row is touched once, afterwards, by a single UPDATE
+	// of the one column.
 	@Override
-	@Transactional
 	public String storeRecording(Long interviewScheduleId, MultipartFile videoFile) {
 
 		if (videoFile == null || videoFile.isEmpty()) {
 			throw new IllegalArgumentException("Video file is required");
 		}
 
-		CandidateInterviewSchedule schedule = scheduleRepo.findById(interviewScheduleId)
-				.orElseThrow(() -> new RuntimeException("Interview not found"));
+		if (!scheduleRepo.existsById(interviewScheduleId)) {
+			throw new ResourceNotFoundException("Interview not found");
+		}
 
 		String blobName = buildBlobName(interviewScheduleId, videoFile.getOriginalFilename());
 
-		String videoUrl = storageService.uploadFile(interviewPrefix, blobName, videoFile);
+		// See storeScreenRecording: the presence or absence of this line is how
+		// you tell a rejected request from a failed upload.
+		log.info("Camera recording for schedule {} arrived: {} bytes", interviewScheduleId, videoFile.getSize());
 
-		schedule.setRecordReferences(videoUrl);
-		scheduleRepo.save(schedule);
+		String videoUrl = storageService.uploadFile(interviewPrefix, blobName, videoFile);
+		log.info("Camera recording for schedule {} stored at {}", interviewScheduleId, videoUrl);
+
+		// Appended, not replaced, exactly as the screen recording is. The
+		// browser now uploads the camera in parts while the interview runs, so
+		// a tab that is closed or put to sleep loses minutes rather than the
+		// whole hour. Overwriting would keep only the last part and discard
+		// everything uploaded before it.
+		// One UPDATE in the database rather than read, extended and saved: that
+		// read-modify-write is how earlier parts were lost whenever anything else
+		// wrote the row in between.
+		scheduleRepo.appendRecordReference(interviewScheduleId, videoUrl, "\n" + videoUrl);
 
 		return videoUrl;
 	}
 
+	// Not @Transactional, for the reason given on storeRecording.
 	@Override
-	@Transactional
 	public String storeScreenRecording(Long interviewScheduleId, MultipartFile screenFile) {
 
 		if (screenFile == null || screenFile.isEmpty()) {
 			throw new IllegalArgumentException("Screen recording file is required");
 		}
 
-		CandidateInterviewSchedule schedule = scheduleRepo.findById(interviewScheduleId)
-				.orElseThrow(() -> new RuntimeException("Interview not found"));
+		if (!scheduleRepo.existsById(interviewScheduleId)) {
+			throw new ResourceNotFoundException("Interview not found");
+		}
 
 		String blobName = buildBlobName(interviewScheduleId, screenFile.getOriginalFilename());
 
-		String screenUrl = storageService.uploadFile(interviewPrefix, blobName, screenFile);
+		// Logged on arrival, before storage is attempted. When a recording goes
+		// missing the first question is always whether it reached the server at
+		// all, and the absence of this line answers it — a request rejected by a
+		// proxy for its size never gets here, so nothing is logged and that
+		// silence is itself the diagnosis.
+		log.info("Screen recording for schedule {} arrived: {} bytes", interviewScheduleId, screenFile.getSize());
 
-		schedule.setScreenRecordReferences(screenUrl);
-		scheduleRepo.save(schedule);
+		String screenUrl = storageService.uploadFile(interviewPrefix, blobName, screenFile);
+		log.info("Screen recording for schedule {} stored at {}", interviewScheduleId, screenUrl);
+
+		// Appended, not replaced. Screen sharing can stop and be picked up
+		// again mid-interview, and each share is uploaded as its own file:
+		// every MediaRecorder run emits a complete WebM with its own header,
+		// so joining them would leave a recording that plays only as far as
+		// the first boundary. Overwriting instead kept the last part and threw
+		// away everything the candidate did before they stopped sharing.
+		//
+		// Newline-separated because a stored reference is a key built from the
+		// uploaded file's own name, which may contain a comma but cannot
+		// contain a line break.
+		// One UPDATE in the database, not a read-modify-write of the row.
+		scheduleRepo.appendScreenRecordReference(interviewScheduleId, screenUrl, "\n" + screenUrl);
 
 		return screenUrl;
 	}
 
 	@Override
-	public List<CandidateInterviewSchedule> getResults(String jobPrefix) {
-		if (jobPrefix != null && !jobPrefix.isBlank()) {
-			return scheduleRepo.findAllByJobPrefix(jobPrefix);
+	public java.util.Map<String, String> beginRecordingUpload(Long interviewScheduleId, String kind) {
+		return beginRecordingUpload(interviewScheduleId, kind, null);
+	}
+
+	@Override
+	public java.util.Map<String, String> beginRecordingUpload(Long interviewScheduleId, String kind,
+			String contentType) {
+		if (!scheduleRepo.existsById(interviewScheduleId)) {
+			throw new ResourceNotFoundException("Interview not found");
 		}
-		return scheduleRepo.findAll();
+		String recordingKind = recordingKindOf(kind);
+		String filePrefix = recordingKind.equals("screen") ? "screen-"
+				: recordingKind.equals("mobile") ? "mobile-" : "interview-";
+		// The extension is what the playback link is typed from, so it has to
+		// match what was recorded. iPhones record MP4; everything else WebM.
+		boolean mp4 = contentType != null && contentType.toLowerCase().startsWith("video/mp4");
+		String blobName = buildBlobName(interviewScheduleId, filePrefix + interviewScheduleId + (mp4 ? ".mp4" : ".webm"));
+		String uploadId = storageService.beginMultipartUpload(interviewPrefix, blobName, mp4 ? "video/mp4" : "video/webm");
+		recordingUploads.opened(interviewScheduleId, recordingKind, blobName, uploadId);
+		log.info("{} recording for schedule {}: piecewise upload started", recordingKind, interviewScheduleId);
+		return java.util.Map.of("uploadId", uploadId, "blobName", blobName);
+	}
+
+	@Override
+	public void uploadRecordingPart(Long interviewScheduleId, String blobName, String uploadId, int part,
+			byte[] data) {
+		requireOwnBlob(interviewScheduleId, blobName);
+		if (part < 1 || part > 10_000) {
+			throw new IllegalArgumentException("Part number out of range");
+		}
+		// Refused with 410 if the server already finished this upload, so the
+		// browser stops rather than retrying for ever.
+		recordingUploads.requireOpen(uploadId);
+		storageService.uploadMultipartPart(interviewPrefix, blobName, uploadId, part, data);
+		recordingUploads.touched(uploadId);
+	}
+
+	@Override
+	public String completeRecordingUpload(Long interviewScheduleId, String kind, String blobName, String uploadId) {
+		requireOwnBlob(interviewScheduleId, blobName);
+		// Joined exactly once, however many times and by whoever asks — the
+		// candidate's browser at the end, or the sweeper if it never came back.
+		return recordingUploads.complete(interviewScheduleId, recordingKindOf(kind), blobName, uploadId);
+	}
+
+	/** camera, screen or mobile: whichever the caller named, anything else is refused. */
+	private static String recordingKindOf(String kind) {
+		if ("screen".equalsIgnoreCase(kind)) {
+			return "screen";
+		}
+		if ("camera".equalsIgnoreCase(kind)) {
+			return "camera";
+		}
+		if ("mobile".equalsIgnoreCase(kind)) {
+			return "mobile";
+		}
+		throw new IllegalArgumentException("kind must be camera, screen or mobile");
+	}
+
+	/** The name must be one this interview's own upload produced, so a caller cannot write elsewhere. */
+	private static void requireOwnBlob(Long interviewScheduleId, String blobName) {
+		if (blobName == null || !blobName.startsWith("interview-" + interviewScheduleId + "/")
+				|| blobName.contains("..")) {
+			throw new IllegalArgumentException("Upload does not belong to this interview");
+		}
+	}
+
+	@Override
+	@Deprecated
+	public List<CandidateInterviewSchedule> getResults(String jobPrefix) {
+		return getResults(jobPrefix, null);
+	}
+
+	@Override
+	public List<CandidateInterviewSchedule> getResults(String jobPrefix, com.rightpath.enums.InterviewRound round) {
+		return getResults(jobPrefix, round, false);
+	}
+
+	@Override
+	public List<CandidateInterviewSchedule> getResults(String jobPrefix, com.rightpath.enums.InterviewRound round,
+			boolean includeDeleted) {
+		List<CandidateInterviewSchedule> all = (jobPrefix != null && !jobPrefix.isBlank())
+				? scheduleRepo.findAllByJobPrefix(jobPrefix)
+				: scheduleRepo.findAll();
+
+		// getEffectiveRound(), not getRound(): a null column reads as the default
+		// round, so pre-rounds interviews stay visible under L2 instead of
+		// disappearing from every filter.
+		return all.stream()
+				.filter(schedule -> includeDeleted || !schedule.isDeleted())
+				.filter(schedule -> round == null || schedule.getEffectiveRound() == round)
+				.toList();
+	}
+
+	@Override
+	@Transactional
+	public CandidateInterviewSchedule deleteResult(Long id, String reason) {
+		String trimmed = reason == null ? "" : reason.trim();
+		if (trimmed.isEmpty()) {
+			// Refused rather than defaulted. A reason that the system made up
+			// is worse than no reason, because it reads like one somebody gave.
+			throw new IllegalArgumentException("A reason is required to remove an interview result.");
+		}
+
+		CandidateInterviewSchedule schedule = scheduleRepo.findById(id)
+				.orElseThrow(() -> new ResourceNotFoundException("Interview not found"));
+
+		if (schedule.isDeleted()) {
+			// Not idempotent on purpose: overwriting would replace the original
+			// reason and the original remover with whoever clicked last.
+			throw new IllegalStateException("This interview result has already been removed.");
+		}
+
+		schedule.setDeletedAt(LocalDateTime.now());
+		schedule.setDeletedBy(actingUser());
+		schedule.setDeleteReason(trimmed);
+		CandidateInterviewSchedule saved = scheduleRepo.save(schedule);
+
+		// Deliberately loud, and at info: this hides a hiring decision's
+		// evidence from the screen people make decisions on.
+		log.info("Interview result {} ({} / {}) removed by {}: {}", saved.getId(), saved.getJobPrefix(),
+				saved.getEmail(), saved.getDeletedBy(), trimmed);
+		return saved;
+	}
+
+	@Override
+	@Transactional
+	public CandidateInterviewSchedule restoreResult(Long id) {
+		CandidateInterviewSchedule schedule = scheduleRepo.findById(id)
+				.orElseThrow(() -> new ResourceNotFoundException("Interview not found"));
+
+		if (!schedule.isDeleted()) {
+			throw new IllegalStateException("This interview result has not been removed.");
+		}
+
+		String previousReason = schedule.getDeleteReason();
+		String previousRemover = schedule.getDeletedBy();
+		schedule.setDeletedAt(null);
+		schedule.setDeletedBy(null);
+		schedule.setDeleteReason(null);
+		CandidateInterviewSchedule saved = scheduleRepo.save(schedule);
+
+		// The row no longer carries the removal, so the log is the only record
+		// that it happened at all. It says what is being undone.
+		log.info("Interview result {} ({} / {}) restored by {}; had been removed by {}: {}", saved.getId(),
+				saved.getJobPrefix(), saved.getEmail(), actingUser(), previousRemover, previousReason);
+		return saved;
+	}
+
+	/**
+	 * Email of the authenticated admin, as set by the JWT filter. Falls back to
+	 * "system" for non-request callers so the audit line is never blank.
+	 */
+	private static String actingUser() {
+		org.springframework.security.core.Authentication authentication = org.springframework.security.core.context.SecurityContextHolder
+				.getContext().getAuthentication();
+		return (authentication == null || authentication.getName() == null) ? "system" : authentication.getName();
 	}
 
 	@Override
 	public CandidateInterviewSchedule getResultDetail(Long id) {
 		return scheduleRepo.findById(id)
-				.orElseThrow(() -> new RuntimeException("Interview schedule not found: " + id));
+				.orElseThrow(() -> new ResourceNotFoundException("Interview schedule not found: " + id));
 	}
 
 	private String buildBlobName(Long interviewId, String originalName) {
@@ -424,31 +718,69 @@ public class InterviewServiceImpl implements InterviewService {
 	    InterviewSession session = sessionStore.get(interviewScheduleId);
 
 	    if (session == null) {
-	        throw new RuntimeException("Session not found for interviewScheduleId: " + interviewScheduleId);
+	        throw new ResourceNotFoundException("Session not found for interviewScheduleId: " + interviewScheduleId);
 	    }
 
 	    return session;
 	}
 	
+//	@Override
+//	public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId) {
+//	    return prepareQuestionsAndCreateSession(jobPrefix, email, scheduleId, null, null);
+//	}
+
 	@Override
 	public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId) {
-	    // Load questions from S3
-	    List<InterviewQuestionInfo> questions = interviewQuestionsService.loadAndPrepareQuestions(jobPrefix);
+	    // Fetch schedule to get date filters
+	    CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
+	            .orElseThrow(() -> new ResourceNotFoundException("Schedule not found: " + scheduleId));
 	    
-	    // Record question usage (optional)
+	    Long fromDate = schedule.getQuestionsFromDate() != null 
+	            ? schedule.getQuestionsFromDate().toInstant(ZoneOffset.UTC).toEpochMilli() 
+	            : null;
+	    Long toDate = schedule.getQuestionsToDate() != null 
+	            ? schedule.getQuestionsToDate().toInstant(ZoneOffset.UTC).toEpochMilli() 
+	            : null;
+	    
+	    // Log the date range for debugging
+	
+	    // Load questions with date filtering
+	    List<InterviewQuestionInfo> questions = interviewQuestionsService.loadAndPrepareQuestions(jobPrefix, fromDate, toDate);
+	    
+	    // Check if questions are loaded
+	    if (questions == null || questions.isEmpty()) {
+	        throw new ResourceNotFoundException("No questions found for jobPrefix: " + jobPrefix + 
+	                                   " with date range from " + fromDate + " to " + toDate);
+	    }
+	    
+	  
+	    
 	    recordQuestionsForInterview(scheduleId, questions);
 	    
-	    // Create and store session
 	    InterviewSession session = new InterviewSession();
 	    session.setJobPrefix(jobPrefix);
 	    session.setEmail(email);
 	    session.setQuestions(questions);
 	    session.setCurrentQuestionIndex(0);
-	    session.setResumeSummary(null);   // or pass if available
+	    session.setResumeSummary(null);
 	    saveSession(scheduleId, session);
 	    
-	    // Return the first question text
-	    return questions.get(0).getText();
+	    String firstQuestion = questions.get(0).getText();
+	  
+	    return firstQuestion;
 	}
+
+	// DELETE THIS METHOD - it's not needed and returns null
+	// @Override
+	// public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId, Long fromDate, Long toDate) {
+//	     return null;
+	// }
+
+//	@Override
+//	public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId, Long fromDate,
+//			Long toDate) {
+//		// TODO Auto-generated method stub
+//		return null;
+//	}
 	
 }

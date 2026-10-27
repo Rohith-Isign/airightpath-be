@@ -12,7 +12,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.rightpath.dto.CodingQuestion;
 import com.rightpath.dto.Question;
+import com.rightpath.enums.AssessmentType;
 import com.rightpath.service.OpenAiService;
+import com.rightpath.service.QuestionBankTracker;
 
 @RestController
 @RequestMapping("/api")
@@ -20,9 +22,32 @@ public class QuestionController {
 
     private static final Logger log = LoggerFactory.getLogger(QuestionController.class);
     private final OpenAiService openAiService;
+    private final QuestionBankTracker questionBankTracker;
+    private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
-    public QuestionController(OpenAiService openAiService) {
+    public QuestionController(OpenAiService openAiService, QuestionBankTracker questionBankTracker) {
         this.openAiService = openAiService;
+        this.questionBankTracker = questionBankTracker;
+    }
+
+    /**
+     * Keep what the generator produced, whether or not it is ever assigned.
+     *
+     * <p>Generated questions went straight back to the browser and were only stored if an admin
+     * went on to assign them, so one generated and set aside was gone, and the bank could not show
+     * "generated, never used". Bookkeeping only: a failure here must not lose the admin the questions
+     * they waited minutes for.</p>
+     */
+    private void keep(String jobPrefix, AssessmentType type, Object questions) {
+        try {
+            String actor = org.springframework.security.core.context.SecurityContextHolder.getContext()
+                    .getAuthentication() == null ? null
+                            : org.springframework.security.core.context.SecurityContextHolder.getContext()
+                                    .getAuthentication().getName();
+            questionBankTracker.recordGenerated(jobPrefix, type, mapper.writeValueAsString(questions), actor);
+        } catch (Exception e) {
+            log.error("Could not keep the generated {} questions for {} in the question bank", type, jobPrefix, e);
+        }
     }
 
     @GetMapping("/generate-questions")
@@ -34,6 +59,7 @@ public class QuestionController {
             List<Question> questions = openAiService.generateQuestions(jobPrefix);
             log.info("Aptitude questions generated successfully for jobPrefix={}, count={}, took={}ms",
                     jobPrefix, questions.size(), System.currentTimeMillis() - start);
+            keep(jobPrefix, AssessmentType.APTITUDE, questions);
             return questions;
         } catch (Exception e) {
             log.error("Failed to generate aptitude questions for jobPrefix={}, took={}ms, error={}",
@@ -51,6 +77,7 @@ public class QuestionController {
             List<CodingQuestion> questions = openAiService.generateCodingQuestions(jobPrefix);
             log.info("Coding questions generated successfully for jobPrefix={}, count={}, took={}ms",
                     jobPrefix, questions.size(), System.currentTimeMillis() - start);
+            keep(jobPrefix, AssessmentType.CODING, questions);
             return questions;
         } catch (Exception e) {
             log.error("Failed to generate coding questions for jobPrefix={}, took={}ms, error={}",

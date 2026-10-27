@@ -42,12 +42,30 @@ public class JobPrompt {
 	@Column(name = "job_prefix", nullable = false)
 	private String jobPrefix;
 
+	/**
+	 * Stored as text, not as a database ENUM.
+	 *
+	 * <p>Hibernate maps a Java enum to a native MySQL {@code ENUM(...)} listing
+	 * the constants that existed when the table was created, and
+	 * {@code ddl-auto: update} never alters an existing column definition. So
+	 * adding {@code INTERVIEW_L2_TECHNICAL} and {@code INTERVIEW_L3_BEHAVIORAL}
+	 * to {@link PromptType} left the column still spelling out
+	 * {@code ('APTITUDE','CODING','INTERVIEW')}: saving a round prompt was
+	 * rejected by the database and answered 500, so those prompts could never
+	 * be configured at all.</p>
+	 *
+	 * <p>A varchar takes any constant the enum grows, which means the next round
+	 * added here needs no migration. The existing column still has to be
+	 * converted once by hand — see
+	 * {@code docs/migration-job-prompt-type-varchar.md}.</p>
+	 */
 	@Enumerated(EnumType.STRING)
-	@Column(name = "prompt_type")
+	@Column(name = "prompt_type", columnDefinition = "varchar(64)")
 	private PromptType promptType;
 
+	/** Text for the same reason as {@link #promptType}. */
 	@Enumerated(EnumType.STRING)
-	@Column(name = "prompt_stage")
+	@Column(name = "prompt_stage", columnDefinition = "varchar(32)")
 	private PromptStage promptStage;
 
 	@Lob

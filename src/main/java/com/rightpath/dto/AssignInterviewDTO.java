@@ -1,5 +1,6 @@
 package com.rightpath.dto;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 import lombok.AllArgsConstructor;
@@ -14,4 +15,6 @@ public class AssignInterviewDTO {
     private String email;
     private LocalDateTime assignedAt;
     private LocalDateTime deadlineTime;
+    private LocalDate questionsFromDate;
+    private LocalDate questionsToDate;
 }

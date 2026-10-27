@@ -61,7 +61,7 @@ public class ApiSecurityConfig {
 			.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
 			// Public auth endpoints (non-versioned, no /auth segment).
-			.requestMatchers("/api/login", "/api/register", "/api/refresh", "/api/logout","/api/job-applications/**").permitAll()
+			.requestMatchers("/api/login", "/api/register", "/api/refresh","/api/compile/**", "/api/logout","/api/job-applications/**","/api/mobile/**", "/api/generate-otp", "/api/validate-otp","/api/update-password").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(apiJwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 

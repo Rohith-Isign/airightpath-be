@@ -1,17 +1,15 @@
 package com.rightpath.controller;
 
-import java.io.IOException;
 import java.util.*;
 
-import org.apache.tika.exception.TikaException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.rightpath.dto.AtsResultDto;
 import com.rightpath.service.impl.ATSServiceImpl;
 import com.rightpath.service.impl.EmailServiceImpl;
 
@@ -38,7 +36,7 @@ public class ATSController {
     @PostMapping("/upload-single-resumes")
     public ResponseEntity<?> uploadFiles(
             @RequestParam("resume") MultipartFile resumeFile,
-            @RequestParam("jobDescription") String jobDescription) {
+            @RequestParam("jobDescription") String jobDescription) throws Exception {
 
         logger.info("Received single resume for matching with job description.");
 
@@ -49,57 +47,50 @@ public class ATSController {
             return ResponseEntity.badRequest().body(error);
         }
 
-        try {
-            double score = atsService.processFiles(resumeFile, jobDescription);
-            logger.info("Resume processed successfully. Match score: {}", score);
+        double score = atsService.processFiles(resumeFile, jobDescription);
+        logger.info("Resume processed successfully. Match score: {}", score);
 
-            Map<String, Object> response = new HashMap<>();
-            response.put("score", score);
-            return ResponseEntity.ok(response);
-
-        } catch (TikaException | IOException e) {
-            logger.error("Error processing resume: {}", e.getMessage());
-            Map<String, String> error = new HashMap<>();
-            error.put("error", "Failed to process the resume: " + e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
-        }
+        Map<String, Object> response = new HashMap<>();
+        response.put("score", score);
+        return ResponseEntity.ok(response);
     }
 
+    /** Shortlisting threshold (percentage) for batch resume screening. */
+    private static final double MATCH_THRESHOLD = 70.0;
+
     /**
-     * Uploads multiple resumes and a job description.
-     * Returns names of resumes that scored 70% or above.
-     * 
+     * Uploads multiple resumes and a job description and screens each one.
+     * Returns every resume with its ATS score and whether it met the threshold,
+     * so the client can display scores (not just the matched filenames).
+     *
      * @param resumes          Array of resumes to process.
      * @param jobDescription   The job description content.
-     * @return                 List of matching resume filenames or error.
+     * @return                 One {@link AtsResultDto} per uploaded resume.
      */
     @PostMapping("/upload-multiple-resumes")
     @PreAuthorize("hasAuthority('ATS_UPLOAD_MULTI')")
-    public ResponseEntity<List<String>> uploadFiles(
+    public ResponseEntity<List<AtsResultDto>> uploadFiles(
             @RequestParam("resumes") MultipartFile[] resumes,
-            @RequestParam("jobDescription") String jobDescription) {
+            @RequestParam("jobDescription") String jobDescription) throws Exception {
+
+        if (jobDescription == null || jobDescription.trim().isEmpty()) {
+            throw new IllegalArgumentException("Job description cannot be empty.");
+        }
 
         logger.info("Received {} resumes for batch processing.", resumes.length);
-        List<String> matchingResumes = new ArrayList<>();
+        List<AtsResultDto> results = new ArrayList<>();
 
-        try {
-            for (MultipartFile resume : resumes) {
-                double score = atsService.processFiles(resume, jobDescription);
-                logger.debug("Processed resume '{}'. Score: {}", resume.getOriginalFilename(), score);
-
-                if (score >= 70.0) {
-                    matchingResumes.add(resume.getOriginalFilename());
-                }
-            }
-
-            logger.info("Batch processing completed. {} resumes matched above threshold.", matchingResumes.size());
-            return ResponseEntity.ok(matchingResumes);
-
-        } catch (Exception e) {
-            logger.error("Error during multiple resume processing: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                                 .body(List.of("Error processing files: " + e.getMessage()));
+        for (MultipartFile resume : resumes) {
+            AtsResultDto result = atsService.screenResume(resume, jobDescription, MATCH_THRESHOLD);
+            logger.debug("Processed resume '{}'. email: {} score: {} matched: {}",
+                    result.fileName(), result.email(), result.score(), result.matched());
+            results.add(result);
         }
+
+        long matchedCount = results.stream().filter(AtsResultDto::matched).count();
+        logger.info("Batch processing completed. {} of {} resumes matched above threshold.",
+                matchedCount, results.size());
+        return ResponseEntity.ok(results);
     }
 
     /**

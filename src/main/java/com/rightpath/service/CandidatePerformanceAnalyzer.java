@@ -40,6 +40,30 @@ public class CandidatePerformanceAnalyzer {
     @Value("${interview.early-termination.consecutive-short-answer-threshold:3}")
     private int consecutiveShortAnswerThreshold;
 
+    /**
+     * How many recent answers difficulty is judged on.
+     *
+     * <p>Three. One answer is noise — a candidate who fumbles a question they
+     * happened not to revise has not become a weaker engineer, and swinging the
+     * interview on it produces a seesaw. Much more than three and the interview
+     * is still being pitched at how they opened rather than how they are doing
+     * now.</p>
+     */
+    @Value("${interview.difficulty.window:3}")
+    private int difficultyWindow;
+
+    /** Fewest rated answers before difficulty moves at all. */
+    @Value("${interview.difficulty.min-scored-answers:2}")
+    private int difficultyMinScoredAnswers;
+
+    /** At or above this mean, stretch the candidate. */
+    @Value("${interview.difficulty.raise-above:7.5}")
+    private double difficultyRaiseAbove;
+
+    /** At or below this mean, ease off. */
+    @Value("${interview.difficulty.lower-below:4.5}")
+    private double difficultyLowerBelow;
+
     public CandidatePerformanceAnalyzer(VoiceConversationEntryRepository entryRepository) {
         this.entryRepository = entryRepository;
     }
@@ -129,6 +153,11 @@ public class CandidatePerformanceAnalyzer {
             }
         }
 
+        List<Integer> recentScores = recentScores(candidateEntries);
+        Double recentAverage = recentScores.isEmpty()
+                ? null
+                : Math.round(recentScores.stream().mapToInt(Integer::intValue).average().orElse(0) * 10.0) / 10.0;
+
         PerformanceSnapshot snapshot = PerformanceSnapshot.builder()
                 .totalQuestionsAsked(schedule.getTotalQuestionsAsked())
                 .totalSkips(totalSkips)
@@ -138,6 +167,9 @@ public class CandidatePerformanceAnalyzer {
                 .consecutiveShortAnswers(maxConsecutivePoor)
                 .skipRatio(Math.round(skipRatio * 100.0) / 100.0)
                 .earlyTerminationSuggested(suggest)
+                .recentAverageScore(recentAverage)
+                .scoredAnswerCount(recentScores.size())
+                .difficultyDirection(difficultyDirection(recentScores, recentAverage))
                 .build();
 
         if (suggest) {
@@ -147,5 +179,45 @@ public class CandidatePerformanceAnalyzer {
         }
 
         return snapshot;
+    }
+
+    /**
+     * The interviewer's ratings of the last few answers, oldest first.
+     *
+     * <p>Only answers that were actually rated. A skip carries no rating and is
+     * simply absent rather than counted as a zero — a candidate who skips one
+     * question has told you nothing about the difficulty they can handle, and
+     * scoring the silence would drag the interview easier on no evidence. That
+     * they skipped at all is already handled, more appropriately, by the
+     * early-termination signals above.</p>
+     */
+    private List<Integer> recentScores(List<VoiceConversationEntry> candidateEntries) {
+        List<Integer> scores = candidateEntries.stream()
+                .map(VoiceConversationEntry::getAnswerScore)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        int window = Math.max(1, difficultyWindow);
+        return scores.size() <= window ? scores : scores.subList(scores.size() - window, scores.size());
+    }
+
+    /**
+     * Which way to move the next question, or 0 to leave it where it is.
+     *
+     * <p>Holds until there are enough ratings to mean something, and holds
+     * again between the two thresholds. The gap between them is deliberate: with
+     * a single cut-off, a candidate hovering around it would be pushed harder
+     * and easier on alternate questions.</p>
+     */
+    private int difficultyDirection(List<Integer> recentScores, Double recentAverage) {
+        if (recentAverage == null || recentScores.size() < difficultyMinScoredAnswers) {
+            return 0;
+        }
+        if (recentAverage >= difficultyRaiseAbove) {
+            return 1;
+        }
+        if (recentAverage <= difficultyLowerBelow) {
+            return -1;
+        }
+        return 0;
     }
 }

@@ -1,12 +1,14 @@
 package com.rightpath.controller;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -23,8 +25,11 @@ import com.rightpath.dto.LoginRequest;
 import com.rightpath.dto.LoginResponse;
 import com.rightpath.dto.MessageResponse;
 import com.rightpath.dto.MeResponse;
+import com.rightpath.dto.PaginatedResponse;
 import com.rightpath.dto.UserInfo;
+import com.rightpath.dto.CreateStaffUserRequest;
 import com.rightpath.dto.UsersDto;
+import com.rightpath.rbac.RoleName;
 import com.rightpath.entity.Users;
 import com.rightpath.exceptions.InvalidRefreshTokenException;
 import com.rightpath.repository.OtpRepository;
@@ -184,43 +189,126 @@ public class AuthenthicationController {
 	/**
 	 * Get all non-admin users (Admin only).
 	 */
+	/**
+	 * One page of candidate accounts — everyone holding no staff role.
+	 *
+	 * <p>Paginated and ordered by email. It used to return the whole table, and
+	 * the query behind it took MySQL out of sort memory (error 1038) on barely a
+	 * hundred rows; the fix is the {@code EXISTS} rewrite in the repository plus
+	 * this bound, not a larger sort buffer.</p>
+	 *
+	 * <p>{@code page} is zero-based and {@code size} defaults to
+	 * {@value com.rightpath.service.impl.UserDetailsServiceImpl#DEFAULT_PAGE_SIZE},
+	 * capped at {@value com.rightpath.service.impl.UserDetailsServiceImpl#MAX_PAGE_SIZE}
+	 * — the same convention as the paginated job listing.</p>
+	 */
 	@GetMapping("/users")
 	@PreAuthorize("hasAuthority('USER_LIST')")
-	public ResponseEntity<?> getAllNonAdminUsers() {
-		logger.info("Fetching non-admin users.");
-		return ResponseEntity.ok(userDetailsServiceImpl.getNonAdminUsers());
+	public ResponseEntity<PaginatedResponse<UsersDto>> getAllNonAdminUsers(
+			@RequestParam(required = false) Integer page,
+			@RequestParam(required = false) Integer size) {
+		Pageable pageable = UserDetailsServiceImpl.toPageable(page, size);
+		logger.info("Fetching candidate users page {} size {}", pageable.getPageNumber(), pageable.getPageSize());
+		return ResponseEntity.ok(new PaginatedResponse<>(userDetailsServiceImpl.getCandidateUsers(pageable)));
+	}
+
+	/**
+	 * Every staff account — anyone holding ADMIN or SUPER_ADMIN.
+	 *
+	 * <p>{@code /users} above deliberately excludes administrators, so before
+	 * this there was no way to see who holds privileged access. Same
+	 * {@code USER_LIST} authority as the candidate list: whoever may enumerate
+	 * accounts may enumerate all of them.</p>
+	 */
+	/**
+	 * One page of every account, optionally filtered by role and free text.
+	 *
+	 * <p>What the admin user screen reads. {@code /users} and {@code /users/staff}
+	 * keep their own meanings for existing callers; this is the combined,
+	 * paginated view, because two independent pagers cannot be merged into one
+	 * stable list.</p>
+	 *
+	 * @param role   ADMIN, SUPER_ADMIN or USER; omitted means every role
+	 * @param search matched against email and full name
+	 */
+	@GetMapping("/users/directory")
+	@PreAuthorize("hasAuthority('USER_LIST')")
+	public ResponseEntity<PaginatedResponse<UsersDto>> getUserDirectory(
+			@RequestParam(required = false) RoleName role,
+			@RequestParam(required = false) String search,
+			@RequestParam(required = false) Integer page,
+			@RequestParam(required = false) Integer size) {
+		Pageable pageable = UserDetailsServiceImpl.toPageable(page, size);
+		logger.info("Fetching user directory role={} page={} size={}",
+				role, pageable.getPageNumber(), pageable.getPageSize());
+		return ResponseEntity.ok(
+				new PaginatedResponse<>(userDetailsServiceImpl.getDirectory(role, search, pageable)));
+	}
+
+	@GetMapping("/users/staff")
+	@PreAuthorize("hasAuthority('USER_LIST')")
+	public ResponseEntity<PaginatedResponse<UsersDto>> getStaffUsers(
+			@RequestParam(required = false) Integer page,
+			@RequestParam(required = false) Integer size) {
+		Pageable pageable = UserDetailsServiceImpl.toPageable(page, size);
+		logger.info("Fetching staff users page {} size {}", pageable.getPageNumber(), pageable.getPageSize());
+		return ResponseEntity.ok(new PaginatedResponse<>(userDetailsServiceImpl.getStaffUsersPage(pageable)));
+	}
+
+	/**
+	 * Creates an administrator or super administrator.
+	 *
+	 * <p>Guarded by {@code ROLE_MANAGE}, which only SUPER_ADMIN holds — creating
+	 * an account and handing it a staff role is the same privilege as granting
+	 * that role to an existing account, so the two are gated identically.</p>
+	 *
+	 * <p>No self-service route reaches this: {@code /register} always creates a
+	 * candidate, whatever the request body says.</p>
+	 */
+	@PostMapping("/users/staff")
+	@PreAuthorize("hasAuthority('ROLE_MANAGE')")
+	public ResponseEntity<Map<String, String>> createStaffUser(
+			@Valid @RequestBody CreateStaffUserRequest request) {
+		logger.info("Creating staff account {} with role {}", request.email(), request.role());
+
+		// USER would make this endpoint a way to create candidates with none of
+		// the registration flow's steps — no welcome mail, no OTP. Registration
+		// owns that path.
+		if (request.role() == RoleName.USER) {
+			return ResponseEntity.badRequest()
+					.body(Map.of("message", "Use registration to create a candidate account",
+							"status", "error"));
+		}
+
+		userDetailsServiceImpl.createStaffUser(request.toUsersDto(), request.role());
+		return ResponseEntity.status(HttpStatus.CREATED)
+				.body(Map.of("message", "success", "email", request.email()));
 	}
 
 	/**
 	 * Generate OTP for email or mobile.
 	 */
 	@PostMapping("/generate-otp")
-	public ResponseEntity<Map<String, String>> generateOtp(@RequestBody Map<String, String> request) {
+	public ResponseEntity<Map<String, String>> generateOtp(@RequestBody Map<String, String> request) throws Exception {
 		String type = request.get("type");
 		String value = request.get("value");
 
-		try {
-			if ("email".equalsIgnoreCase(type)) {
-				boolean exists = userDetailsServiceImpl.isEmailRegistered(value);
-				if (!exists) {
-					logger.warn("Email not registered: {}", value);
-					return ResponseEntity.badRequest().body(Map.of("error", "Email is not registered."));
-				}
-				otpService.generateAndSendOtp(value, null);
-				logger.info("OTP sent to email: {}", value);
-				return ResponseEntity.ok(Map.of("message", "OTP has been sent to your registered email."));
-			} else if ("mobile".equalsIgnoreCase(type)) {
-				otpService.generateAndSendOtp(null, value);
-				logger.info("OTP sent to mobile: {}", value);
-				return ResponseEntity.ok(Map.of("message", "OTP has been sent to your mobile number."));
-			} else {
-				logger.warn("Invalid OTP request type: {}", type);
-				return ResponseEntity.badRequest().body(Map.of("error", "Invalid OTP delivery method."));
+		if ("email".equalsIgnoreCase(type)) {
+			boolean exists = userDetailsServiceImpl.isEmailRegistered(value);
+			if (!exists) {
+				logger.warn("Email not registered: {}", value);
+				return ResponseEntity.badRequest().body(Map.of("error", "Email is not registered."));
 			}
-		} catch (Exception e) {
-			logger.error("OTP generation failed: {}", e.getMessage());
-			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.body(Map.of("error", "Failed to send OTP. Please try again later."));
+			otpService.generateAndSendOtp(value, null);
+			logger.info("OTP sent to email: {}", value);
+			return ResponseEntity.ok(Map.of("message", "OTP has been sent to your registered email."));
+		} else if ("mobile".equalsIgnoreCase(type)) {
+			otpService.generateAndSendOtp(null, value);
+			logger.info("OTP sent to mobile: {}", value);
+			return ResponseEntity.ok(Map.of("message", "OTP has been sent to your mobile number."));
+		} else {
+			logger.warn("Invalid OTP request type: {}", type);
+			return ResponseEntity.badRequest().body(Map.of("error", "Invalid OTP delivery method."));
 		}
 	}
 
@@ -251,21 +339,15 @@ public class AuthenthicationController {
 	public ResponseEntity<Map<String, Object>> updatePassword(@RequestParam(required = false) String email,
 			@RequestParam(required = false) String mobile, @RequestParam String newPassword) {
 
-		try {
-			boolean isUpdated = otpService.validateOtpAndUpdatePassword(email, mobile, newPassword);
-			if (isUpdated) {
-				logger.info("Password updated for {}", email != null ? email : mobile);
-				return ResponseEntity.ok(Map.of("success", true, "message", "Password updated successfully",
-						"contactMethod", email != null ? "email" : "mobile"));
-			} else {
-				logger.warn("Password update failed for {}", email != null ? email : mobile);
-				return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-						.body(Map.of("success", false, "message", "Password update failed"));
-			}
-		} catch (Exception e) {
-			logger.error("Error updating password: {}", e.getMessage());
-			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-					.body(Map.of("success", false, "message", "Error updating password"));
+		boolean isUpdated = otpService.validateOtpAndUpdatePassword(email, mobile, newPassword);
+		if (isUpdated) {
+			logger.info("Password updated for {}", email != null ? email : mobile);
+			return ResponseEntity.ok(Map.of("success", true, "message", "Password updated successfully",
+					"contactMethod", email != null ? "email" : "mobile"));
+		} else {
+			logger.warn("Password update failed for {}", email != null ? email : mobile);
+			return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+					.body(Map.of("success", false, "message", "Password update failed"));
 		}
 	}
 
@@ -292,15 +374,10 @@ public class AuthenthicationController {
 	@GetMapping("/profile-details/{email}")
 	@PreAuthorize("hasAuthority('USER_READ')")
 	public ResponseEntity<UsersDto> getUserDetails(@PathVariable String email) {
-		try {
-			Users user = userDetailsServiceImpl.getUserByEmail(email);
-			UsersDto userDto = new UsersDto(user);
-			logger.info("Profile details fetched for: {}", email);
-			return ResponseEntity.ok(userDto);
-		} catch (RuntimeException e) {
-			logger.warn("User not found: {}", email);
-			return ResponseEntity.status(HttpStatus.NOT_FOUND).body(null);
-		}
+		Users user = userDetailsServiceImpl.getUserByEmail(email);
+		UsersDto userDto = new UsersDto(user);
+		logger.info("Profile details fetched for: {}", email);
+		return ResponseEntity.ok(userDto);
 	}
 
 	/**
@@ -327,14 +404,9 @@ public class AuthenthicationController {
 	public ResponseEntity<Map<String, String>> changePassword(@RequestParam String email,
 			@RequestParam String oldPassword, @RequestParam String newPassword, @RequestParam String confirmPassword) {
 
-		try {
-			logger.info("Password change requested for: {}", email);
-			String message = userDetailsServiceImpl.changePassword(email, oldPassword, newPassword, confirmPassword);
-			return ResponseEntity.ok(Map.of("message", message));
-		} catch (IllegalArgumentException e) {
-			logger.warn("Password change failed: {}", e.getMessage());
-			return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("message", e.getMessage()));
-		}
+		logger.info("Password change requested for: {}", email);
+		String message = userDetailsServiceImpl.changePassword(email, oldPassword, newPassword, confirmPassword);
+		return ResponseEntity.ok(Map.of("message", message));
 	}
 
 	private String extractCookie(HttpServletRequest request, String cookieName) {

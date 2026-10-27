@@ -10,6 +10,7 @@ import java.util.*;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 
+import com.rightpath.dto.AtsResultDto;
 import com.rightpath.service.ATSService;
 
 @Service
@@ -19,6 +20,42 @@ public class ATSServiceImpl implements ATSService {
     private final Tika tika = new Tika();
 
     /**
+     * Common English stopwords plus a few resume/JD boilerplate words. These carry
+     * no matching signal, so removing them stops them from inflating the TF-IDF and
+     * skill-match scores.
+     */
+    private static final Set<String> STOPWORDS = Set.of(
+            "a", "an", "the", "and", "or", "but", "if", "then", "else", "of", "to", "in",
+            "on", "for", "with", "at", "by", "from", "as", "is", "are", "was", "were", "be",
+            "been", "being", "this", "that", "these", "those", "it", "its", "we", "you",
+            "they", "he", "she", "i", "will", "shall", "can", "could", "would", "should",
+            "has", "have", "had", "do", "does", "did", "not", "no", "so", "than", "too",
+            "very", "just", "about", "into", "over", "under", "up", "down", "out", "off",
+            "more", "most", "some", "any", "all", "each", "our", "your", "their", "his",
+            "her", "my", "me", "us", "them", "who", "whom", "which", "what", "when", "where",
+            "why", "how", "there", "here", "also", "such", "per", "via", "etc",
+            "job", "role", "work", "working", "years", "year", "experience", "candidate",
+            "responsibilities", "requirements", "required", "description");
+
+    /**
+     * Lowercase, split on non-alphanumeric boundaries, and drop stopwords and
+     * single-character tokens. Shared by every text-based scorer so tokenization
+     * is consistent.
+     */
+    private List<String> tokenize(String text) {
+        if (text == null || text.isBlank()) {
+            return List.of();
+        }
+        List<String> tokens = new ArrayList<>();
+        for (String token : text.toLowerCase().split("[^a-z0-9]+")) {
+            if (token.length() >= 2 && !STOPWORDS.contains(token)) {
+                tokens.add(token);
+            }
+        }
+        return tokens;
+    }
+
+    /**
      * Main method to process a resume and evaluate it against a job description.
      * Uses multiple scoring strategies and combines them with defined weights.
      *
@@ -26,12 +63,46 @@ public class ATSServiceImpl implements ATSService {
      * @param jobDescription Job description text.
      * @return Weighted ATS score (0–100).
      */
+    /** Matches a standard email address anywhere in the resume text. */
+    private static final Pattern EMAIL_PATTERN =
+            Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}");
+
     @Override
     public double processFiles(MultipartFile resume, String jobDescription) throws IOException, TikaException {
         String resumeText = tika.parseToString(resume.getInputStream());
+        return scoreResume(resumeText, jobDescription);
+    }
 
-        resumeText = cleanText(resumeText);
-        jobDescription = cleanText(jobDescription);
+    /**
+     * Parses the resume once, extracts its email, and computes the ATS score.
+     *
+     * @param resume         the uploaded resume file
+     * @param jobDescription job description to score against
+     * @param threshold      score at/above which the candidate is "matched"
+     * @return filename, extracted email, rounded score and matched flag
+     */
+    public AtsResultDto screenResume(MultipartFile resume, String jobDescription, double threshold)
+            throws IOException, TikaException {
+        String resumeText = tika.parseToString(resume.getInputStream());
+        String email = extractEmail(resumeText);
+        double score = scoreResume(resumeText, jobDescription);
+        double rounded = Math.round(score * 100.0) / 100.0;
+        return new AtsResultDto(resume.getOriginalFilename(), email, rounded, score >= threshold);
+    }
+
+    /** Returns the first email address found in the raw resume text, or null. */
+    private String extractEmail(String rawResumeText) {
+        if (rawResumeText == null) {
+            return null;
+        }
+        Matcher matcher = EMAIL_PATTERN.matcher(rawResumeText);
+        return matcher.find() ? matcher.group() : null;
+    }
+
+    /** Computes the weighted ATS score (0–100) from raw resume + job-description text. */
+    private double scoreResume(String rawResumeText, String rawJobDescription) {
+        String resumeText = cleanText(rawResumeText);
+        String jobDescription = cleanText(rawJobDescription);
 
         // Score breakdown
         double tfidfScore = calculateTFIDFScore(resumeText, jobDescription);
@@ -45,7 +116,7 @@ public class ATSServiceImpl implements ATSService {
         System.out.printf("Education Match: %.2f%%\n", educationMatch);
 
         // Weighted score calculation
-        double totalScore = 0.2 * tfidfScore + 0.4 * skillMatch + 0.2 * experienceMatch + 0.2 * educationMatch;
+        double totalScore = clamp(0.2 * tfidfScore + 0.4 * skillMatch + 0.2 * experienceMatch + 0.2 * educationMatch);
         System.out.printf("Total ATS Score: %.2f%%\n", totalScore);
         return totalScore;
     }
@@ -59,14 +130,27 @@ public class ATSServiceImpl implements ATSService {
     }
 
     private double calculateTFIDFScore(String resume, String jobDesc) {
-        List<String> resumeTokens = Arrays.asList(resume.split("\\s+"));
-        List<String> jobTokens = Arrays.asList(jobDesc.split("\\s+"));
+        List<String> resumeTokens = tokenize(resume);
+        List<String> jobTokens = tokenize(jobDesc);
+
+        if (resumeTokens.isEmpty() || jobTokens.isEmpty()) {
+            return 0;
+        }
 
         List<List<String>> allDocs = Arrays.asList(resumeTokens, jobTokens);
         Map<String, Double> resumeTfidf = computeTFIDF(resumeTokens, allDocs);
         Map<String, Double> jobTfidf = computeTFIDF(jobTokens, allDocs);
 
-        return computeCosineSimilarity(resumeTfidf, jobTfidf) * 100;
+        double similarity = computeCosineSimilarity(resumeTfidf, jobTfidf) * 100;
+        return clamp(similarity);
+    }
+
+    /** Constrain a percentage score to the valid 0–100 range. */
+    private double clamp(double score) {
+        if (Double.isNaN(score)) {
+            return 0;
+        }
+        return Math.max(0.0, Math.min(100.0, score));
     }
 
     private Map<String, Double> computeTFIDF(List<String> tokens, List<List<String>> allDocuments) {
@@ -114,17 +198,18 @@ public class ATSServiceImpl implements ATSService {
     // ----------------------------
 
     private double calculateSkillMatch(String resume, String jobDesc) {
-        List<String> jobSkills = extractKeywords(jobDesc);
-        List<String> resumeSkills = extractKeywords(resume);
+        // Measure how many of the DISTINCT job keywords the resume covers.
+        // Deduplicate both sides so repeated words in the resume can't push the
+        // score above 100% (the previous version counted every resume token that
+        // appeared in the job description, producing >100% "matches"), and drop
+        // stopwords so common words don't count as skills.
+        Set<String> jobSkills = new HashSet<>(tokenize(jobDesc));
+        Set<String> resumeSkills = new HashSet<>(tokenize(resume));
 
         if (jobSkills.isEmpty()) return 0;
 
-        long matchCount = resumeSkills.stream().filter(jobSkills::contains).count();
+        long matchCount = jobSkills.stream().filter(resumeSkills::contains).count();
         return ((double) matchCount / jobSkills.size()) * 100;
-    }
-
-    private List<String> extractKeywords(String text) {
-        return Arrays.asList(text.toLowerCase().split("\\W+"));
     }
 
     // ----------------------------

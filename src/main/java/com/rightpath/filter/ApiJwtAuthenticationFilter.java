@@ -15,7 +15,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rightpath.error.ApiError;
-import com.rightpath.error.V2ErrorCodes;
+import com.rightpath.error.ErrorCodes;
 import com.rightpath.exceptions.InvalidAccessTokenException;
 import com.rightpath.service.impl.AccessTokenService;
 
@@ -57,7 +57,8 @@ public class ApiJwtAuthenticationFilter extends OncePerRequestFilter {
                 || path.equals("/api/refresh")
                 || path.equals("/api/logout")
                 || path.equals("/api/health")
-                || path.equals("/api/healthcheck");
+                || path.equals("/api/healthcheck")
+        || path.startsWith("/api/mobile/");
     }
 
     @Override
@@ -86,7 +87,7 @@ public class ApiJwtAuthenticationFilter extends OncePerRequestFilter {
             logger.debug("Access token rejected: {}", ex.getMessage());
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            ApiError error = ApiError.of(V2ErrorCodes.AUTH_INVALID_TOKEN, ex.getMessage(),
+            ApiError error = ApiError.of(ErrorCodes.AUTH_INVALID_TOKEN, ex.getMessage(),
                     request.getRequestURI(), null);
             objectMapper.writeValue(response.getOutputStream(), error);
         }

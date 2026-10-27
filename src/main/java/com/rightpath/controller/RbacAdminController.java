@@ -32,21 +32,38 @@ public class RbacAdminController {
     }
 
     @PostMapping("/assign-role")
-    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    @PreAuthorize("hasAuthority('ROLE_MANAGE')")
     public ResponseEntity<ApiResponse<MessageResponse>> assignRole(@Valid @RequestBody RoleAssignmentRequest req) {
         rbacAdminService.assignRole(req.userEmail(), req.role());
         return ResponseEntity.ok(ApiResponse.ok(new MessageResponse("Role assigned")));
     }
 
     @PostMapping("/remove-role")
-    @PreAuthorize("hasAuthority('USER_UPDATE')")
+    @PreAuthorize("hasAuthority('ROLE_MANAGE')")
     public ResponseEntity<ApiResponse<MessageResponse>> removeRole(@Valid @RequestBody RoleAssignmentRequest req) {
         rbacAdminService.removeRole(req.userEmail(), req.role());
         return ResponseEntity.ok(ApiResponse.ok(new MessageResponse("Role removed")));
     }
 
+    /**
+     * The roles and permissions held by one account.
+     *
+     * <p>Guarded by {@code USER_LIST}, not {@code USER_READ}. Candidates are
+     * seeded with {@code USER_READ} so they can read their own profile, which
+     * meant any candidate could pass any colleague's or any other candidate's
+     * address here and read back their exact roles and permissions — a map of
+     * who is worth attacking and of which authority names the application
+     * checks. {@code USER_LIST} is the permission that already means "may see
+     * other people's user records", and candidates do not hold it.</p>
+     *
+     * <p>Reading your <em>own</em> entry stays open to any authenticated user:
+     * it tells the caller nothing they could not infer from what the UI already
+     * lets them do, and keeping it available means tightening this endpoint
+     * costs a candidate nothing. Compared case-insensitively because an address
+     * that differs only in case is the same account.</p>
+     */
     @GetMapping("/user")
-    @PreAuthorize("hasAuthority('USER_READ')")
+    @PreAuthorize("hasAuthority('USER_LIST') or #email.equalsIgnoreCase(authentication.name)")
     public ResponseEntity<ApiResponse<UserRbacViewResponse>> getUserRbac(
             @RequestParam("email") @NotBlank @Email String email
     ) {
@@ -66,8 +83,15 @@ public class RbacAdminController {
         return ResponseEntity.ok(ApiResponse.ok(new UserRbacViewResponse(email, roles, perms)));
     }
 
+    /**
+     * Every role name the system defines.
+     *
+     * <p>Also moved off {@code USER_READ}: it is only useful for filling in a
+     * role picker, which is staff-only, and it named the privileged roles to
+     * anyone who asked.</p>
+     */
     @GetMapping("/roles")
-    @PreAuthorize("hasAuthority('USER_READ')")
+    @PreAuthorize("hasAuthority('USER_LIST')")
     public ResponseEntity<ApiResponse<java.util.Set<String>>> listRoles() {
         return ResponseEntity.ok(ApiResponse.ok(rbacAdminService.listRoleNames()));
     }

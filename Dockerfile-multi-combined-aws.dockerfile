@@ -47,5 +47,8 @@ RUN groupadd -r -g 1001 appuser \
 #USER appuser
 WORKDIR /app
 COPY target/rightpath.jar rightpath.jar
+
+EXPOSE 8082
+
 ENTRYPOINT ["java", "-jar", "/app/rightpath.jar"]
 

@@ -26,9 +26,6 @@ public class JobPromptServiceImpl implements JobPromptService {
 	private final JobPromptRepository jobPromptRepository;
 	private final JobPostRepository jobPostRepository;
 
-	@Value("${interview.prompts.system:}")
-	private String fallbackSystemPrompt;
-
 	public JobPromptServiceImpl(JobPromptRepository jobPromptRepository, JobPostRepository jobPostRepository) {
 		this.jobPromptRepository = jobPromptRepository;
 		this.jobPostRepository = jobPostRepository;
@@ -64,21 +61,56 @@ public class JobPromptServiceImpl implements JobPromptService {
 		return jobPromptRepository.findAllByJobPrefix(jobPrefix);
 	}
 
+	/**
+	 * A job's configured prompt, or a refusal naming what to configure.
+	 *
+	 * <p>There is no built-in prompt any more. {@code INTERVIEW}/{@code START}
+	 * used to fall back to a system prompt compiled into the jar, which meant
+	 * every job with nothing configured interviewed with the same hidden script
+	 * — and an administrator editing prompts in the console saw no effect on a
+	 * job whose prompt they had never saved. Aptitude and coding always required
+	 * their prompt; the interview is now the same, and the message says where to
+	 * add it.</p>
+	 */
 	@Override
 	public String getPrompt(String jobPrefix, PromptType type, PromptStage stage) {
 		return jobPromptRepository.findByJobPrefixAndPromptTypeAndPromptStage(jobPrefix, type, stage)
 				.map(JobPrompt::getPrompt)
-				.orElseGet(() -> {
-					// Fallback to properties file for INTERVIEW/START prompts
-					if (type == PromptType.INTERVIEW && stage == PromptStage.START
-							&& fallbackSystemPrompt != null && !fallbackSystemPrompt.isBlank()) {
-						log.warn("No DB prompt for jobPrefix={}, type={}, stage={}. Using fallback from properties.",
-								jobPrefix, type, stage);
-						return fallbackSystemPrompt;
-					}
-					throw new IllegalStateException(
-							"Prompt not found for jobPrefix=" + jobPrefix + ", type=" + type + ", stage=" + stage);
-				});
+				.orElseThrow(() -> new IllegalStateException(
+						"No " + type + " prompt is configured for this job (" + jobPrefix
+								+ "). Add it under Manage AI Prompts before running this step."));
+	}
+
+	@Override
+	public String getInterviewPrompt(String jobPrefix, com.rightpath.enums.InterviewRound round, PromptStage stage) {
+		com.rightpath.enums.InterviewRound resolved = com.rightpath.enums.InterviewRound.orDefault(round);
+
+		// The round's own prompt wins where one is configured.
+		var roundPrompt = jobPromptRepository.findByJobPrefixAndPromptTypeAndPromptStage(
+				jobPrefix, resolved.getPromptType(), stage);
+		if (roundPrompt.isPresent()) {
+			return roundPrompt.get().getPrompt();
+		}
+
+		// Otherwise the round-agnostic prompt, which is all a job configured
+		// before rounds existed has — and what the console's "Interview
+		// (shared)" tab writes.
+		//
+		// SUMMARY may be absent: callers read null as "grade with the built-in
+		// criteria only". START may not. This used to swallow both, on the
+		// footing that START always had a built-in fallback behind it; once that
+		// fallback was removed, swallowing START handed the interviewer a null
+		// system prompt and it interviewed with no instructions at all — worse
+		// than refusing, because nothing said anything was wrong.
+		if (stage == PromptStage.SUMMARY) {
+			try {
+				return getPrompt(jobPrefix, PromptType.INTERVIEW, stage);
+			} catch (IllegalStateException noSummaryPrompt) {
+				log.debug("No SUMMARY interview prompt for jobPrefix={} round={}", jobPrefix, resolved);
+				return null;
+			}
+		}
+		return getPrompt(jobPrefix, PromptType.INTERVIEW, stage);
 	}
 
 	@Override

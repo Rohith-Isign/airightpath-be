@@ -19,4 +19,6 @@ public class UploadInterviewQuestions {
     private String jobPrefix;
 
     private String fileName;
+    
+    private String language; 
 }	

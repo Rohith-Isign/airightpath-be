@@ -14,6 +14,9 @@ public interface VoiceInterviewService {
 
     void endVoiceInterview(Long scheduleId);
 
+    /** Ends the interview for a reason other than the candidate pressing end. No-op if already over. */
+    void endVoiceInterview(Long scheduleId, com.rightpath.enums.CompletionReason reason);
+
     boolean handleWarning(Long scheduleId);
 
     VoiceSessionStatus getSessionStatus(Long scheduleId);
@@ -21,4 +24,15 @@ public interface VoiceInterviewService {
     VoiceEvaluationResult getEvaluation(Long scheduleId);
 
     ResumeResponse resumeInterview(Long scheduleId);
+
+	VoiceStartResponse startVoiceInterview(String jobPrefix, String email, Long fromDate, Long toDate);
+
+	/**
+	 * Start one specific booked interview.
+	 *
+	 * @param scheduleId the interview the candidate chose, or null to fall back
+	 *                   to their most recently assigned one on this job
+	 */
+	VoiceStartResponse startVoiceInterview(String jobPrefix, String email, Long fromDate, Long toDate,
+			Long scheduleId);
 }

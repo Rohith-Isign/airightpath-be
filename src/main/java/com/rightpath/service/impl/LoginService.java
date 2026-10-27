@@ -4,13 +4,13 @@ import org.springframework.http.ResponseCookie;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 
 import com.rightpath.dto.LoginRequest;
 import com.rightpath.dto.LoginResponse;
 import com.rightpath.dto.UserInfo;
-import com.rightpath.service.rbac.RbacAuthorityService;
 import com.rightpath.util.RefreshCookieFactory;
 import com.rightpath.util.ThreadLocalUserContext;
 import com.rightpath.entity.Users;
@@ -27,20 +27,17 @@ public class LoginService {
     private final AccessTokenService accessTokenService;
     private final RefreshTokenService refreshTokenService;
     private final RefreshCookieFactory refreshCookieFactory;
-    private final RbacAuthorityService rbacAuthorityService;
 
     public LoginService(
             AuthenticationManager authenticationManager,
             AccessTokenService accessTokenService,
             RefreshTokenService refreshTokenService,
-            RefreshCookieFactory refreshCookieFactory,
-            RbacAuthorityService rbacAuthorityService
+            RefreshCookieFactory refreshCookieFactory
     ) {
         this.authenticationManager = authenticationManager;
         this.accessTokenService = accessTokenService;
         this.refreshTokenService = refreshTokenService;
         this.refreshCookieFactory = refreshCookieFactory;
-        this.rbacAuthorityService = rbacAuthorityService;
     }
 
     public LoginResult login(LoginRequest request, HttpServletRequest http) {
@@ -61,10 +58,13 @@ public class LoginService {
 
     UserInfo user = mapUserInfo();
 
-        Set<String> authorities = rbacAuthorityService.resolveAuthorities(userDetails.getUsername());
+        // Authorities were already resolved during authentication
+        // (UserDetailsServiceImpl.loadUserByUsername); reuse them instead of
+        // re-querying RBAC, which previously ran the resolve loop twice per login.
         Set<String> roles = new LinkedHashSet<>();
         Set<String> permissions = new LinkedHashSet<>();
-        for (String authority : authorities) {
+        for (GrantedAuthority granted : userDetails.getAuthorities()) {
+            String authority = granted.getAuthority();
             if (authority.startsWith("ROLE_")) {
                 roles.add(authority.substring("ROLE_".length()));
             } else {

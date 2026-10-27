@@ -1,9 +1,11 @@
 package com.rightpath.repository;
 
-import com.rightpath.entity.UploadInterviewQuestions;
+import java.util.List;
+import java.util.Optional;
+
 import org.springframework.data.jpa.repository.JpaRepository;
 
-import java.util.List;
+import com.rightpath.entity.UploadInterviewQuestions;
 
 public interface InterviewQuestionsRepository extends JpaRepository<UploadInterviewQuestions, Long> {
 
@@ -12,4 +14,6 @@ public interface InterviewQuestionsRepository extends JpaRepository<UploadInterv
 
     // Get latest file (based on ID descending)
     List<UploadInterviewQuestions> findByJobPrefixOrderByIdDesc(String jobPrefix);
+    
+    Optional<UploadInterviewQuestions> findTopByJobPrefixAndLanguageOrderByIdDesc(String jobPrefix, String language);
 }

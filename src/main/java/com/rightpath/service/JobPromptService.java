@@ -19,4 +19,19 @@ public interface JobPromptService {
 
 	String getPrompt(String jobPrefix, PromptType type, PromptStage stage);
 
+	/**
+	 * The interview prompt for one round, falling back to the round-agnostic one.
+	 *
+	 * <p>Resolution order: the round's own prompt, then {@link PromptType#INTERVIEW},
+	 * then whatever {@link #getPrompt} falls back to. A job configured before
+	 * rounds existed has only the middle one, and must keep interviewing exactly
+	 * as it did — so a missing round prompt is normal, not an error.</p>
+	 *
+	 * @param round the round being sat; null is treated as the default round
+	 * @param stage START for the interviewer's instructions, SUMMARY for the grader's
+	 * @return the prompt text, or null when the job has configured neither and
+	 *         no built-in fallback applies
+	 */
+	String getInterviewPrompt(String jobPrefix, com.rightpath.enums.InterviewRound round, PromptStage stage);
+
 }

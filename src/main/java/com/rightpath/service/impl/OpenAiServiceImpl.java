@@ -1,6 +1,7 @@
 package com.rightpath.service.impl;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
@@ -21,10 +22,12 @@ import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.rightpath.dto.ChatCompletionRequest;
 import com.rightpath.dto.ChatCompletionResponse;
 import com.rightpath.dto.CodingQuestion;
+import com.rightpath.dto.InterviewQuestion;
 import com.rightpath.dto.OpenAiResponse;
 import com.rightpath.dto.Question;
 import com.rightpath.enums.PromptType;
 import com.rightpath.exceptions.AiServiceException;
+import com.rightpath.exceptions.ResourceNotFoundException;
 import com.rightpath.repository.JobPromptRepository;
 import com.rightpath.service.OpenAiService;
 import com.rightpath.util.PromptPlaceholderResolver;
@@ -41,6 +44,9 @@ public class OpenAiServiceImpl implements OpenAiService {
 	private String model;
 	@Value("${openai.question.timeout-seconds:180}")
 	private int questionTimeoutSeconds;
+	
+	@Value("${openai.question.generation.timeout-seconds:300}")
+	private int generationTimeoutSeconds;
 	private final ObjectMapper objectMapper = JsonMapper.builder()
 			.enable(JsonReadFeature.ALLOW_BACKSLASH_ESCAPING_ANY_CHARACTER)
 			.build();
@@ -97,7 +103,9 @@ public class OpenAiServiceImpl implements OpenAiService {
 		long start = System.currentTimeMillis();
 
 		String prompt = jobPromptRepository.findByJobPrefixAndPromptType(jobPrefix, PromptType.APTITUDE)
-				.orElseThrow(() -> new AiServiceException("Aptitude prompt not configured for jobPrefix=" + jobPrefix))
+				.orElseThrow(() -> new ResourceNotFoundException(
+						"Aptitude prompt is not configured for job '" + jobPrefix
+								+ "'. Please configure the aptitude prompt for this job before generating questions."))
 				.getPrompt();
 		prompt = placeholderResolver.resolveJobPlaceholders(prompt, jobPrefix);
 		log.info("generateQuestions - prompt loaded, length={}, took={}ms", prompt.length(),
@@ -147,7 +155,9 @@ public class OpenAiServiceImpl implements OpenAiService {
 		long start = System.currentTimeMillis();
 
 		String prompt = jobPromptRepository.findByJobPrefixAndPromptType(jobPrefix, PromptType.CODING)
-				.orElseThrow(() -> new AiServiceException("Coding prompt not configured for jobPrefix=" + jobPrefix))
+				.orElseThrow(() -> new ResourceNotFoundException(
+						"Coding prompt is not configured for job '" + jobPrefix
+								+ "'. Please configure the coding prompt for this job before generating questions."))
 				.getPrompt();
 		prompt = placeholderResolver.resolveJobPlaceholders(prompt, jobPrefix);
 		log.info("generateCodingQuestions - prompt loaded, length={}, took={}ms", prompt.length(),
@@ -215,4 +225,89 @@ public class OpenAiServiceImpl implements OpenAiService {
 
 		return content;
 	}
+	
+	 
+	@Override
+	public List<InterviewQuestion> generateQuestionsForCategories(String jobPrefix,
+	                                                              List<String> categories,
+	                                                              int totalQuestions) {
+	    try {
+	        int perCategory = totalQuestions / categories.size();
+	        int techPerCategory = (int) Math.round(perCategory * 0.5);
+	        int codingPerCategory = (int) Math.round(perCategory * 0.25);
+	        int codeExpPerCategory = perCategory - techPerCategory - codingPerCategory;
+
+	        String prompt = String.format(
+	            "You are an expert Java interviewer. Generate exactly the following questions for the job role '%s' (difficulty level: medium).\n\n" +
+	            "Categories: %s\n" +
+	            "For each category, generate:\n" +
+	            "  - %d technical questions (prefix [TECHNICAL])\n" +
+	            "  - %d coding questions (prefix [CODING])\n" +
+	            "  - %d code explanation questions (prefix [CODE_EXPLANATION])\n\n" +
+	            "Each question must be medium difficulty (not basic, not advanced).\n" +
+	            "Return a JSON array of objects, each with fields:\n" +
+	            "  - id: integer (use sequential numbers starting from 0)\n" +
+	            "  - uniqueId: string in format \"L2-FSD-001-001-<timestamp>\" (use current time millis as suffix)\n" +
+	            "  - level: \"level-2\"\n" +
+	            "  - category: the category name\n" +
+	            "  - question: the full question text including the type prefix. For [CODE_EXPLANATION] questions, the question must be followed by a newline and then the code snippet (properly formatted as a code block). For example:\n" +
+	            "    \"[CODE_EXPLANATION] Explain the output of this code:\\n\\npublic class Test {\\n    public static void main(String[] args) {\\n        System.out.println(\\\"Hello\\\");\\n    }\\n}\"\n\n" +
+	            "IMPORTANT: Do NOT include 'createdAt' field in the JSON. I will set it myself.\n\n" +
+	            "Output ONLY valid JSON, no extra text.\n\n" +
+	            "Now generate the questions:",
+	            jobPrefix, String.join(", ", categories), techPerCategory, codingPerCategory, codeExpPerCategory
+	        );
+
+	        String response = askWithTimeout(prompt, generationTimeoutSeconds);
+	        String cleaned = cleanJson(response);
+	        if (cleaned == null || cleaned.isBlank()) {
+	            log.error("AI response is empty or null after cleaning for jobPrefix: {}", jobPrefix);
+	            return Collections.emptyList();
+	        }
+
+	        ObjectMapper mapper = new ObjectMapper();
+	        List<InterviewQuestion> newQuestions = mapper.readValue(cleaned, new TypeReference<List<InterviewQuestion>>() {});
+	        if (newQuestions == null) {
+	            log.warn("Parsed questions list is null for jobPrefix: {}", jobPrefix);
+	            return Collections.emptyList();
+	        }
+
+	        // Don't set IDs, uniqueIds, or createdAt here - let the caller handle it
+	        // Just return the questions as received from AI
+	        
+	        log.info("Generated {} new questions for jobPrefix: {}", newQuestions.size(), jobPrefix);
+	        return newQuestions;
+
+	    } catch (Exception e) {
+	        log.error("Failed to generate questions for jobPrefix: {}", jobPrefix, e);
+	        return Collections.emptyList();
+	    }
+	}
+	
+	
+	 @Override
+	 public String askWithTimeout(String prompt, int timeoutSeconds) {
+	     ChatCompletionRequest request = new ChatCompletionRequest();
+	     request.setModel(model);
+	     request.setMessages(List.of(Map.of("role", "user", "content", prompt)));
+
+	     ChatCompletionResponse response = webClient.post()
+	             .uri("/chat/completions")
+	             .bodyValue(request)
+	             .retrieve()
+	             .bodyToMono(ChatCompletionResponse.class)
+	             .timeout(Duration.ofSeconds(timeoutSeconds))
+	             .retryWhen(Retry.backoff(3, Duration.ofSeconds(2)).filter(this::isRetryable))
+	             .onErrorMap(ex -> ex instanceof TimeoutException,
+	                     ex -> new AiServiceException("AI response timed out after " + timeoutSeconds + " seconds, please retry"))
+	             .onErrorMap(reactor.core.Exceptions::isRetryExhausted,
+	                     ex -> new AiServiceException("AI service unavailable after retries, please try again later", ex))
+	             .block();
+
+	     if (response == null || response.getChoices() == null || response.getChoices().isEmpty()) {
+	         throw new RuntimeException("Empty response from OpenAI");
+	     }
+
+	     return response.getChoices().get(0).getMessage().getContent();
+	 }
 }
