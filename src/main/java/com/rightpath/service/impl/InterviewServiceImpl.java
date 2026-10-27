@@ -332,7 +332,13 @@ public class InterviewServiceImpl implements InterviewService {
 
 	@Override
 	public List<CandidateInterviewSchedule> getActiveInterviewsByEmail(String email) {
-		return scheduleRepo.findActiveInterviewsByEmail(email);
+		// An interview whose deadline has passed is not one the candidate can still sit: starting it is refused
+		// with "The time allowed for this interview has passed". It used to stay on their list all the same,
+		// marked Not Attempted with a Start button that could only fail. Compared the way the start check does.
+		LocalDateTime now = LocalDateTime.now();
+		return scheduleRepo.findActiveInterviewsByEmail(email).stream()
+				.filter(schedule -> schedule.getDeadlineTime() == null || !schedule.getDeadlineTime().isBefore(now))
+				.toList();
 	}
 
 	@Override
