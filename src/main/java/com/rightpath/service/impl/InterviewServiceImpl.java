@@ -330,6 +330,13 @@ public class InterviewServiceImpl implements InterviewService {
 		}
 	}
 
+	/** A window has to close after it opens. */
+	private static void requireWindow(LocalDateTime opens, LocalDateTime closes) {
+		if (opens != null && closes != null && !closes.isAfter(opens)) {
+			throw new IllegalArgumentException("The interview end time must be after its start time");
+		}
+	}
+
 	@Override
 	public List<CandidateInterviewSchedule> getActiveInterviewsByEmail(String email) {
 		// An interview whose deadline has passed is not one the candidate can still sit: starting it is refused
@@ -360,6 +367,7 @@ public class InterviewServiceImpl implements InterviewService {
 	        throw new IllegalArgumentException("emails must be provided");
 	    }
 	    requireDeadline(deadlineTime);
+	    requireWindow(assignedAt, deadlineTime);
 
 	    List<CandidateInterviewSchedule> schedules = new ArrayList<>();
 	    // Kept so the invitation can address the candidate by name and quote the

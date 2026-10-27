@@ -363,6 +363,12 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             throw new IllegalStateException(
                     "The time allowed for this interview has passed. Ask the recruiter to schedule it again.");
         }
+        // The window opens at the start time the recruiter chose. A minute of grace for clock differences.
+        if (schedule.getAssignedAt() != null && schedule.getAssignedAt().isAfter(LocalDateTime.now().plusMinutes(1))) {
+            throw new IllegalStateException("This interview has not opened yet. It opens on "
+                    + schedule.getAssignedAt().format(java.time.format.DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a"))
+                    + ".");
+        }
 
         // Start a new interview
         schedule.setAttemptStatus(AttemptStatus.IN_PROGRESS);
