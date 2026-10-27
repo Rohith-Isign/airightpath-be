@@ -1,6 +1,7 @@
 package com.rightpath.service.impl;
 
 import org.springframework.http.ResponseCookie;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -11,6 +12,8 @@ import org.springframework.stereotype.Service;
 import com.rightpath.dto.LoginRequest;
 import com.rightpath.dto.LoginResponse;
 import com.rightpath.dto.UserInfo;
+import com.rightpath.config.AuthProperties;
+import com.rightpath.util.AccessCookieFactory;
 import com.rightpath.util.RefreshCookieFactory;
 import com.rightpath.util.ThreadLocalUserContext;
 import com.rightpath.entity.Users;
@@ -27,13 +30,22 @@ public class LoginService {
     private final AccessTokenService accessTokenService;
     private final RefreshTokenService refreshTokenService;
     private final RefreshCookieFactory refreshCookieFactory;
+    private final AccessCookieFactory accessCookieFactory;
+    private final LoginAttemptService loginAttempts;
+    private final AuthProperties props;
 
     public LoginService(
             AuthenticationManager authenticationManager,
             AccessTokenService accessTokenService,
             RefreshTokenService refreshTokenService,
-            RefreshCookieFactory refreshCookieFactory
+            RefreshCookieFactory refreshCookieFactory,
+            AccessCookieFactory accessCookieFactory,
+            LoginAttemptService loginAttempts,
+            AuthProperties props
     ) {
+        this.accessCookieFactory = accessCookieFactory;
+        this.loginAttempts = loginAttempts;
+        this.props = props;
         this.authenticationManager = authenticationManager;
         this.accessTokenService = accessTokenService;
         this.refreshTokenService = refreshTokenService;
@@ -41,9 +53,17 @@ public class LoginService {
     }
 
     public LoginResult login(LoginRequest request, HttpServletRequest http) {
-        Authentication auth = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
-        );
+        loginAttempts.requireNotLocked(request.getEmail());
+
+        Authentication auth;
+        try {
+            auth = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword()));
+        } catch (BadCredentialsException e) {
+            loginAttempts.onFailure(request.getEmail());
+            throw e;
+        }
+        loginAttempts.onSuccess(request.getEmail());
 
         UserDetails userDetails = (UserDetails) auth.getPrincipal();
 
@@ -72,8 +92,13 @@ public class LoginService {
             }
         }
 
+        ResponseCookie accessCookie = accessCookieFactory.enabled()
+                ? accessCookieFactory.build(issuedAccess.token(), issuedAccess.expiresInSeconds())
+                : null;
+        boolean tokenInBody = accessCookie == null || props.getAccess().isReturnTokenInBody();
+
         LoginResponse body = new LoginResponse(
-                issuedAccess.token(),
+                tokenInBody ? issuedAccess.token() : null,
                 "Bearer",
                 issuedAccess.expiresInSeconds(),
                 user,
@@ -81,7 +106,7 @@ public class LoginService {
                 permissions
         );
 
-        return new LoginResult(body, cookie);
+        return new LoginResult(body, cookie, accessCookie);
     }
 
     private static UserInfo mapUserInfo() {
@@ -98,6 +123,6 @@ public class LoginService {
         );
     }
 
-    public record LoginResult(LoginResponse body, ResponseCookie refreshCookie) {
+    public record LoginResult(LoginResponse body, ResponseCookie refreshCookie, ResponseCookie accessCookie) {
     }
 }

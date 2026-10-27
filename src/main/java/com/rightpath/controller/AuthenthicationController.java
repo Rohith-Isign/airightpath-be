@@ -38,6 +38,7 @@ import com.rightpath.service.impl.LoginService;
 import com.rightpath.service.impl.RefreshTokenService;
 import com.rightpath.service.impl.TokenFacade;
 import com.rightpath.service.impl.UserDetailsServiceImpl;
+import com.rightpath.util.AccessCookieFactory;
 import com.rightpath.util.RefreshCookieFactory;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -59,10 +60,12 @@ public class AuthenthicationController {
 	private final RefreshCookieFactory refreshCookieFactory;
 	private final AuthProperties props;
 	private final LoginService loginService;
+	private final AccessCookieFactory accessCookieFactory;
 
 	public AuthenthicationController(RefreshTokenService refreshTokenService, TokenFacade tokenFacade,
 			RefreshCookieFactory refreshCookieFactory, AuthProperties props, LoginService loginService,
-			OtpService otpService) {
+			OtpService otpService, AccessCookieFactory accessCookieFactory) {
+		this.accessCookieFactory = accessCookieFactory;
 		this.refreshTokenService = refreshTokenService;
 		this.tokenFacade = tokenFacade;
 		this.refreshCookieFactory = refreshCookieFactory;
@@ -94,8 +97,12 @@ public class AuthenthicationController {
 			HttpServletRequest http) {
 		var result = loginService.login(request, http);
 		logger.info("V2 login success");
-		return ResponseEntity.ok().header(HttpHeaders.SET_COOKIE, result.refreshCookie().toString())
-				.body(ApiResponse.ok(result.body()));
+		ResponseEntity.BodyBuilder response = ResponseEntity.ok().header(HttpHeaders.SET_COOKIE,
+				result.refreshCookie().toString());
+		if (result.accessCookie() != null) {
+			response.header(HttpHeaders.SET_COOKIE, result.accessCookie().toString());
+		}
+		return response.body(ApiResponse.ok(result.body()));
 	}
 
 	@PostMapping("/refresh")
@@ -114,7 +121,15 @@ public class AuthenthicationController {
 		AccessTokenResponse newAccess = tokenFacade.issueAccessTokenForSubject(rotated.userEmail());
 
 		var cookie = refreshCookieFactory.build(rotated.rawToken());
-		return ResponseEntity.ok().header(HttpHeaders.SET_COOKIE, cookie.toString()).body(ApiResponse.ok(newAccess));
+		ResponseEntity.BodyBuilder response = ResponseEntity.ok().header(HttpHeaders.SET_COOKIE, cookie.toString());
+		if (accessCookieFactory.enabled()) {
+			response.header(HttpHeaders.SET_COOKIE,
+					accessCookieFactory.build(newAccess.accessToken(), newAccess.expiresIn()).toString());
+			if (!props.getAccess().isReturnTokenInBody()) {
+				newAccess = new AccessTokenResponse(null, newAccess.tokenType(), newAccess.expiresIn());
+			}
+		}
+		return response.body(ApiResponse.ok(newAccess));
 	}
 
 	@PostMapping("/logout")
@@ -127,6 +142,7 @@ public class AuthenthicationController {
 
 		var cleared = refreshCookieFactory.clear();
 		return ResponseEntity.ok().header(HttpHeaders.SET_COOKIE, cleared.toString())
+				.header(HttpHeaders.SET_COOKIE, accessCookieFactory.clear().toString())
 				.body(ApiResponse.ok(new MessageResponse("Logged out")));
 	}
 

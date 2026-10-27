@@ -207,4 +207,25 @@ public interface UsersRepository extends JpaRepository<Users, String> {
 	boolean existsByMobileNumber(String mobileNumber);
 	
 	Optional<Users> findByMobileNumber(String mobile);
+
+	/** One more wrong password. A single UPDATE, so pods racing over the same account cannot lose a count. */
+	@Transactional
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("UPDATE Users u SET u.failedLoginAttempts = u.failedLoginAttempts + 1 WHERE u.email = :email")
+	int recordFailedLogin(@Param("email") String email);
+
+	/** Lock the account if it has reached the limit; the counter starts again for the next window. */
+	@Transactional
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("UPDATE Users u SET u.lockedUntil = :until, u.failedLoginAttempts = 0 "
+			+ "WHERE u.email = :email AND u.failedLoginAttempts >= :max")
+	int lockIfOverLimit(@Param("email") String email, @Param("max") int max,
+			@Param("until") java.time.LocalDateTime until);
+
+	/** A good login: forget past failures and any expired lock. */
+	@Transactional
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Query("UPDATE Users u SET u.failedLoginAttempts = 0, u.lockedUntil = NULL "
+			+ "WHERE u.email = :email AND (u.failedLoginAttempts <> 0 OR u.lockedUntil IS NOT NULL)")
+	int clearLoginFailures(@Param("email") String email);
 }

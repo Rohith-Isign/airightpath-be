@@ -3,6 +3,7 @@ package com.rightpath.entity;
 import java.time.LocalDateTime;
 import java.util.Set;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -33,4 +34,12 @@ public class Otp {
 	private String mobile; 
 	private String otp; // The actual OTP code
 	private LocalDateTime expirationTime; // Expiration time of the OTP
+
+	/** Wrong guesses so far. Changed only by atomic UPDATEs, so pods cannot lose a count. */
+	@Column(nullable = false, columnDefinition = "int default 0")
+	private int attempts;
+
+	/** Set once the right code was entered; the password change requires it. */
+	@Column(nullable = false, columnDefinition = "tinyint(1) default 0")
+	private boolean verified;
 }

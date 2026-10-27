@@ -24,7 +24,8 @@ class WebSocketAuthInterceptorTest {
 
 	private final AccessTokenService tokens = mock(AccessTokenService.class);
 	private final MobilePairingService pairings = mock(MobilePairingService.class);
-	private final WebSocketAuthInterceptor interceptor = new WebSocketAuthInterceptor(tokens, pairings);
+	private final WebSocketAuthInterceptor interceptor = new WebSocketAuthInterceptor(tokens, pairings,
+			new com.rightpath.config.AuthProperties());
 
 	private boolean handshake(String query, Map<String, Object> attributes, MockHttpServletResponse out) {
 		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/ws/info");

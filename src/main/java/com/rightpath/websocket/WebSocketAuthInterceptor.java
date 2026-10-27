@@ -13,6 +13,7 @@ import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.rightpath.config.AuthProperties;
 import com.rightpath.exceptions.InvalidAccessTokenException;
 import com.rightpath.service.MobilePairingService;
 import com.rightpath.service.impl.AccessTokenService;
@@ -41,8 +42,11 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
 
     private final AccessTokenService accessTokenService;
     private final MobilePairingService pairingService;
+    private final AuthProperties authProperties;
 
-    public WebSocketAuthInterceptor(AccessTokenService accessTokenService, MobilePairingService pairingService) {
+    public WebSocketAuthInterceptor(AccessTokenService accessTokenService, MobilePairingService pairingService,
+            AuthProperties authProperties) {
+        this.authProperties = authProperties;
         this.accessTokenService = accessTokenService;
         this.pairingService = pairingService;
     }
@@ -194,30 +198,60 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
      * Priority: 1) Query parameter 'token', 2) Authorization header
      */
     private String extractToken(ServerHttpRequest request) {
-        // Try query parameter first (preferred for WebSocket)
-        String query = request.getURI().getQuery();
-        if (query != null) {
-            var params = UriComponentsBuilder.fromUriString("?" + query).build().getQueryParams();
-            String token = params.getFirst("token");
-            if (token != null && !token.isBlank()) {
-                return token;
-            }
+        // 1) The HttpOnly access cookie: the browser sends it on the handshake itself,
+        //    so the token never has to appear in a URL.
+        String cookieToken = extractCookieToken(request);
+        if (cookieToken != null) {
+            return cookieToken;
         }
 
-        // Try Authorization header
+        // 2) Authorization header, for non-browser clients.
         String authHeader = request.getHeaders().getFirst("Authorization");
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             return authHeader.substring(7);
         }
 
-        // For SockJS connections, try to get from servlet request
-        if (request instanceof ServletServerHttpRequest servletRequest) {
-            String token = servletRequest.getServletRequest().getParameter("token");
+        // 3) ?token= in the query string. URLs are logged by proxies and kept in
+        //    history, so this is refused once clients have moved to the cookie.
+        if (!authProperties.getWebsocket().isAllowQueryToken()) {
+            return null;
+        }
+        String query = request.getURI().getQuery();
+        if (query != null) {
+            var params = UriComponentsBuilder.fromUriString("?" + query).build().getQueryParams();
+            String token = params.getFirst("token");
             if (token != null && !token.isBlank()) {
+                log.warn("WebSocket authenticated with a query-string token; move this client to the access cookie");
                 return token;
             }
         }
+        if (request instanceof ServletServerHttpRequest servletRequest) {
+            String token = servletRequest.getServletRequest().getParameter("token");
+            if (token != null && !token.isBlank()) {
+                log.warn("WebSocket authenticated with a query-string token; move this client to the access cookie");
+                return token;
+            }
+        }
+        return null;
+    }
 
+    private String extractCookieToken(ServerHttpRequest request) {
+        if (!authProperties.getAccess().isCookieEnabled()) {
+            return null;
+        }
+        String name = authProperties.getAccess().getCookieName();
+        java.util.List<String> headers = request.getHeaders().get("Cookie");
+        if (headers == null) {
+            return null;
+        }
+        for (String header : headers) {
+            for (String part : header.split(";")) {
+                String pair = part.trim();
+                if (pair.startsWith(name + "=") && pair.length() > name.length() + 1) {
+                    return pair.substring(name.length() + 1);
+                }
+            }
+        }
         return null;
     }
 }

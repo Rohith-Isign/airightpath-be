@@ -47,4 +47,26 @@ public interface OtpRepository extends JpaRepository<Otp, Long> {
 	 * @return an Optional containing the OTP if present, or empty if not found.
 	 */
 	Optional<Otp> findByMobile(String mobile);
+
+	/** One more wrong guess. Returns the new count via {@link #findById}. */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Transactional
+	@Query("UPDATE Otp o SET o.attempts = o.attempts + 1 WHERE o.id = :id")
+	int incrementAttempts(@Param("id") Long id);
+
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Transactional
+	@Query("UPDATE Otp o SET o.verified = true WHERE o.id = :id")
+	int markVerified(@Param("id") Long id);
+
+	/** A new code replaces any earlier one for the same contact, with a fresh attempt budget. */
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Transactional
+	@Query("DELETE FROM Otp o WHERE o.email = :email")
+	int deleteAllByEmail(@Param("email") String email);
+
+	@Modifying(clearAutomatically = true, flushAutomatically = true)
+	@Transactional
+	@Query("DELETE FROM Otp o WHERE o.mobile = :mobile")
+	int deleteAllByMobile(@Param("mobile") String mobile);
 }
