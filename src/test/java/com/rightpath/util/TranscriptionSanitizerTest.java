@@ -222,4 +222,36 @@ class TranscriptionSanitizerTest {
 		assertTrue(sanitized.rejected().get(0).contains("subtitle artefact"),
 				"expected a stated reason, got: " + sanitized.rejected().get(0));
 	}
+
+	@Test
+	void sentencesWhisperInventsOverARoomWithNoSpeechAreDropped() {
+		JsonNode node = response(
+				segment("I love you.", 0.2, -0.4, 1.0, 0, 3),
+				segment("Please like, share and comment on this video.", 0.3, -0.5, 1.3, 3, 6),
+				segment("Sleep well.", 0.25, -0.45, 1.2, 6, 9));
+
+		assertEquals("", TranscriptionSanitizer.sanitize(node).text());
+	}
+
+	@Test
+	void aSegmentThatIsProbablyNotSpeechIsDroppedOnTheLooserPair() {
+		// Short of the strict pair (0.6 and -1.0), past the looser one (0.45 and -0.8).
+		JsonNode node = response(segment("What is this", 0.5, -0.9, 1.2, 0, 3));
+
+		assertTrue(TranscriptionSanitizer.sanitize(node).text().isEmpty());
+	}
+
+	@Test
+	void aDecodeThatPoorIsDroppedWhateverTheNoSpeechEstimate() {
+		JsonNode node = response(segment("The communication in the software", 0.05, -1.7, 1.3, 0, 3));
+
+		assertTrue(TranscriptionSanitizer.sanitize(node).text().isEmpty());
+	}
+
+	@Test
+	void accentedSpeechAroundMinusOneIsStillKept() {
+		JsonNode node = response(segment("I designed the service with a message queue", 0.05, -1.0, 1.3, 0, 4));
+
+		assertEquals("I designed the service with a message queue", TranscriptionSanitizer.sanitize(node).text());
+	}
 }

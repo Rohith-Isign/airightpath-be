@@ -86,6 +86,23 @@ public final class TranscriptionSanitizer {
 	private static final double COMPRESSION_RATIO_CEILING = 2.4;
 
 	/**
+	 * A looser pairing than {@link #NO_SPEECH_CEILING} with {@link #AVG_LOGPROB_FLOOR}.
+	 *
+	 * <p>The strict pair missed what a silent or noisy microphone actually produces: confident-looking
+	 * invented sentences that sit just short of both limits. Both signals still have to agree.</p>
+	 */
+	private static final double LIKELY_NO_SPEECH = 0.45;
+	private static final double LIKELY_POOR_DECODE = -0.8;
+
+	/**
+	 * A decode this poor is not speech worth keeping whatever else is said about it.
+	 *
+	 * <p>Whisper's own reference decoder treats -1 as the line below which it retries; this is well past it, so
+	 * accented or quiet speech, which sits around -0.5 to -1.0, is not caught.</p>
+	 */
+	private static final double GARBAGE_DECODE = -1.5;
+
+	/**
 	 * Strings that are never an answer to an interview question.
 	 *
 	 * <p>Dropped on a whole-segment match whatever the confidence says, because
@@ -111,7 +128,24 @@ public final class TranscriptionSanitizer {
 			"subtitles by the amaraorg community",
 			"subtitles by steamteamextra",
 			"transcription by castingwordscom",
-			"wwwmoojiorg");
+			"wwwmoojiorg",
+			// More of the same family, seen in a real interview's transcript over a silent microphone. None of
+			// these is something a candidate says in answer to an interview question.
+			"i love you",
+			"i love you all",
+			"i love you too",
+			"please like share and subscribe",
+			"like share and subscribe",
+			"like share comment and subscribe",
+			"please like share and comment on this video",
+			"if you like this video please subscribe",
+			"please subscribe to our channel for more such videos",
+			"please subscribe to my channel and i will see you in the next video",
+			"sleep well",
+			"shhh",
+			"peace",
+			"see you next time",
+			"see you soon");
 
 	/**
 	 * Generic sign-offs that are real speech about as often as they are not.
@@ -197,6 +231,11 @@ public final class TranscriptionSanitizer {
 		return new Sanitized(String.join(" ", kept).trim(), spans, rejected);
 	}
 
+	/** The comparison form used to spot the same text arriving twice in a row. */
+	public static String comparable(String text) {
+		return normalise(text);
+	}
+
 	/** The kept text alone, for callers with no use for the rest. */
 	public static String clean(JsonNode verboseJson) {
 		return sanitize(verboseJson).text();
@@ -257,6 +296,14 @@ public final class TranscriptionSanitizer {
 		}
 		double noSpeech = noSpeechNode.asDouble(0);
 		double avgLogprob = avgLogprobNode.asDouble(0);
+
+		if (avgLogprob < GARBAGE_DECODE) {
+			return "decode too poor to be speech (avg_logprob " + avgLogprob + ")";
+		}
+
+		if (noSpeech > LIKELY_NO_SPEECH && avgLogprob < LIKELY_POOR_DECODE) {
+			return "probably no speech (no_speech_prob " + noSpeech + ", avg_logprob " + avgLogprob + ")";
+		}
 
 		if (noSpeech > NO_SPEECH_CEILING && avgLogprob < AVG_LOGPROB_FLOOR) {
 			return "no speech detected (no_speech_prob " + noSpeech + ", avg_logprob " + avgLogprob + ")";

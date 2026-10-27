@@ -444,6 +444,42 @@ public class InterviewController {
 	@Autowired
 	private com.rightpath.repository.InterviewRecordingUploadRepository recordingUploadRepository;
 
+	@Autowired
+	private com.rightpath.service.AudioTranscriptionService audioTranscriptionService;
+
+	/** Whisper refuses anything over 25 MB; this leaves a margin for the multipart framing. */
+	private static final long MAX_ANSWER_AUDIO_BYTES = 24L * 1024 * 1024;
+
+	/**
+	 * A stretch of the candidate's answer, to be turned into text.
+	 *
+	 * <p>Sent as a file over HTTP rather than as base64 over the socket. The socket caps a message at a megabyte,
+	 * which forced the audio to be cut into four second pieces, so every answer was dozens of calls to the speech
+	 * service and a fresh chance for it to invent words over a pause. A file here can be minutes long, so the
+	 * browser cuts it at a natural pause and one answer is usually one call.</p>
+	 *
+	 * <p>The text comes back on the same topic as before, one message per chunk, with {@code done} set so the
+	 * page knows this chunk has been dealt with even when it held no speech.</p>
+	 */
+	@PostMapping(value = "/voice/{scheduleId}/audio-chunk", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
+	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
+	public ResponseEntity<Void> audioChunk(@PathVariable Long scheduleId, @RequestParam("audio") MultipartFile audio,
+			@RequestParam(value = "chunkIndex", defaultValue = "0") int chunkIndex,
+			org.springframework.security.core.Authentication authentication) throws java.io.IOException {
+		if (scheduleRepo.findByIdAndEmail(scheduleId, authentication.getName()).isEmpty()) {
+			throw new org.springframework.security.access.AccessDeniedException(
+					"Interview " + scheduleId + " is not assigned to the authenticated candidate");
+		}
+		if (audio.isEmpty()) {
+			throw new IllegalArgumentException("audio is required");
+		}
+		if (audio.getSize() > MAX_ANSWER_AUDIO_BYTES) {
+			throw new IllegalArgumentException("The audio is larger than " + (MAX_ANSWER_AUDIO_BYTES / (1024 * 1024)) + " MB");
+		}
+		audioTranscriptionService.transcribeAsync(scheduleId, audio.getBytes(), chunkIndex);
+		return ResponseEntity.accepted().build();
+	}
+
 	@GetMapping("/{scheduleId}/recording")
 	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
 	public ResponseEntity<Map<String, Object>> getRecordingLink(@PathVariable Long scheduleId,
