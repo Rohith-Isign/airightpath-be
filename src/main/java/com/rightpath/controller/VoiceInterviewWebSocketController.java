@@ -2,7 +2,9 @@ package com.rightpath.controller;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Base64;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +19,7 @@ import com.rightpath.dto.voice.VoiceAnswerRequest;
 import com.rightpath.entity.ProctoringEvent;
 import com.rightpath.repository.CandidateInterviewScheduleRepository;
 import com.rightpath.repository.ProctoringEventRepository;
+import com.rightpath.service.AudioTranscriptionService;
 import com.rightpath.service.VoiceInterviewService;
 import com.rightpath.util.ProctoringEventSeverity;
 import com.rightpath.websocket.WebSocketAuthInterceptor;
@@ -26,20 +29,27 @@ public class VoiceInterviewWebSocketController {
 
     private static final Logger log = LoggerFactory.getLogger(VoiceInterviewWebSocketController.class);
 
+    private static final int MAX_AUDIO_CHUNK_BYTES = 200 * 1024; // 200KB
+
     private final VoiceInterviewService voiceInterviewService;
+    private final AudioTranscriptionService audioTranscriptionService;
     private final SimpMessagingTemplate messagingTemplate;
     private final CandidateInterviewScheduleRepository scheduleRepo;
     private final ProctoringEventRepository proctoringEventRepository;
+
+    private final ConcurrentHashMap<Long, AtomicInteger> chunkCounters = new ConcurrentHashMap<>();
 
     // Deduplication: key = scheduleId + transcript hash, value = timestamp
     private final ConcurrentHashMap<String, Long> recentAnswers = new ConcurrentHashMap<>();
 
     public VoiceInterviewWebSocketController(
             VoiceInterviewService voiceInterviewService,
+            AudioTranscriptionService audioTranscriptionService,
             SimpMessagingTemplate messagingTemplate,
             CandidateInterviewScheduleRepository scheduleRepo,
             ProctoringEventRepository proctoringEventRepository) {
         this.voiceInterviewService = voiceInterviewService;
+        this.audioTranscriptionService = audioTranscriptionService;
         this.messagingTemplate = messagingTemplate;
         this.scheduleRepo = scheduleRepo;
         this.proctoringEventRepository = proctoringEventRepository;
@@ -95,6 +105,40 @@ public class VoiceInterviewWebSocketController {
                 "/topic/interview/" + scheduleId + "/transcription-error",
                 errorMsg
         );
+    }
+
+    /**
+     * Receive audio chunk from client for transcription.
+     * Audio is sent as base64-encoded JSON since SockJS only supports text frames.
+     */
+    @MessageMapping("/interview/{scheduleId}/audio-chunk")
+    public void handleAudioChunk(@DestinationVariable Long scheduleId, @Payload Map<String, String> payload,
+                                  SimpMessageHeaderAccessor headerAccessor) {
+        if (!verifyOwnership(scheduleId, headerAccessor)) return;
+
+        String base64Audio = payload.get("audio");
+        if (base64Audio == null || base64Audio.isBlank()) {
+            log.warn("Received empty audio chunk for schedule {}", scheduleId);
+            return;
+        }
+
+        byte[] audioData = Base64.getDecoder().decode(base64Audio);
+
+        // Item 2: Audio chunk size limit (200KB)
+        if (audioData.length > MAX_AUDIO_CHUNK_BYTES) {
+            log.warn("Audio chunk too large for schedule {}: {} bytes (max {})",
+                    scheduleId, audioData.length, MAX_AUDIO_CHUNK_BYTES);
+            sendError(scheduleId, "Audio chunk too large (max 200KB)");
+            return;
+        }
+
+        log.info("Received audio chunk for schedule {}: {} bytes (base64 len={})",
+                scheduleId, audioData.length, base64Audio.length());
+
+        AtomicInteger counter = chunkCounters.computeIfAbsent(scheduleId, k -> new AtomicInteger(0));
+        int chunkIndex = counter.incrementAndGet();
+
+        audioTranscriptionService.transcribeAsync(scheduleId, audioData, chunkIndex);
     }
 
     /**
