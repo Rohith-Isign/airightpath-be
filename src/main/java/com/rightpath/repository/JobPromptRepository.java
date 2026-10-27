@@ -19,6 +19,10 @@ public interface JobPromptRepository extends JpaRepository<JobPrompt, Long> {
 
 	List<JobPrompt> findAllByJobPrefix(String jobPrefix);
 
+	/** Job prefix and prompt type, one row per stored prompt, without loading the prompt text. */
+	@org.springframework.data.jpa.repository.Query("SELECT p.jobPrefix, p.promptType FROM JobPrompt p")
+	List<Object[]> findJobPromptTypes();
+
 	Optional<JobPrompt> findByJobPrefixAndPromptTypeAndPromptStage(String jobPrefix, PromptType promptType,
 			PromptStage promptStage);
 

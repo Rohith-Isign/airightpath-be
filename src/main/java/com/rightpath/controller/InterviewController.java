@@ -441,6 +441,9 @@ public class InterviewController {
 	 *
 	 * @param kind {@code camera} for the webcam, {@code screen} for the shared screen
 	 */
+	@Autowired
+	private com.rightpath.repository.InterviewRecordingUploadRepository recordingUploadRepository;
+
 	@GetMapping("/{scheduleId}/recording")
 	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
 	public ResponseEntity<Map<String, Object>> getRecordingLink(@PathVariable Long scheduleId,
@@ -514,12 +517,23 @@ public class InterviewController {
 		// `parts` goes back so the reviewer's player can offer the rest. Without
 		// it a two-part recording looks like a short one that cuts off, and the
 		// gap in the middle is exactly what a reviewer needs to notice.
-		return ResponseEntity.ok(Map.of(
-				"url", url,
-				"expiresInSeconds", ttl.toSeconds(),
-				"sizeBytes", sizeBytes,
-				"part", part,
-				"parts", references.size()));
+		Map<String, Object> body = new java.util.HashMap<>();
+		body.put("url", url);
+		body.put("expiresInSeconds", ttl.toSeconds());
+		body.put("sizeBytes", sizeBytes);
+		body.put("part", part);
+		body.put("parts", references.size());
+
+		// When this recording was made, so a reviewer can tell which sitting it is. The upload's own start is
+		// the moment this file began; older recordings have no such row and fall back to the interview's start.
+		java.time.LocalDateTime recordedAt = recordingUploadRepository.findFirstByStoredReference(reference)
+				.map(upload -> upload.getStartedAt())
+				.orElse(schedule.getStartedAt());
+		if (recordedAt != null) {
+			// Bare UTC with the zone said outright, so the browser shows the reader's own clock.
+			body.put("recordedAt", recordedAt + "Z");
+		}
+		return ResponseEntity.ok(body);
 	}
 
 	@GetMapping("/{scheduleId}/conversation")

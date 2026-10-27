@@ -20,6 +20,9 @@ public interface InterviewRecordingUploadRepository extends JpaRepository<Interv
 
 	Optional<InterviewRecordingUpload> findFirstByUploadId(String uploadId);
 
+	/** The upload that produced a stored recording, to say when it was made. */
+	Optional<InterviewRecordingUpload> findFirstByStoredReference(String storedReference);
+
 	List<InterviewRecordingUpload> findByStatusAndLastActivityAtBefore(String status, LocalDateTime cutoff);
 
 	/** A piece arrived: count it and note the upload is alive. Only while it is still open. */

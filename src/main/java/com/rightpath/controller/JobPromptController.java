@@ -35,6 +35,24 @@ public class JobPromptController {
     private final EvaluationCategoryRepository evaluationCategoryRepository;
     private final EvaluationCategoryFormatter categoryFormatter;
     private final InterviewTemplateService templateService;
+    private final com.rightpath.service.JobPromptCopyService copyService;
+
+    /** Which jobs already have prompts, and of what kind: the list a new job picks one to reuse from. */
+    @GetMapping("/jobs-with-prompts")
+    @PreAuthorize("hasAuthority('JOB_POST_CREATE')")
+    public ResponseEntity<Map<String, Set<String>>> jobsWithPrompts() {
+        return ResponseEntity.ok(copyService.jobsWithPrompts());
+    }
+
+    /**
+     * Reuse another job's prompts, evaluation categories and interview settings for this one, in one step.
+     * Body: {@code {"fromJobPrefix": "...", "toJobPrefix": "..."}}.
+     */
+    @PostMapping("/copy")
+    @PreAuthorize("hasAuthority('JOB_POST_CREATE')")
+    public ResponseEntity<Map<String, Integer>> copyPrompts(@RequestBody Map<String, String> request) {
+        return ResponseEntity.ok(copyService.copy(request.get("fromJobPrefix"), request.get("toJobPrefix")));
+    }
 
     @GetMapping("/{prefix}")
     @PreAuthorize("hasAuthority('JOB_POST_CREATE')")
