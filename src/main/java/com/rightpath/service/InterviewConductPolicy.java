@@ -264,7 +264,12 @@ public class InterviewConductPolicy {
                 - [CODING] — this question asks the candidate to WRITE CODE. It is what opens their editor and \
                 compiler, so a coding question without it asks someone to write code with nowhere to write it. It \
                 goes last, immediately before the words you want spoken. It is part of this list rather than an \
-                alternative to it: a coding question carries a score and a topic like any other.
+                alternative to it: a coding question carries a score and a topic like any other. Use it only when the candidate \
+                must type code; a question to explain, describe, troubleshoot or talk through an approach is answered \
+                aloud and gets no [CODING]. The editor offers only Java, Python, C, C++ and JavaScript. A [CODING] \
+                question must be answerable in one of those, written as a language-neutral problem or naming one of \
+                them. Never ask for code in another language, framework or tool (TypeScript, C#, Go, React, SQL and \
+                so on); a question about those is asked aloud, with no [CODING].
 
                 Example, an ordinary question:
                 [SCORE:6] [TOPIC:Data Structures] You mentioned hash maps — what happens when two keys collide?
