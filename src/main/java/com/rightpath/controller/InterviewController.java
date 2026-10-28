@@ -108,7 +108,7 @@ public class InterviewController {
 	@PostMapping("/assign-interview-bulk")
 	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
 	public ResponseEntity<?> assignInterviewBulk(@RequestBody AssignInterviewBulkDTO dto) {
-	    LocalDateTime assignedAt = dto.getAssignedAt() != null ? dto.getAssignedAt() : LocalDateTime.now();
+	    LocalDateTime assignedAt = dto.getAssignedAt() != null ? dto.getAssignedAt() : businessSchedule.now();
 
 	    List<CandidateInterviewSchedule> schedules = interviewService.assignInterviewBulk(
 	            dto.getJobPrefix(),
@@ -204,6 +204,9 @@ public class InterviewController {
 						schedule, byScheduleId.get(schedule.getId())))
 				.toList();
 	}
+
+	@Autowired
+	private com.rightpath.util.BusinessSchedule businessSchedule;
 
 	@GetMapping("/active")
 	@PreAuthorize("hasAuthority('INTERVIEW_START')")

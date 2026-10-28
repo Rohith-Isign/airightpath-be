@@ -46,6 +46,9 @@ public class InterviewServiceImpl implements InterviewService {
 
 	/** Every recording upload in flight, so an abandoned one can be finished by the server. */
 	@Autowired
+	private com.rightpath.util.BusinessSchedule businessSchedule;
+
+	@Autowired
 	private com.rightpath.service.RecordingUploadCoordinator recordingUploads;
 	
 	@Autowired
@@ -342,7 +345,8 @@ public class InterviewServiceImpl implements InterviewService {
 		// An interview whose deadline has passed is not one the candidate can still sit: starting it is refused
 		// with "The time allowed for this interview has passed". It used to stay on their list all the same,
 		// marked Not Attempted with a Start button that could only fail. Compared the way the start check does.
-		LocalDateTime now = LocalDateTime.now();
+		// In the business zone, where the deadline was written; the server's own clock can be hours away.
+		LocalDateTime now = businessSchedule.now();
 		return scheduleRepo.findActiveInterviewsByEmail(email).stream()
 				.filter(schedule -> schedule.getDeadlineTime() == null || !schedule.getDeadlineTime().isBefore(now))
 				.toList();

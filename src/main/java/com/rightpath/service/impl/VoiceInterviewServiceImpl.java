@@ -35,6 +35,7 @@ import com.rightpath.enums.CompletionReason;
 import com.rightpath.enums.ConversationRole;
 import com.rightpath.enums.TurnKind;
 import com.rightpath.util.CodingAnswerFormatter;
+import com.rightpath.util.BusinessSchedule;
 import com.rightpath.util.InterviewReplyParser;
 import com.rightpath.util.PromptInjectionGuard;
 import com.rightpath.enums.InterviewResult;
@@ -90,6 +91,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     private final TransactionTemplate transactionTemplate;
     private final InterviewConductPolicy conductPolicy;
     private final InterviewReplyParser replyParser;
+
+    /** The zone interview slots are written in; see {@link BusinessSchedule}. */
+    @Autowired
+    private BusinessSchedule businessSchedule;
     private final InterviewTopicCoverage topicCoverage;
     private final PromptInjectionGuard injectionGuard;
     private final InterviewTemplateService templateService;
@@ -217,6 +222,27 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // A greeting is never worth failing an interview over.
             log.warn("Could not read the candidate's name for {}", email, e);
             return java.util.Optional.empty();
+        }
+    }
+
+    /**
+     * Whether an interview may be started at this moment.
+     *
+     * <p>The window's start and end are wall-clock times the recruiter picked, in the business time zone, and
+     * {@code now} has to be read in that same zone. They were compared with the server's own clock instead, so
+     * on a server running in UTC a slot booked for 11:23 in India stayed "not opened yet" for another five and a
+     * half hours, and a deadline ran the same distance late.</p>
+     */
+    static void requireWithinWindow(CandidateInterviewSchedule schedule, LocalDateTime now) {
+        if (schedule.getDeadlineTime().isBefore(now)) {
+            throw new IllegalStateException(
+                    "The time allowed for this interview has passed. Ask the recruiter to schedule it again.");
+        }
+        // The window opens at the start time the recruiter chose. A minute of grace for clock differences.
+        if (schedule.getAssignedAt() != null && schedule.getAssignedAt().isAfter(now.plusMinutes(1))) {
+            throw new IllegalStateException("This interview has not opened yet. It opens on "
+                    + schedule.getAssignedAt().format(java.time.format.DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a"))
+                    + ".");
         }
     }
 
@@ -359,16 +385,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             throw new IllegalStateException(
                     "This interview has no date and time set. Ask the recruiter to assign it again.");
         }
-        if (schedule.getDeadlineTime().isBefore(LocalDateTime.now())) {
-            throw new IllegalStateException(
-                    "The time allowed for this interview has passed. Ask the recruiter to schedule it again.");
-        }
-        // The window opens at the start time the recruiter chose. A minute of grace for clock differences.
-        if (schedule.getAssignedAt() != null && schedule.getAssignedAt().isAfter(LocalDateTime.now().plusMinutes(1))) {
-            throw new IllegalStateException("This interview has not opened yet. It opens on "
-                    + schedule.getAssignedAt().format(java.time.format.DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a"))
-                    + ".");
-        }
+        requireWithinWindow(schedule, businessSchedule.now());
 
         // Start a new interview
         schedule.setAttemptStatus(AttemptStatus.IN_PROGRESS);
