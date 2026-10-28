@@ -121,10 +121,21 @@ public class MobileVerificationController {
 
     private static final int MAX_ROOM_SCAN_PHOTOS = 30;
 
+    /**
+     * Whether each still is also sent to the vision model to be judged. Off by default: the still is kept for a
+     * reviewer either way, the phone now records continuously, and judging a frame every few seconds was a model
+     * call per frame for a verdict nobody was reading.
+     */
+    @org.springframework.beans.factory.annotation.Value("${mobile.monitor.ai-enabled:false}")
+    private boolean monitorAiEnabled;
+
     @PostMapping("/monitor")
     public ResponseEntity<Map<String, Object>> monitor(@RequestParam String token,
                                                       @RequestParam("photo") MultipartFile photo) throws IOException {
         keepPhoto(token, "MONITOR_FRAME", photo);
+        if (!monitorAiEnabled) {
+            return ResponseEntity.ok(Map.of("status", "STORED", "reason", ""));
+        }
         String status;
         String reason;
         try {
