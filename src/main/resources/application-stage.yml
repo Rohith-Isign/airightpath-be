@@ -147,8 +147,11 @@ openai:
     generation:
       timeout-seconds: 300
   tts:
-    model: tts-1-hd
+    # The directed model takes an accent and a pace in words (instructions below); the code falls back to
+    # tts-1-hd if it is not available to the account.
+    model: gpt-4o-mini-tts
     voice: nova
+    instructions: "Speak in clear, neutral Indian English with a polished, British-influenced pronunciation, like a professional Indian interviewer. Sound warm, calm and natural, at a steady, unhurried pace. Enunciate every word and every technical term distinctly, and pause briefly between sentences. Say acronyms letter by letter."
 
 # AWS S3 Storage
 aws:

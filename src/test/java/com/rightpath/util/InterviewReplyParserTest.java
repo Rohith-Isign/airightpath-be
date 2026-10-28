@@ -112,4 +112,34 @@ class InterviewReplyParserTest {
         assertThat(reply.turnKind()).isEqualTo(TurnKind.NEW_QUESTION);
         assertThat(reply.closing()).isFalse();
     }
+
+    @Test
+    void anUntaggedQuestionThatAsksForCodeStillOpensTheEditor() {
+        var parsed = parser.parse("[SCORE:6] [TOPIC:Programming] Nice. Now write a function that reverses a linked list.");
+
+        org.junit.jupiter.api.Assertions.assertTrue(parsed.spokenText().startsWith("[CODING]"), parsed.spokenText());
+    }
+
+    @Test
+    void aQuestionToExplainSomethingDoesNotOpenTheEditor() {
+        var parsed = parser.parse("[SCORE:6] [TOPIC:Java] Can you explain how a HashMap handles a collision in the code?");
+
+        org.junit.jupiter.api.Assertions.assertFalse(parsed.spokenText().contains("[CODING]"), parsed.spokenText());
+    }
+
+    @Test
+    void aTheoryTaggedQuestionDoesNotOpenTheEditor() {
+        var parsed = parser.parse("[THEORY] What is the difference between an interface and an abstract class?");
+
+        org.junit.jupiter.api.Assertions.assertFalse(parsed.spokenText().contains("[CODING]"), parsed.spokenText());
+    }
+
+    @Test
+    void aTaggedCodingQuestionIsNotTaggedTwice() {
+        var parsed = parser.parse("[SCORE:7] [TOPIC:Programming] [CODING] Write a function that reverses a linked list.");
+
+        String spoken = parsed.spokenText();
+        org.junit.jupiter.api.Assertions.assertEquals(spoken.indexOf("[CODING]"), spoken.lastIndexOf("[CODING]"));
+        org.junit.jupiter.api.Assertions.assertTrue(spoken.startsWith("[CODING]"), spoken);
+    }
 }

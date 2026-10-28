@@ -52,6 +52,27 @@ public class InterviewReplyParser {
     private static final Pattern CODING_TAG = Pattern.compile(
             "\\[\\s*CODING\\s*\\]", Pattern.CASE_INSENSITIVE);
 
+    /**
+     * A question that asks the candidate to write code, in the model's own words.
+     *
+     * <p>The editor opens only for a {@code [CODING]} tag, and the model sometimes asks "write a function that
+     * ..." without one, so the candidate is told to write code with nowhere to write it. This reads the question
+     * for what it asks, so the editor opens whether or not the model remembered the tag.</p>
+     */
+    private static final Pattern ASKS_FOR_CODE = Pattern.compile(
+            "\\b(?:write|implement|code|program|develop|create|build|solve)\\b[^.?!\\n]{0,60}?"
+                    + "\\b(?:function|method|program|class|algorithm|code|query|script|snippet|solution|logic|loop|"
+                    + "api|endpoint|component|regex|sql)\\b"
+                    + "|\\bwrite\\s+(?:some\\s+)?(?:code|a\\s+query|sql)\\b"
+                    + "|\\b(?:can|could|would)\\s+you\\s+(?:write|code|implement)\\b",
+            Pattern.CASE_INSENSITIVE);
+
+    /** Questions about code that are answered by explaining it, which must not open an editor. */
+    private static final Pattern EXPLAINS_CODE = Pattern.compile(
+            "\\[(?:THEORY|NON-TECH|CODE_EXPLANATION)\\]|\\b(?:explain|describe|what\\s+(?:is|are|does|do)|"
+                    + "difference\\s+between|why\\s+(?:do|does|is|are))\\b",
+            Pattern.CASE_INSENSITIVE);
+
     private final InterviewConductPolicy conductPolicy;
 
     public InterviewReplyParser(InterviewConductPolicy conductPolicy) {
@@ -107,10 +128,28 @@ public class InterviewReplyParser {
     private String promoteCodingTag(String text) {
         Matcher coding = CODING_TAG.matcher(text);
         if (!coding.find()) {
+            // No tag, but a question that plainly asks for code. Said once, at the front, like the model's own.
+            if (asksForCode(text)) {
+                return (InterviewConductPolicy.CODING_TAG + " " + tidy(text)).trim();
+            }
             return tidy(text);
         }
         String withoutTag = text.substring(0, coding.start()) + text.substring(coding.end());
         return (InterviewConductPolicy.CODING_TAG + " " + tidy(withoutTag)).trim();
+    }
+
+    /**
+     * Whether an untagged reply asks the candidate to write code.
+     *
+     * <p>Conservative on purpose: an editor opened for a question that wanted a spoken answer is a nuisance, but
+     * an editor that never opens for a coding question stops the candidate answering at all. A question that asks
+     * to explain or describe is left alone.</p>
+     */
+    boolean asksForCode(String text) {
+        if (text == null || EXPLAINS_CODE.matcher(text).find()) {
+            return false;
+        }
+        return ASKS_FOR_CODE.matcher(text).find();
     }
 
     /** Collapses the runs of blank space that tag removal leaves behind. */

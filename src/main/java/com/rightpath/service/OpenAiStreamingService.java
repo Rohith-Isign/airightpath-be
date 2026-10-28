@@ -59,6 +59,26 @@ public class OpenAiStreamingService {
     private final String whisperLanguage;
     private final String ttsModel;
     private final String ttsVoice;
+    /**
+     * How the voice should sound, for the models that take direction ({@code gpt-4o-mini-tts}).
+     *
+     * <p>The older speech models have a voice and nothing else: no accent, no pace. A direction in words is
+     * the only way to ask for clear Indian English, and it is ignored by a model that does not support it.</p>
+     */
+    private final String ttsInstructions;
+
+    /** What speech falls back to when the configured model is refused: plain, but always available. */
+    private static final String FALLBACK_TTS_MODEL = "tts-1-hd";
+
+    /** The default direction: clear, neutral Indian English, unhurried, every word and technical term distinct. */
+    static final String DEFAULT_TTS_INSTRUCTIONS =
+            "Speak in clear, neutral Indian English with a polished, British-influenced pronunciation, like a "
+                    + "professional Indian interviewer. Sound warm, calm and natural, at a steady, unhurried pace. "
+                    + "Enunciate every word and every technical term distinctly, and pause briefly between "
+                    + "sentences. Say acronyms letter by letter.";
+
+    /** Tries per request when the failure is one that a second try can fix. */
+    private static final int MAX_ATTEMPTS = 3;
 
     public OpenAiStreamingService(
             @Value("${openai.api.key}") String apiKey,
@@ -67,7 +87,8 @@ public class OpenAiStreamingService {
             @Value("${openai.audio.model}") String whisperModel,
             @Value("${openai.audio.language:en}") String whisperLanguage,
             @Value("${openai.tts.model:tts-1-hd}") String ttsModel,
-            @Value("${openai.tts.voice:nova}") String ttsVoice) {
+            @Value("${openai.tts.voice:nova}") String ttsVoice,
+            @Value("${openai.tts.instructions:}") String ttsInstructions) {
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(120, TimeUnit.SECONDS)
@@ -81,6 +102,65 @@ public class OpenAiStreamingService {
         this.whisperLanguage = whisperLanguage;
         this.ttsModel = ttsModel;
         this.ttsVoice = ttsVoice;
+        this.ttsInstructions = ttsInstructions == null || ttsInstructions.isBlank()
+                ? DEFAULT_TTS_INSTRUCTIONS
+                : ttsInstructions.trim();
+    }
+
+    /**
+     * Sends a request, trying again when the failure is the kind that passes.
+     *
+     * <p>A dropped connection, a timeout, a rate limit and a 5xx from the provider all clear on their own
+     * within a second or two, and every one of them used to end the turn: the interviewer "did not catch that",
+     * the candidate repeated a whole answer, and a few seconds of network trouble cost them a question. Three
+     * tries with a short pause cover it. An account out of quota is not retried, since waiting does not
+     * refill it, and neither is a 4xx that says the request itself is wrong.</p>
+     *
+     * <p>The caller closes the response. After the last try a failed response is returned rather than
+     * thrown, so the caller reports the status it got; only an exception on every try is thrown.</p>
+     */
+    private Response callWithRetry(Request request) throws IOException {
+        IOException lastFailure = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                Response response = httpClient.newCall(request).execute();
+                if (response.isSuccessful() || attempt == MAX_ATTEMPTS || !isRetryable(response)) {
+                    return response;
+                }
+                log.warn("OpenAI answered {} for {} (try {} of {}); trying again",
+                        response.code(), request.url().encodedPath(), attempt, MAX_ATTEMPTS);
+                response.close();
+            } catch (IOException e) {
+                lastFailure = e;
+                if (attempt == MAX_ATTEMPTS) {
+                    throw e;
+                }
+                log.warn("Request to OpenAI failed for {} (try {} of {}): {}; trying again",
+                        request.url().encodedPath(), attempt, MAX_ATTEMPTS, e.toString());
+            }
+            try {
+                Thread.sleep(attempt * 700L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while waiting to retry", interrupted);
+            }
+        }
+        throw lastFailure != null ? lastFailure : new IOException("No response from OpenAI");
+    }
+
+    /** Whether a second try could succeed. */
+    private boolean isRetryable(Response response) {
+        int code = response.code();
+        if (code == 429) {
+            // A rate limit clears; an empty account does not.
+            try {
+                String peek = response.peekBody(2048).string();
+                return !peek.contains("insufficient_quota") && !peek.contains("billing");
+            } catch (IOException e) {
+                return true;
+            }
+        }
+        return code == 408 || code == 500 || code == 502 || code == 503 || code == 504;
     }
 
     /**
@@ -191,7 +271,7 @@ public class OpenAiStreamingService {
                     .post(RequestBody.create(json, MediaType.parse("application/json")))
                     .build();
 
-            try (Response response = httpClient.newCall(request).execute()) {
+            try (Response response = callWithRetry(request)) {
                 String responseBody = response.body().string();
                 if (!response.isSuccessful()) {
                     log.error("Chat completion failed: {} {} — {}", response.code(), response.message(), responseBody);
@@ -253,7 +333,7 @@ public class OpenAiStreamingService {
                     .post(body)
                     .build();
 
-            try (Response response = httpClient.newCall(request).execute()) {
+            try (Response response = callWithRetry(request)) {
                 if (!response.isSuccessful()) {
                     String errorBody = response.body() != null ? response.body().string() : "";
                     log.error("Whisper transcription failed: {} {} — {}", response.code(), response.message(), errorBody);
@@ -319,12 +399,27 @@ public class OpenAiStreamingService {
             log.warn("TTS skipped: input text is empty");
             return new byte[0];
         }
+        byte[] audio = speech(ttsModel, text);
+        if (audio.length == 0 && !FALLBACK_TTS_MODEL.equals(ttsModel)) {
+            // The directed model can be missing from an account or refused for a region. Plain speech in the
+            // older model is better than the browser's own voice, which cannot be captured in a recording.
+            log.warn("Speech model {} produced no audio; trying {}", ttsModel, FALLBACK_TTS_MODEL);
+            audio = speech(FALLBACK_TTS_MODEL, text);
+        }
+        return audio;
+    }
+
+    private byte[] speech(String modelName, String text) {
         try {
             Map<String, Object> requestBody = new LinkedHashMap<>();
-            requestBody.put("model", ttsModel);
+            requestBody.put("model", modelName);
             requestBody.put("input", text);
             requestBody.put("voice", ttsVoice);
             requestBody.put("response_format", "mp3");
+            // Only the models that take direction get it; an older one rejects the field.
+            if (modelName.startsWith("gpt-4o")) {
+                requestBody.put("instructions", ttsInstructions);
+            }
 
             String json = objectMapper.writeValueAsString(requestBody);
             Request request = new Request.Builder()
@@ -334,16 +429,16 @@ public class OpenAiStreamingService {
                     .post(RequestBody.create(json, MediaType.parse("application/json")))
                     .build();
 
-            try (Response response = httpClient.newCall(request).execute()) {
+            try (Response response = callWithRetry(request)) {
                 if (!response.isSuccessful()) {
                     String errorBody = response.body() != null ? response.body().string() : "";
-                    log.error("TTS failed: {} {} — {}", response.code(), response.message(), errorBody);
+                    log.error("TTS failed ({}): {} {} — {}", modelName, response.code(), response.message(), errorBody);
                     return new byte[0];
                 }
                 return response.body().bytes();
             }
         } catch (Exception e) {
-            log.error("Error generating TTS", e);
+            log.error("Error generating TTS ({})", modelName, e);
             return new byte[0];
         }
     }
