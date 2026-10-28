@@ -122,6 +122,33 @@ public class MobilePairingService {
         log.info("Phone pairing closed for interview {}: started without a phone", scheduleId);
     }
 
+    /** The phone has just been heard from. Quiet: a failure here must never fail the request it rides on. */
+    public void touchSeen(String token) {
+        try {
+            if (token != null && TOKEN_SHAPE.matcher(token).matches()) {
+                pairingRepository.touchSeen(token, LocalDateTime.now(ZoneOffset.UTC));
+            }
+        } catch (Exception e) {
+            log.debug("Could not note that a phone was seen", e);
+        }
+    }
+
+    /** Whether this candidate's phone has been heard from in the last minute. */
+    public boolean isConnected(Long scheduleId, String actorEmail, String token) {
+        InterviewMobilePairing pairing = token == null ? null : pairingRepository.findById(token).orElse(null);
+        if (pairing == null || !pairing.getInterviewScheduleId().equals(scheduleId)
+                || actorEmail == null || !actorEmail.equalsIgnoreCase(pairing.getCandidateEmail())
+                || Boolean.TRUE.equals(pairing.getRevoked()) || pairing.getLastSeenAt() == null) {
+            return false;
+        }
+        return pairing.getLastSeenAt().isAfter(LocalDateTime.now(ZoneOffset.UTC).minusSeconds(60));
+    }
+
+    /** Pairings whose phone appeared and has gone quiet for longer than the grace. */
+    public java.util.List<InterviewMobilePairing> silentFor(long seconds) {
+        return pairingRepository.findSilentSince(LocalDateTime.now(ZoneOffset.UTC).minusSeconds(seconds));
+    }
+
     /** The phone's room scan is saved: record it where the candidate's page can read it. */
     public void markVerified(InterviewMobilePairing pairing) {
         if (pairing.getVerifiedAt() == null) {

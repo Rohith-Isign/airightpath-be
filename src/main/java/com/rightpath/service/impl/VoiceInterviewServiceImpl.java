@@ -833,7 +833,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 return null;
             });
 
-            sendResponseComplete(scheduleId, spoken, finished);
+            sendResponseComplete(scheduleId, spoken, finished, parsed.closing() ? "ai_closed" : "question_limit");
 
             if (!isCodeExplanation(spoken)) {
                 textToSpeechService.generateAndStreamTTS(scheduleId, stripQuestionTypeTags(spoken));
@@ -1254,6 +1254,12 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 //    }
     
  // Send response using a String (fetches schedule from DB)
+    private void sendResponseComplete(Long scheduleId, String response, boolean isComplete, String endReason) {
+        CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
+                .orElseThrow(() -> new ResourceNotFoundException("Schedule not found: " + scheduleId));
+        sendResponseComplete(scheduleId, schedule, response, isComplete, endReason);
+    }
+
     private void sendResponseComplete(Long scheduleId, String response, boolean isComplete) {
         CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
                 .orElseThrow(() -> new ResourceNotFoundException("Schedule not found: " + scheduleId));
@@ -1262,7 +1268,14 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
     // Send response using an existing schedule object (avoids extra DB query)
     private void sendResponseComplete(Long scheduleId, CandidateInterviewSchedule schedule, String response, boolean isComplete) {
+        sendResponseComplete(scheduleId, schedule, response, isComplete, null);
+    }
+
+    private void sendResponseComplete(Long scheduleId, CandidateInterviewSchedule schedule, String response, boolean isComplete, String endReason) {
         Map<String, Object> message = new HashMap<>();
+        if (endReason != null && isComplete) {
+            message.put("reason", endReason);
+        }
         message.put("response", response);
         message.put("questionsAsked", schedule.getTotalQuestionsAsked());
         message.put("isComplete", isComplete);

@@ -60,8 +60,9 @@ public class InterviewMobileCaptureController {
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
 	public ResponseEntity<java.util.Map<String, Boolean>> pairingState(@PathVariable Long interviewScheduleId,
 			@RequestParam String token, Authentication authentication) {
-		return ResponseEntity.ok(java.util.Map.of("verified",
-				mobilePairingService.isVerified(interviewScheduleId, authentication.getName(), token)));
+		return ResponseEntity.ok(java.util.Map.of(
+				"verified", mobilePairingService.isVerified(interviewScheduleId, authentication.getName(), token),
+				"connected", mobilePairingService.isConnected(interviewScheduleId, authentication.getName(), token)));
 	}
 
 	/** The candidate is starting without a phone: close pairing for this interview. */

@@ -68,6 +68,14 @@ public class InterviewMobilePairing {
     @Column(name = "verified_at")
     private LocalDateTime verifiedAt;
 
+    /**
+     * The last time the phone asked the server anything. The phone checks in every few seconds for as long as
+     * its page is open, so this is how the server knows it is still there: there is no live connection to watch
+     * any more. Null until the phone has first appeared.
+     */
+    @Column(name = "last_seen_at")
+    private LocalDateTime lastSeenAt;
+
     /** Recording bytes accepted so far, so a token cannot be used to fill the bucket. */
     @Column(name = "bytes_received", nullable = false)
     @Builder.Default

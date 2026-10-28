@@ -15,7 +15,6 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import com.rightpath.config.AuthProperties;
 import com.rightpath.exceptions.InvalidAccessTokenException;
-import com.rightpath.service.MobilePairingService;
 import com.rightpath.service.impl.AccessTokenService;
 
 import io.jsonwebtoken.Claims;
@@ -41,14 +40,11 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
     public static final String MOBILE_TOKEN_ATTR = "mobileToken";
 
     private final AccessTokenService accessTokenService;
-    private final MobilePairingService pairingService;
     private final AuthProperties authProperties;
 
-    public WebSocketAuthInterceptor(AccessTokenService accessTokenService, MobilePairingService pairingService,
-            AuthProperties authProperties) {
+    public WebSocketAuthInterceptor(AccessTokenService accessTokenService, AuthProperties authProperties) {
         this.authProperties = authProperties;
         this.accessTokenService = accessTokenService;
-        this.pairingService = pairingService;
     }
 
 //    @Override
@@ -111,20 +107,10 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
         String mobileToken = extractMobileToken(request);
         String token = extractToken(request);
 
+        // Always require a JWT. The phone used to be let in here on its pairing token for the live picture's signalling,
+        // and that picture is gone: the phone now talks to the server in plain requests only.
         if (token == null || token.isBlank()) {
-            // The candidate's phone holds no login: all it has is the token in the QR code. It used to be
-            // refused here, so the phone could never join the signalling socket and the room check
-            // could not tell the desktop it had passed. A phone is let in only on a pairing the
-            // signed-in candidate registered, still open and unexpired — and it is NOT marked
-            // authenticated, so the interview handlers, which need the candidate's email, still refuse it.
-            if (mobileToken != null && !mobileToken.isBlank() && pairingService.resolveOrNull(mobileToken) != null) {
-                attributes.put(MOBILE_TOKEN_ATTR, mobileToken);
-                attributes.put(AUTHENTICATED_ATTR, false);
-                log.info("WebSocket accepted for a paired phone (no login)");
-                return true;
-            }
-            log.warn("WebSocket connection rejected: no JWT and no open phone pairing. URI={}",
-                    request.getURI().getPath());
+            log.warn("WebSocket connection rejected: No JWT token provided. URI={}", request.getURI().getPath());
             response.setStatusCode(HttpStatus.UNAUTHORIZED);
             return false;
         }

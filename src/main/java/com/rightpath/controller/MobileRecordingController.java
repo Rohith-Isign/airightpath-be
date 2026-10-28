@@ -45,6 +45,8 @@ public class MobileRecordingController {
 	/** Whether this phone may still join: open, closed (the interview began without one) or unknown. */
 	@org.springframework.web.bind.annotation.GetMapping("/pairing-status")
 	public ResponseEntity<Map<String, String>> pairingStatus(@RequestParam String token) {
+		// The phone asks this every few seconds while its page is open, so it doubles as the sign that it is there.
+		pairingService.touchSeen(token);
 		return ResponseEntity.ok(Map.of("state", pairingService.state(token)));
 	}
 
