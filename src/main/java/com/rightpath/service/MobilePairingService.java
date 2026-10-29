@@ -133,6 +133,12 @@ public class MobilePairingService {
         }
     }
 
+    /** The phone left on purpose. It reads as not connected from now until it checks in again. */
+    public void markLeft(InterviewMobilePairing pairing) {
+        pairing.setLastSeenAt(null);
+        pairingRepository.save(pairing);
+    }
+
     /** Whether this candidate's phone has been heard from in the last minute. */
     public boolean isConnected(Long scheduleId, String actorEmail, String token) {
         InterviewMobilePairing pairing = token == null ? null : pairingRepository.findById(token).orElse(null);

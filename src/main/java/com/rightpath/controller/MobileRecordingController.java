@@ -32,7 +32,7 @@ public class MobileRecordingController {
 
 	/** What the phone may put on the interview's record. Anything else is refused. */
 	private static final Set<String> PHONE_EVENTS = Set.of("mobile_recording_started", "mobile_recording_not_started",
-			"mobile_recording_issue");
+			"mobile_recording_issue", "mobile_exited", "mobile_reconnected");
 
 	private final MobilePairingService pairingService;
 	private final InterviewService interviewService;
@@ -82,6 +82,12 @@ public class MobileRecordingController {
 		}
 		String text = details == null ? "" : details.trim();
 		pairingService.recordEvent(pairing, type, text.length() > 500 ? text.substring(0, 500) : text);
+		if ("mobile_exited".equals(type)) {
+			// A deliberate exit: the computer's page should say so now, not after the check-ins have been quiet a minute.
+			pairingService.markLeft(pairing);
+		} else if ("mobile_reconnected".equals(type)) {
+			pairingService.touchSeen(token);
+		}
 		return ResponseEntity.ok().build();
 	}
 
