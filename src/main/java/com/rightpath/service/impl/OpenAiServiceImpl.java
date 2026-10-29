@@ -89,8 +89,11 @@ public class OpenAiServiceImpl implements OpenAiService {
 		if (t instanceof WebClientResponseException ex) {
 			boolean retry = ex.getStatusCode().is5xxServerError() || ex.getStatusCode().value() == 429;
 			if (retry) {
-				log.warn("Retryable error from OpenAI: status={}, message={}", ex.getStatusCode().value(),
-						ex.getMessage());
+				// The body says which 429 this is: "rate_limit_exceeded" clears itself, "insufficient_quota"
+				// means the account is out of credit and retrying only delays the same failure.
+				String body = ex.getResponseBodyAsString();
+				log.warn("Retryable error from OpenAI: status={}, message={}, body={}", ex.getStatusCode().value(),
+						ex.getMessage(), body.length() > 400 ? body.substring(0, 400) : body);
 			}
 			return retry;
 		}
