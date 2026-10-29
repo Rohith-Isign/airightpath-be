@@ -59,6 +59,14 @@ class InterviewWindowTest {
 	}
 
 	@Test
+	void anInterviewAssignedWithNoDeadlineIsOpenUntilItIsSat() {
+		CandidateInterviewSchedule old = new CandidateInterviewSchedule();
+		old.setAssignedAt(LocalDateTime.parse("2026-10-13T10:00"));
+
+		assertDoesNotThrow(() -> VoiceInterviewServiceImpl.requireWithinWindow(old, LocalDateTime.parse("2026-10-29T16:00")));
+	}
+
+	@Test
 	void aMinuteEarlyIsAllowedForClockDifferences() {
 		assertDoesNotThrow(() -> VoiceInterviewServiceImpl.requireWithinWindow(
 				window("2026-10-28T11:28", "2026-10-28T18:00"), LocalDateTime.parse("2026-10-28T11:27")));

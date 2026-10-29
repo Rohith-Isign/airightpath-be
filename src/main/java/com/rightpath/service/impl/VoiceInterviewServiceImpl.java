@@ -234,7 +234,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * half hours, and a deadline ran the same distance late.</p>
      */
     static void requireWithinWindow(CandidateInterviewSchedule schedule, LocalDateTime now) {
-        if (schedule.getDeadlineTime().isBefore(now)) {
+        // An interview assigned before the deadline was mandatory has none, and is open until it is sat.
+        if (schedule.getDeadlineTime() != null && schedule.getDeadlineTime().isBefore(now)) {
             throw new IllegalStateException(
                     "The time allowed for this interview has passed. Ask the recruiter to schedule it again.");
         }
@@ -377,14 +378,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     .build();
         }
 
-        // A new interview needs the date and time it was assigned with, and the window
-        // that gives. An interview booked with none, before it was mandatory, would
-        // otherwise start with no schedule to measure it against, and one whose
-        // deadline has passed would start as though it had not.
-        if (schedule.getDeadlineTime() == null) {
-            throw new IllegalStateException(
-                    "This interview has no date and time set. Ask the recruiter to assign it again.");
-        }
+        // One assigned with no deadline (before it was mandatory) is open until it is sat; the window check below
+        // only applies the end time where there is one.
         requireWithinWindow(schedule, businessSchedule.now());
 
         // Start a new interview
