@@ -20,22 +20,24 @@ public class StatusTransitionValidator {
      * dropped out of, purely to gain the right to reject them there.
      */
     private static final Map<ApplicationStatus, Set<ApplicationStatus>> ALLOWED_TRANSITIONS = Map.ofEntries(
-        Map.entry(ApplicationStatus.APPLIED,               Set.of(ApplicationStatus.SHORTLISTED, ApplicationStatus.REJECTED)),
+        // INTERVIEW_SCHEDULED is open from every stage before the interview: a recruiter who assigns an interview
+        // (any round) straight to a candidate puts them in the interview stage, whatever they had done so far.
+        Map.entry(ApplicationStatus.APPLIED,               Set.of(ApplicationStatus.SHORTLISTED, ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)),
         // SHORTLISTED -> EXAM_SENT is the direct-assignment path: a recruiter who
         // already knows they want a candidate examined sends the paper straight
         // out of Applied, and the assignment shortlists them on the way through.
         // The ack / reconfirm round-trip stays available, it is just no longer
         // the only way to reach an exam.
-        Map.entry(ApplicationStatus.SHORTLISTED,           Set.of(ApplicationStatus.ACKNOWLEDGED, ApplicationStatus.EXAM_SENT, ApplicationStatus.REJECTED)),
-        Map.entry(ApplicationStatus.ACKNOWLEDGED,          Set.of(ApplicationStatus.ACKNOWLEDGED_BACK, ApplicationStatus.REJECTED)),
-        Map.entry(ApplicationStatus.ACKNOWLEDGED_BACK,     Set.of(ApplicationStatus.RECONFIRMED, ApplicationStatus.REJECTED)),
-        Map.entry(ApplicationStatus.RECONFIRMED,           Set.of(ApplicationStatus.EXAM_SENT, ApplicationStatus.REJECTED)),
+        Map.entry(ApplicationStatus.SHORTLISTED,           Set.of(ApplicationStatus.ACKNOWLEDGED, ApplicationStatus.EXAM_SENT, ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)),
+        Map.entry(ApplicationStatus.ACKNOWLEDGED,          Set.of(ApplicationStatus.ACKNOWLEDGED_BACK, ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)),
+        Map.entry(ApplicationStatus.ACKNOWLEDGED_BACK,     Set.of(ApplicationStatus.RECONFIRMED, ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)),
+        Map.entry(ApplicationStatus.RECONFIRMED,           Set.of(ApplicationStatus.EXAM_SENT, ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)),
         // EXAM_SENT -> EXAM_SENT, and EXAM_COMPLETED -> EXAM_SENT: an exam round
         // is not always a single assignment. A job may set aptitude first and add
         // the coding paper once it has been sat, and each assignment re-runs this
         // transition. Without these two the second assignment threw, so the
         // coding exam was never created and never reached the candidate.
-        Map.entry(ApplicationStatus.EXAM_SENT,             Set.of(ApplicationStatus.EXAM_COMPLETED, ApplicationStatus.EXAM_SENT, ApplicationStatus.REJECTED)),
+        Map.entry(ApplicationStatus.EXAM_SENT,             Set.of(ApplicationStatus.EXAM_COMPLETED, ApplicationStatus.EXAM_SENT, ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)),
         Map.entry(ApplicationStatus.EXAM_COMPLETED,        Set.of(ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED, ApplicationStatus.EXAM_SENT)),
         Map.entry(ApplicationStatus.INTERVIEW_SCHEDULED,   Set.of(ApplicationStatus.INTERVIEW_COMPLETED, ApplicationStatus.REJECTED)),
         Map.entry(ApplicationStatus.INTERVIEW_COMPLETED,   Set.of(ApplicationStatus.SELECTED, ApplicationStatus.REJECTED)),

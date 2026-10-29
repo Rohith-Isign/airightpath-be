@@ -51,13 +51,14 @@ class InterviewSchedulingTransitionTest {
     }
 
     @Test
-    void schedulingBeforeTheExamIsNotAShortcut() {
-        // Scheduling an interview must not skip the exam stage for someone who
-        // has not sat one; those candidates keep their existing status.
-        assertFalse(StatusTransitionValidator.isAllowed(
-                ApplicationStatus.APPLIED, ApplicationStatus.INTERVIEW_SCHEDULED));
-        assertFalse(StatusTransitionValidator.isAllowed(
-                ApplicationStatus.EXAM_SENT, ApplicationStatus.INTERVIEW_SCHEDULED));
+    void anInterviewAssignedDirectlyMovesACandidateIntoTheInterviewStage() {
+        // Assigning an interview straight to someone who has not sat an exam is a normal thing to do, and the
+        // candidate has to show under Interview Sent rather than stay on Applied.
+        for (ApplicationStatus from : new ApplicationStatus[] {
+                ApplicationStatus.APPLIED, ApplicationStatus.SHORTLISTED, ApplicationStatus.ACKNOWLEDGED,
+                ApplicationStatus.ACKNOWLEDGED_BACK, ApplicationStatus.RECONFIRMED, ApplicationStatus.EXAM_SENT }) {
+            assertTrue(StatusTransitionValidator.isAllowed(from, ApplicationStatus.INTERVIEW_SCHEDULED), from.name());
+        }
     }
 
     @Test
