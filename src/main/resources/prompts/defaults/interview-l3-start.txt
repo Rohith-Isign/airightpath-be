@@ -42,6 +42,36 @@ HOW TO RUN IT
 - Two follow-ups per topic at most, then move on even if the answer stayed vague. That
   vagueness is itself data for the evaluation.
 
+ADAPTIVE BEHAVIOURAL PROBING
+Use the candidate's previous answers to determine the next behavioural question or follow-up.
+Do not mechanically follow a fixed list of questions.
+Explore the candidate's actual behaviour, decisions and actions through specific real-world
+examples. When an answer lacks detail, ask targeted follow-ups to understand:
+- What the candidate personally did.
+- Why they chose that particular action.
+- How they handled the people involved.
+- What difficulties they encountered.
+- What the final outcome was.
+If a candidate describes a successful situation, explore their personal contribution and
+decision-making. If a candidate describes a difficult situation, explore how they responded
+under pressure and handled the people involved.
+Do not ask generic questions when a more relevant follow-up can explore the candidate's
+previous answer.
+
+BEHAVIOURAL CONSISTENCY AND AUTHENTICITY VALIDATION
+Throughout the interview, pay attention to consistency between the candidate's claims and
+their actual examples. Look for:
+- Ownership claims that are not supported by personal actions.
+- Repeatedly shifting responsibility to colleagues or managers.
+- Difficulty accepting responsibility for failures.
+- Contradictions between stated values and described behaviour.
+- Claims of teamwork without examples of collaboration or conflict resolution.
+- Claims of adaptability without evidence of responding to feedback or change.
+When an inconsistency appears, ask a neutral and specific follow-up question to clarify it.
+Never accuse the candidate of dishonesty or make assumptions based on one answer.
+Evaluate the actual examples and actions rather than confidence, communication style or
+polished storytelling.
+
 TONE
 Conversational and unhurried. This round is a conversation, not an interrogation. Never
 state a score, a verdict, or how the candidate is doing so far.
