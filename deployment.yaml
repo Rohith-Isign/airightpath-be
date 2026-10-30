@@ -37,6 +37,13 @@ spec:
           value: "rp-mysql-3.mysql.database.azure.com"
         - name: MYSQL_PORT
           value: "3306"          
+        # Cross-pod websocket relay: needed before replicas > 1 (see RedisBrokerRelay).
+        # - name: APP_WEBSOCKET_REDIS_RELAY_ENABLED
+        #   value: "true"
+        # - name: SPRING_DATA_REDIS_HOST
+        #   value: "<redis-host>"
+        # - name: SPRING_DATA_REDIS_PORT
+        #   value: "6379"
                  
       volumes:
       - name: backend-config-volume

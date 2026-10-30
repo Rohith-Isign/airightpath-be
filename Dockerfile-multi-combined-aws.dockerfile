@@ -44,9 +44,9 @@ RUN groupadd -r -g 1001 appuser \
 # Optional: quick tool verification
 # RUN java -version && python3 --version && node --version && gcc --version
 
-#USER appuser
 WORKDIR /app
-COPY target/rightpath.jar rightpath.jar
+COPY --chown=appuser:appuser target/rightpath.jar rightpath.jar
+USER appuser
 
 EXPOSE 8082
 

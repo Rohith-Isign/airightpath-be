@@ -21,8 +21,14 @@ RUN java -version && javac -version \
  && python3 --version && node --version \
  && gcc --version && g++ --version
 
+# Run as an unprivileged user. Candidate code is compiled and executed by this
+# process, so it must not be root. Execution scratch space is java.io.tmpdir
+# (/tmp), which any user can write.
+RUN groupadd -r -g 1001 appuser  && useradd -r -u 1001 -g 1001 -d /app -s /usr/sbin/nologin appuser
+
 WORKDIR /app
-COPY target/rightpath.jar rightpath.jar
+COPY --chown=appuser:appuser target/rightpath.jar rightpath.jar
+USER appuser
 
 # One image serves every environment; the port comes from the active profile
 # (dev/prod 8081, stage 8082, uat 8083) and the -p mapping at run time. EXPOSE

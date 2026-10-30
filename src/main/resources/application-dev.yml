@@ -159,12 +159,15 @@ aws:
 
 management:
   endpoints:
+    # Everything off unless named: only health is exposed, and that one is served
+    # by HealthController (the built-in endpoint is disabled below).
+    enabled-by-default: false
     web:
       exposure:
-        include: health,info
+        include: health
   endpoint:
     health:
-      show-details: always
+      show-details: when-authorized
       enabled: false
 
 app:
