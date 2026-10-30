@@ -60,8 +60,23 @@ public class ApiSecurityConfig {
 			// Allow browser CORS preflight through Spring Security.
 			.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-			// Public auth endpoints (non-versioned, no /auth segment).
-			.requestMatchers("/api/login", "/api/register", "/api/refresh", "/api/logout","/api/job-applications/**","/api/mobile/**", "/api/generate-otp", "/api/validate-otp","/api/update-password").permitAll()
+			// Public by necessity: signing in and recovering an account happen before there is a token.
+			// Method-pinned, and rate limited by AuthRateLimitFilter. update-password still demands a
+			// verified, unexpired OTP in the service.
+			.requestMatchers(HttpMethod.POST, "/api/login", "/api/register", "/api/refresh", "/api/logout",
+					"/api/generate-otp", "/api/validate-otp").permitAll()
+			.requestMatchers(HttpMethod.PUT, "/api/update-password").permitAll()
+
+			// The candidate's phone has no login. Each of these resolves a pairing token
+			// (MobilePairingService) and refuses without one. Listed one by one so a new
+			// /api/mobile endpoint is private until someone decides otherwise.
+			.requestMatchers(HttpMethod.GET, "/api/mobile/pairing-status").permitAll()
+			.requestMatchers(HttpMethod.POST, "/api/mobile/room-scan", "/api/mobile/proctor-capture",
+					"/api/mobile/recording-upload", "/api/mobile/recording-upload/**",
+					"/api/mobile/recording-event", "/api/mobile/recording-outcome").permitAll()
+
+			// Runs code on this server: signed in AND allowed to run code, not just any valid token.
+			.requestMatchers("/api/compile/**", "/api/compiler/run").hasAuthority("COMPILER_RUN")
                         .anyRequest().authenticated())
                 .addFilterBefore(apiJwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
