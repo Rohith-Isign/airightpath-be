@@ -509,10 +509,28 @@ public class InterviewController {
 		// because concatenated WebM plays only as far as the first boundary.
 		// Older rows hold a single reference and split to a list of one, so
 		// nothing recorded before this needs migrating.
-		List<String> references = Arrays.stream(stored.split("\\R"))
+		List<String> listed = Arrays.stream(stored.split("\\R"))
 				.map(String::trim)
 				.filter(ref -> !ref.isEmpty())
 				.toList();
+
+		// Only files this interview's own upload produced. Every recording is stored under
+		// "interview-<id>/", so a reference pointing into another interview's folder is not one of its parts.
+		// Showing it as "part 2" put a different interview's footage in this reviewer's player, under a message
+		// saying the recording had stopped and restarted.
+		String ownFolder = "/interview-" + scheduleId + "/";
+		List<String> references = listed.stream()
+				.filter(ref -> ("/" + ref).contains(ownFolder))
+				.toList();
+		if (references.size() != listed.size()) {
+			log.warn("Interview {} lists {} {} recording part(s) stored under other interviews; they were left out: {}",
+					scheduleId, listed.size() - references.size(), recordingKind,
+					listed.stream().filter(ref -> !references.contains(ref)).toList());
+		}
+		if (references.isEmpty()) {
+			throw new com.rightpath.exceptions.ResourceNotFoundException("No " + recordingKind
+					+ " recording was stored for this interview.");
+		}
 
 		if (part < 0 || part >= references.size()) {
 			throw new com.rightpath.exceptions.ResourceNotFoundException(
