@@ -70,8 +70,8 @@ public class AuthProperties {
         private boolean cookieEnabled = true;
         private String cookieName = "access_token";
         private boolean cookieSecure = true;
-        /** Lax by default; use None (with Secure) only if the SPA is served from a different site. */
-        private String cookieSamesite = "Lax";
+        /** Strict by default; use Lax or None (with Secure) only if the SPA is served from a different site. */
+        private String cookieSamesite = "Strict";
         private String cookiePath = "/";
         /**
          * Keep returning the token in the JSON body while the frontend still reads it
@@ -182,7 +182,7 @@ public class AuthProperties {
         private long ttlDays = 14;
         private String cookieName = "refresh_token";
         private boolean cookieSecure = true;
-        private String cookieSamesite = "Lax";
+        private String cookieSamesite = "Strict";
         private String cookiePath = "/api/auth/refresh";
 
         public long getTtlDays() {

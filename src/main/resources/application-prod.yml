@@ -93,13 +93,17 @@ rightpath:
         secret: ${V2_JWT_SECRET:}
         issuer: arightpath.com
         audience: rightpath-web
-        access-ttl-minutes: 10080
+        access-ttl-minutes: 15
         clock-skew-seconds: 60
+      # Access token cookie: HttpOnly is always on (see AccessCookieFactory).
+      access:
+        cookie-secure: true
+        cookie-samesite: Strict
       refresh:
         ttl-days: 14
         cookie-name: refresh_token
-        cookie-secure: false
-        cookie-samesite: Lax
+        cookie-secure: true
+        cookie-samesite: Strict
         cookie-path: /api
 
     # First administrator, created at startup when nobody holds SUPER_ADMIN yet.
