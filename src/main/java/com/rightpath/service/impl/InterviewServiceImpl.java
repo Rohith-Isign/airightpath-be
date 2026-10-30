@@ -110,7 +110,7 @@ public class InterviewServiceImpl implements InterviewService {
 	    session.setQuestions(questions);
 	    session.setCurrentQuestionIndex(0);
 	    session.setResumeSummary(resumeSummary);
-	    System.out.println("Saving session with " + questions.size() + " questions");
+	    log.debug("Saving session with {} questions", questions.size());
 	    saveSession(interviewScheduleId, session);
 
 	    String firstQuestion = questions.get(0).getText();   // text of the first question
@@ -195,12 +195,10 @@ public class InterviewServiceImpl implements InterviewService {
 
 	    InterviewSession session = getSession(interviewScheduleId);
 	    List<InterviewQuestionInfo> questions = session.getQuestions();
-	    System.out.println("Total questions: " + questions.size());
-	    System.out.println("Session has " + session.getQuestions().size() + " questions");
 	    int currentIndex = session.getCurrentQuestionIndex();
-	    System.out.println("Current index: " + currentIndex);
+	    log.debug("Interview {} question {}/{}", interviewScheduleId, currentIndex, questions.size());
 	    boolean retryAlreadyUsed = session.getRetryUsed().getOrDefault(currentIndex, false);
-	    System.out.println("Retry already used for index " + currentIndex + ": " + retryAlreadyUsed);
+	    log.debug("Retry already used for index {}: {}", currentIndex, retryAlreadyUsed);
 
 	    // Build the full answer (with code if any)
 	    String answerWithCode = answerText;
@@ -265,9 +263,8 @@ public class InterviewServiceImpl implements InterviewService {
 	    }
 
 	    InterviewQuestionInfo nextQuestion = questions.get(nextIndex);
-	    System.out.println("AI Feedback: " + aiFeedback);
-	    String returnValue = "FEEDBACK: " + aiFeedback + "\n\nNEXT QUESTION: " + nextQuestion.getText();
-	    System.out.println("Returning: " + returnValue);
+	    log.debug("AI feedback generated for interview {}", interviewScheduleId);
+	    log.debug("Returning feedback and next question for interview {}", interviewScheduleId);
 	    return "FEEDBACK: " + aiFeedback + "\n\nNEXT QUESTION: " + nextQuestion.getText();
 	}
 	

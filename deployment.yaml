@@ -16,12 +16,6 @@ spec:
       imagePullSecrets:
       - name: acr-secret
       hostAliases:
-       - ip: "10.224.250.250"
-         hostnames:
-         - "mysql-server"
-         - "db.rightpath.local"
-         - "rp-mysql-3.mysql.database.azure.com"
-         - "privatelink.mysql.database.azure.com"
        - ip: "4.187.178.140"
          hostnames:
          - "apis.rightpath.com"
@@ -40,7 +34,7 @@ spec:
         env:
         # MySQL Configuration
         - name: MYSQL_HOST
-          value: "10.224.250.250"
+          value: "rp-mysql-3.mysql.database.azure.com"
         - name: MYSQL_PORT
           value: "3306"          
                  

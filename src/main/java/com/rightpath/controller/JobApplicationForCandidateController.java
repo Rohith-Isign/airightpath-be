@@ -38,6 +38,7 @@ import com.rightpath.util.BusinessSchedule;
 
 @RestController
 @RequestMapping("/api/job-applications")
+@lombok.extern.slf4j.Slf4j
 public class JobApplicationForCandidateController {
 
     @Autowired
@@ -82,7 +83,7 @@ public class JobApplicationForCandidateController {
                 )
             );
         } catch (Exception e) {
-            System.err.println("WebSocket notification failed: " + e.getMessage());
+            log.warn("WebSocket notification failed", e);
         }
     }
 

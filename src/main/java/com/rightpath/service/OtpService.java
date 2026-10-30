@@ -15,6 +15,7 @@ import com.rightpath.repository.UsersRepository;
 import com.rightpath.util.OtpGenerator;
 
 @Service
+@lombok.extern.slf4j.Slf4j
 public class OtpService {
     private final OtpRepository otpRepository;
     private final UsersRepository usersRepository;
@@ -70,14 +71,14 @@ public class OtpService {
             otpEntity.setEmail(email);
             otpRepository.save(otpEntity);
             emailService.sendOtpEmail(email, otp);
-            System.out.println("OTP sent via Email to: " + email);
+            log.info("OTP sent via email");
         } else if (mobile != null) {
             otpRepository.deleteAllByMobile(mobile);
             otpEntity.setMobile(mobile);
             otpRepository.save(otpEntity);
             // Updated to use universal WhatsApp message method
             whatsAppService.sendWhatsAppMessage(mobile, WhatsAppService.MessageType.OTP, otp);
-            System.out.println("OTP sent via WhatsApp to: " + mobile);
+            log.info("OTP sent via WhatsApp");
         } else {
             throw new IllegalArgumentException("Email or mobile must be provided for OTP.");
         }
@@ -102,21 +103,21 @@ public class OtpService {
             }
 
             if (otpOptional.isEmpty()) {
-                System.out.println("OTP not found for given contact.");
+                log.warn("OTP validation failed: no OTP found for contact");
                 return false;
             }
 
             Otp otpEntity = otpOptional.get();
 
             if (otpEntity.getExpirationTime().isBefore(LocalDateTime.now())) {
-                System.out.println("OTP has expired.");
+                log.warn("OTP validation failed: OTP expired");
                 return false;
             }
 
             if (otpEntity.getAttempts() >= props.getOtp().getMaxAttempts()) {
                 // Out of guesses: the code is dead, a new one has to be requested.
                 otpRepository.deleteById(otpEntity.getId());
-                System.out.println("OTP attempts exhausted; code discarded.");
+                log.warn("OTP attempts exhausted; code discarded");
                 return false;
             }
 
@@ -129,15 +130,14 @@ public class OtpService {
                 otpRepository.incrementAttempts(otpEntity.getId());
                 if (otpEntity.getAttempts() + 1 >= props.getOtp().getMaxAttempts()) {
                     otpRepository.deleteById(otpEntity.getId());
-                    System.out.println("OTP attempts exhausted; code discarded.");
+                    log.warn("OTP attempts exhausted; code discarded");
                 }
             }
-            System.out.println("OTP validation result: " + isValid);
+            log.debug("OTP validation result: {}", isValid);
             return isValid;
 
         } catch (Exception e) {
-            System.err.println("Error during OTP validation: " + e.getMessage());
-            e.printStackTrace();
+            log.error("Error during OTP validation", e);
             return false;
         }
     }
@@ -148,12 +148,11 @@ public class OtpService {
     @Scheduled(fixedRate = 300000) // Every 5 minutes
     public void removeExpiredOtps() {
         try {
-            System.out.println("Scheduled cleanup: removing expired OTPs...");
+            log.debug("Scheduled cleanup: removing expired OTPs");
             int deletedCount = otpRepository.deleteAllByExpirationTimeBefore(LocalDateTime.now());
-            System.out.println("Expired OTPs removed: " + deletedCount);
+            log.info("Expired OTPs removed: {}", deletedCount);
         } catch (Exception e) {
-            System.err.println("Error during expired OTP cleanup: " + e.getMessage());
-            e.printStackTrace();
+            log.error("Error during expired OTP cleanup", e);
         }
     }
 
@@ -174,7 +173,7 @@ public class OtpService {
                     : mobile != null ? otpRepository.findByMobile(mobile) : Optional.empty();
             if (verifiedOtp.isEmpty() || !verifiedOtp.get().isVerified()
                     || verifiedOtp.get().getExpirationTime().isBefore(LocalDateTime.now())) {
-                System.out.println("Password update refused: no verified, unexpired OTP.");
+                log.warn("Password update refused: no verified, unexpired OTP");
                 return false;
             }
 
@@ -187,7 +186,7 @@ public class OtpService {
             }
 
             if (userOptional.isEmpty()) {
-                System.out.println("User not found for password update.");
+                log.warn("User not found for password update");
                 return false;
             }
 
@@ -199,18 +198,17 @@ public class OtpService {
 
             if (email != null) {
                 emailService.updatedPasswordConfirmation(email, "Password Updated", "Your password has been updated.");
-                System.out.println("Password update confirmation sent via email.");
+                log.info("Password update confirmation sent via email");
             } else {
                 // Updated to use universal WhatsApp message method
                 whatsAppService.sendWhatsAppMessage(mobile, WhatsAppService.MessageType.PASSWORD_UPDATE);
-                System.out.println("Password update confirmation sent via WhatsApp.");
+                log.info("Password update confirmation sent via WhatsApp");
             }
 
             return true;
 
         } catch (Exception e) {
-            System.err.println("Error during password update: " + e.getMessage());
-            e.printStackTrace();
+            log.error("Error during password update", e);
             return false;
         }
     }

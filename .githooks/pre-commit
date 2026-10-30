@@ -1,0 +1,8 @@
+#!/bin/sh
+# Blocks commits that stage files under temp/ or .metadata/.
+bad=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(temp|\.metadata)/')
+if [ -n "$bad" ]; then
+  echo "pre-commit: refusing to commit temp/ or .metadata/ files:" >&2
+  echo "$bad" >&2
+  exit 1
+fi

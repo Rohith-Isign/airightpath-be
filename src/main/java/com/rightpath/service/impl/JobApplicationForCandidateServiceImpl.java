@@ -668,9 +668,7 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
 	                            .count();
 	
 	                    double matchPercent = (matchCount * 100.0) / requiredSkills.length;
-	                    System.out.println("Resume Text: " + resumeText);
-	                    System.out.println("Required Skills: " + Arrays.toString(requiredSkills));
-	                    System.out.println("Match %: " + matchPercent);
+	                    logger.debug("ATS skill match: requiredSkills={} match={}%", Arrays.toString(requiredSkills), matchPercent);
 	                    return matchPercent >= atsThreshold;
 	                })
 	                .map(this::convertToDTO)

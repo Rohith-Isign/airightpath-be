@@ -13,6 +13,7 @@ import java.util.Enumeration;
 import java.util.List;
 
 @RestController
+@lombok.extern.slf4j.Slf4j
 public class HealthController {
 
     private static final int MAX_ALLOWED_HEADERS = 2; // adjust limit as needed
@@ -20,9 +21,7 @@ public class HealthController {
     @GetMapping("/actuator/health")
     public Object health(HttpServletRequest request, HttpServletResponse response) throws IOException {
 
-        System.out.println("=== Health Check Request ===");
-        System.out.println("Method: " + request.getMethod());
-        System.out.println("Request URL: " + request.getRequestURL());
+        log.debug("Health check request: method={} url={}", request.getMethod(), request.getRequestURL());
 
         // Count all headers
         Enumeration<String> headerNames = request.getHeaderNames();
@@ -30,16 +29,16 @@ public class HealthController {
 
         while (headerNames.hasMoreElements()) {
             String headerName = headerNames.nextElement();
-            String headerValue = request.getHeader(headerName);
             headerCount++;
-            System.out.println("Header: " + headerName + " = " + headerValue);
+            // Name only: values can carry credentials (Authorization, Cookie).
+            log.trace("Health check header: {}", headerName);
         }
 
-        System.out.println("Total headers received: " + headerCount);
+        log.debug("Health check headers received: {}", headerCount);
 
         // Check if count exceeds threshold
         if (headerCount > MAX_ALLOWED_HEADERS) {
-            System.out.println("❌ REJECTED: Too many headers (" + headerCount + ")");
+            log.warn("Health check rejected: too many headers ({}, max {})", headerCount, MAX_ALLOWED_HEADERS);
             response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
             response.setContentType("application/json");
             String errorJson = String.format(

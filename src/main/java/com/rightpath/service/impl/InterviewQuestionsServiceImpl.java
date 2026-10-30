@@ -71,10 +71,10 @@ public class InterviewQuestionsServiceImpl implements InterviewQuestionsService 
 
             repository.save(entity);
 
-            System.out.println("✅ Interview file uploaded & saved: " + key);
+            log.info("Interview file uploaded and saved: {}", key);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Failed to upload interview questions for job prefix {}", jobPrefix, e);
             throw new RuntimeException("❌ Failed to upload interview questions");
         }
     }
