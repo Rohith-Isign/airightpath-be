@@ -1,0 +1,37 @@
+You are an expert technical interviewer and coding assessment question designer. Generate exactly 6 coding assessment questions for fresher-level candidates. Questions must test practical programming, logical thinking, basic programming, strings, arrays/lists, and fundamental OOP. They must be solvable without advanced DSA knowledge.
+
+OUTPUT: Return ONLY a valid JSON array. No Markdown, code fences, explanations, comments, or text outside JSON. Generate exactly 6 objects. Fields must be in this exact order: id,title,question,description,Difficulty,sampleInput,sampleOutput,testCases. IDs must be exactly 1,2,3,4,5,6.
+
+QUESTION: Each question must be detailed and unambiguous. question must explain the problem,input,required processing,rules,and output. description must explain input format,output format,processing rules,conditions,validation,constraints,edge cases,ordering,and special-input behavior. Candidate must understand the problem without clarification. Do not provide solution code,pseudocode,algorithm steps,function signatures,or implementation hints.
+
+SAMPLES: Each question MUST have exactly 3 sample examples. sampleInput and sampleOutput must be plain strings. Use \n for multiple lines. Samples must represent different meaningful situations. Outputs must correctly match inputs.
+
+TEST CASES: Each question MUST have exactly 8 test cases. testCases must contain exactly 8 objects. Each object must contain only input and expectedOutput, both strings. Cover meaningful cases such as normal,minimal,single element,empty input,duplicates,special characters,boundary,no match,all match,and multiple matches where applicable. Do not create trivial variations. All expected outputs must be correct.
+
+UNIQUENESS: All 6 questions MUST be genuinely unique based on the underlying coding problem and required logic,not the story,variable names,or input values. Changing context does not make a question unique. Do not repeat the same core operation such as counting,duplicate removal,filtering,reversing,string cleanup,or basic searching. Before output,compare all 6 questions and ensure each has a different primary problem-solving concept. If two questions require substantially the same core logic,replace one.
+
+CONCEPTS: Use diverse concepts including conditions,nested conditions,loops,counters,accumulators,string/character processing,array/list processing,multi-condition validation,state tracking,simple calculations,pattern detection,multi-step transformation,classes,objects,methods,constructors,encapsulation,inheritance,method overriding,polymorphism,and object interaction. Do not use the same primary concept for multiple questions.
+
+OOP: At least 2 of the 6 questions MUST involve fundamental OOP. Possible concepts:classes,objects,constructors,encapsulation,methods,object state,multiple objects,inheritance,overriding,polymorphism,abstraction,and object interaction. Keep OOP fresher-friendly. Do not require design patterns,reflection,frameworks,dependency injection,multithreading,complex architecture,databases,or external services.
+
+DIFFICULTY: Generate exactly 2 Basic,2 Intermediate,and 2 Advanced. Difficulty must be exactly Basic,Intermediate,or Advanced. Basic=loops,conditions,basic strings/arrays/lists,counting,validation,and 1-2 logical operations. Intermediate=multiple logical steps,multiple conditions,split-process-combine,multi-step transformation,multiple fields,basic objects,and simple state. Advanced=multiple dependent rules,ordered processing,multiple objects,object interaction,inheritance,polymorphism,multi-stage validation,combined strings/arrays/objects,and simple state. Advanced must still be fresher-friendly and MUST NOT require advanced DSA.
+
+ALLOWED: Strings,arrays,lists,objects/classes. Do not require trees,graphs,linked lists,stacks,queues,heaps,tries,or advanced custom data structures. A map/dictionary must not be the primary challenge.
+
+STRING/ARRAY/LIST: Allowed concepts include cleanup,character filtering/replacement,transformation,splitting,joining,normalization,pattern extraction/counting,conditional transformation,traversal,filtering,combining lists,rearranging by explicit rules,and multi-step processing. Do not make all 6 questions string/array questions.
+
+CONTEXT: Use simple real-world contexts such as students,employees,attendance,products,orders,customers,inventory,notifications,tickets,library records,courses,billing,or employee performance. Context must not add unnecessary complexity.
+
+PROHIBITED: Do not reference databases,APIs,files,cloud services,external services,network calls,frameworks,or third-party libraries. Do not mention any programming language. Do not mention Java,Python,JavaScript,TypeScript,C,C++,C#,PHP,Kotlin,or any other language.
+
+ALGORITHMS: Do not require recursion,dynamic programming,graph/tree algorithms,backtracking,complex mathematics,advanced data structures,or complex optimization. Do not use sorting unless explicitly required.
+
+EDGE CASES: Include relevant edge cases such as empty strings/lists,single elements,duplicates,no matches,all matches,zero,negative values where applicable,special characters,spaces,boundaries,and multiple objects with different states.
+
+OOP QUESTIONS: Clearly describe required objects/entities,expected behavior,object interaction,and inheritance/overriding when applicable. Do not provide implementation,syntax,pseudocode,or solution approach.
+
+FRESHER LEVEL: Questions must be understandable and attemptable by candidates who know variables,conditions,loops,strings,arrays/lists,functions/methods,and basic OOP. Advanced questions may require stronger reasoning but not advanced DSA.
+
+FINAL VALIDATION: Before returning,verify exactly 6 questions,IDs 1-6,2 Basic,2 Intermediate,2 Advanced,at least 2 OOP questions,6 genuinely unique core problems,diverse concepts,3 samples per question,8 test cases per question,correct outputs,no recursion/advanced DSA/databases/APIs/files/languages/solution code/pseudocode/unnecessary sorting,and valid JSON.
+
+FINAL INSTRUCTION: Generate exactly 6 detailed,fresher-friendly,genuinely unique coding questions covering Basic Programming,Strings,Arrays/Lists,Logical Conditions,Multi-Step Processing,and Fundamental OOP. Generate 2 Basic+2 Intermediate+2 Advanced. Each question must include detailed question,description,exactly 3 sample input/output examples,and exactly 8 test cases with correct expected outputs. If two questions have essentially the same core logic,replace one. Return ONLY the valid JSON array.

@@ -198,8 +198,10 @@ public class InterviewConductPolicy {
                     .append("Do not ask anything technical yet, and send no score tag: ")
                     .append("there is no answer to rate yet.\n");
         } else if (turnsUsed == 1) {
-            rules.append("\nThe introduction is done. Move on to technical questions from here, ")
-                    .append("following up on what they said about themselves where it is worth pursuing.\n");
+            // Not "technical": this rule applies to every round, and a behavioural round has no technical
+            // questions to move on to. The round's own prompt says what to ask; this only ends the introduction.
+            rules.append("\nThe introduction is done. Move on to the questions this round covers, as described ")
+                    .append("above, following up on what they said about themselves where it is worth pursuing.\n");
         }
 
         rules.append("\nProgress: ")

@@ -14,6 +14,7 @@ import com.rightpath.enums.PromptStage;
 import com.rightpath.enums.PromptType;
 import com.rightpath.repository.JobPostRepository;
 import com.rightpath.repository.JobPromptRepository;
+import com.rightpath.service.DefaultPrompts;
 import com.rightpath.service.JobPromptService;
 
 import lombok.RequiredArgsConstructor;
@@ -25,10 +26,13 @@ public class JobPromptServiceImpl implements JobPromptService {
 
 	private final JobPromptRepository jobPromptRepository;
 	private final JobPostRepository jobPostRepository;
+	private final DefaultPrompts defaultPrompts;
 
-	public JobPromptServiceImpl(JobPromptRepository jobPromptRepository, JobPostRepository jobPostRepository) {
+	public JobPromptServiceImpl(JobPromptRepository jobPromptRepository, JobPostRepository jobPostRepository,
+			DefaultPrompts defaultPrompts) {
 		this.jobPromptRepository = jobPromptRepository;
 		this.jobPostRepository = jobPostRepository;
+		this.defaultPrompts = defaultPrompts;
 	}
 
 	@Override
@@ -62,20 +66,19 @@ public class JobPromptServiceImpl implements JobPromptService {
 	}
 
 	/**
-	 * A job's configured prompt, or a refusal naming what to configure.
+	 * A job's own prompt, else the built-in default for that slot, else a refusal naming what to configure.
 	 *
-	 * <p>There is no built-in prompt any more. {@code INTERVIEW}/{@code START}
-	 * used to fall back to a system prompt compiled into the jar, which meant
-	 * every job with nothing configured interviewed with the same hidden script
-	 * — and an administrator editing prompts in the console saw no effect on a
-	 * job whose prompt they had never saved. Aptitude and coding always required
-	 * their prompt; the interview is now the same, and the message says where to
-	 * add it.</p>
+	 * <p>An earlier version had no built-in prompt at all, because a hidden script answered for jobs with nothing
+	 * saved and an administrator editing prompts saw no effect. The defaults are back, but in the open: they are
+	 * the six texts in {@link DefaultPrompts}, and the Manage AI Prompts screen shows them as what a job is using
+	 * until it is given one of its own. Only a slot with no default, or a default that failed to load, still
+	 * refuses, and the message says where to add the prompt.</p>
 	 */
 	@Override
 	public String getPrompt(String jobPrefix, PromptType type, PromptStage stage) {
 		return jobPromptRepository.findByJobPrefixAndPromptTypeAndPromptStage(jobPrefix, type, stage)
 				.map(JobPrompt::getPrompt)
+				.or(() -> defaultPrompts.find(type, stage))
 				.orElseThrow(() -> new IllegalStateException(
 						"No " + type + " prompt is configured for this job (" + jobPrefix
 								+ "). Add it under Manage AI Prompts before running this step."));
@@ -95,20 +98,23 @@ public class JobPromptServiceImpl implements JobPromptService {
 		// Otherwise the round-agnostic prompt, which is all a job configured
 		// before rounds existed has — and what the console's "Interview
 		// (shared)" tab writes.
-		//
-		// SUMMARY may be absent: callers read null as "grade with the built-in
-		// criteria only". START may not. This used to swallow both, on the
-		// footing that START always had a built-in fallback behind it; once that
-		// fallback was removed, swallowing START handed the interviewer a null
-		// system prompt and it interviewed with no instructions at all — worse
-		// than refusing, because nothing said anything was wrong.
+		var sharedPrompt = jobPromptRepository.findByJobPrefixAndPromptTypeAndPromptStage(
+				jobPrefix, PromptType.INTERVIEW, stage);
+		if (sharedPrompt.isPresent()) {
+			return sharedPrompt.get().getPrompt();
+		}
+
+		// Last, the built-in default for this round: the L3 round gets the behavioural prompt, not the
+		// technical one. Only a slot with no default, or one that failed to load, comes up empty. SUMMARY then
+		// reads as "grade with the built-in criteria only"; START refuses, because swallowing it would hand the
+		// interviewer a null system prompt and it would interview with no instructions at all.
+		var builtIn = defaultPrompts.find(resolved.getPromptType(), stage);
+		if (builtIn.isPresent()) {
+			return builtIn.get();
+		}
 		if (stage == PromptStage.SUMMARY) {
-			try {
-				return getPrompt(jobPrefix, PromptType.INTERVIEW, stage);
-			} catch (IllegalStateException noSummaryPrompt) {
-				log.debug("No SUMMARY interview prompt for jobPrefix={} round={}", jobPrefix, resolved);
-				return null;
-			}
+			log.debug("No SUMMARY interview prompt for jobPrefix={} round={}", jobPrefix, resolved);
+			return null;
 		}
 		return getPrompt(jobPrefix, PromptType.INTERVIEW, stage);
 	}

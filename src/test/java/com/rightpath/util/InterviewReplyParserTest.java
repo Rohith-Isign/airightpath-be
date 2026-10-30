@@ -114,10 +114,12 @@ class InterviewReplyParserTest {
     }
 
     @Test
-    void anUntaggedQuestionThatAsksForCodeStillOpensTheEditor() {
+    void anUntaggedQuestionNeverOpensTheEditorWhateverItAsks() {
+        // The editor follows the model's [CODING] tag and nothing else. Guessing from the wording opened it for
+        // spoken questions ("walk me through how you would solve a problem in a component").
         var parsed = parser.parse("[SCORE:6] [TOPIC:Programming] Nice. Now write a function that reverses a linked list.");
 
-        org.junit.jupiter.api.Assertions.assertTrue(parsed.spokenText().startsWith("[CODING]"), parsed.spokenText());
+        org.junit.jupiter.api.Assertions.assertFalse(parsed.spokenText().contains("[CODING]"), parsed.spokenText());
     }
 
     @Test

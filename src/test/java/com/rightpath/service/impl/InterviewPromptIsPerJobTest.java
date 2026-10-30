@@ -18,21 +18,15 @@ import com.rightpath.enums.PromptStage;
 import com.rightpath.enums.PromptType;
 import com.rightpath.repository.JobPromptRepository;
 import com.rightpath.repository.JobPostRepository;
+import com.rightpath.service.DefaultPrompts;
 
 /**
- * Interview prompts come from the job, and from nowhere else.
+ * A job's own prompt wins; the built-in default answers only where it has none.
  *
- * <p>{@code INTERVIEW}/{@code START} used to fall back to a system prompt
- * compiled into the jar from {@code interview-prompts.properties}. Two things
- * followed: every job with nothing configured interviewed with the same hidden
- * script, and an administrator who edited prompts in the console saw no change
- * for a job whose prompt they had never saved — the fallback answered instead,
- * silently, with only a log line to say so.</p>
- *
- * <p>These tests hold that fallback gone. It is the kind of convenience that
- * gets reintroduced to make an error go away, so the absence is asserted rather
- * than assumed, and the refusal is checked to name what the administrator has
- * to do.</p>
+ * <p>An earlier version had no built-in prompt at all, because a hidden script answered for jobs with nothing
+ * saved and an administrator editing prompts saw no change. The defaults are back, but they are the same six texts
+ * the Manage AI Prompts screen lists, so nothing answers in secret. These tests hold the order that makes that
+ * safe: the round's own prompt, then the shared one, then the default for that round.</p>
  */
 class InterviewPromptIsPerJobTest {
 
@@ -44,7 +38,7 @@ class InterviewPromptIsPerJobTest {
     @BeforeEach
     void setUp() {
         promptRepository = mock(JobPromptRepository.class);
-        service = new JobPromptServiceImpl(promptRepository, mock(JobPostRepository.class));
+        service = new JobPromptServiceImpl(promptRepository, mock(JobPostRepository.class), new DefaultPrompts());
     }
 
     private void nothingConfigured() {
@@ -58,34 +52,58 @@ class InterviewPromptIsPerJobTest {
                         .promptStage(stage).prompt(prompt).build()));
     }
 
-    // ── no built-in prompt remains ────────────────────────────────────
+    // ── defaults answer where a job has nothing ───────────────────────
 
     @Test
-    void anUnconfiguredInterviewPromptIsRefusedRatherThanSubstituted() {
+    void anUnconfiguredInterviewPromptFallsBackToTheBuiltInDefault() {
         nothingConfigured();
 
-        IllegalStateException refused = assertThrows(IllegalStateException.class,
-                () -> service.getPrompt(JOB, PromptType.INTERVIEW, PromptStage.START));
+        String prompt = service.getPrompt(JOB, PromptType.INTERVIEW, PromptStage.START);
 
-        // The old behaviour returned a prompt here. Returning anything at all
-        // is the regression this guards.
+        // The shared prompt stands for the default round, which is the technical one.
+        assertTrue(prompt.contains("L2 technical"), prompt);
+    }
+
+    @Test
+    void aSlotWithNoDefaultStillRefusesAndSaysWhereToAddIt() {
+        nothingConfigured();
+
+        // Aptitude has no START stage, so there is nothing built in to answer with.
+        IllegalStateException refused = assertThrows(IllegalStateException.class,
+                () -> service.getPrompt(JOB, PromptType.APTITUDE, PromptStage.START));
+
         assertTrue(refused.getMessage().contains(JOB), "the refusal should name the job");
         assertTrue(refused.getMessage().contains("Manage AI Prompts"),
                 "and say where to add the prompt, or the administrator is left guessing");
     }
 
     @Test
-    void theInterviewIsTreatedLikeAptitudeAndCoding() {
-        // Those two always required their own prompt. The interview having a
-        // hidden default was the inconsistency, not their strictness.
+    void aptitudeAndCodingEachHaveADefault() {
         nothingConfigured();
 
-        for (PromptType type : new PromptType[] {
-                PromptType.INTERVIEW, PromptType.APTITUDE, PromptType.CODING }) {
-            assertThrows(IllegalStateException.class,
-                    () -> service.getPrompt(JOB, type, PromptStage.START),
-                    type + " should require a configured prompt");
-        }
+        assertTrue(service.getPrompt(JOB, PromptType.APTITUDE, null).contains("multiple choice"));
+        assertTrue(service.getPrompt(JOB, PromptType.CODING, null).contains("coding assessment"));
+    }
+
+    @Test
+    void eachRoundGetsItsOwnDefaultNotTheOthers() {
+        nothingConfigured();
+
+        String l2 = service.getInterviewPrompt(JOB, InterviewRound.L2_TECHNICAL, PromptStage.START);
+        String l3 = service.getInterviewPrompt(JOB, InterviewRound.L3_BEHAVIORAL, PromptStage.START);
+
+        assertTrue(l2.contains("L2 technical"), l2);
+        assertTrue(l3.contains("behavioural"), l3);
+        assertTrue(!l3.contains("L2 technical"), "the behavioural round must not get the technical prompt");
+    }
+
+    @Test
+    void aMissingSummaryPromptAlsoGetsTheRoundsDefault() {
+        nothingConfigured();
+
+        String summary = service.getInterviewPrompt(JOB, InterviewRound.L3_BEHAVIORAL, PromptStage.SUMMARY);
+
+        assertTrue(summary != null && summary.contains("working behaviour"), summary);
     }
 
     // ── resolution order, which is what makes it dynamic ──────────────
@@ -100,7 +118,7 @@ class InterviewPromptIsPerJobTest {
     }
 
     @Test
-    void aRoundWithNoPromptOfItsOwnUsesTheSharedOne() {
+    void aRoundWithNoPromptOfItsOwnUsesTheSharedOneBeforeAnyDefault() {
         // What a job configured before rounds existed has, and the reason the
         // console offers an "Interview (shared)" tab beside the per-round ones.
         when(promptRepository.findByJobPrefixAndPromptTypeAndPromptStage(
@@ -113,22 +131,9 @@ class InterviewPromptIsPerJobTest {
     }
 
     @Test
-    void aMissingStartPromptStillThrowsThroughTheRoundAwarePath() {
-        // getInterviewPrompt swallows the absence for SUMMARY — grading falls
-        // back to built-in criteria. START has no such allowance: with no
-        // prompt there is nothing to interview with.
-        nothingConfigured();
+    void aSavedPromptAlwaysBeatsTheDefault() {
+        configured(PromptType.APTITUDE, null, "my own aptitude prompt");
 
-        assertThrows(IllegalStateException.class,
-                () -> service.getInterviewPrompt(JOB, InterviewRound.L2_TECHNICAL, PromptStage.START));
-    }
-
-    @Test
-    void aMissingSummaryPromptIsToleratedNotFatal() {
-        nothingConfigured();
-
-        assertEquals(null,
-                service.getInterviewPrompt(JOB, InterviewRound.L2_TECHNICAL, PromptStage.SUMMARY),
-                "grading without a custom summary prompt uses the built-in criteria");
+        assertEquals("my own aptitude prompt", service.getPrompt(JOB, PromptType.APTITUDE, null));
     }
 }

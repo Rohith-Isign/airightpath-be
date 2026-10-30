@@ -36,6 +36,19 @@ public class JobPromptController {
     private final EvaluationCategoryFormatter categoryFormatter;
     private final InterviewTemplateService templateService;
     private final com.rightpath.service.JobPromptCopyService copyService;
+    private final com.rightpath.service.DefaultPrompts defaultPrompts;
+
+    /**
+     * The built-in prompts, for the Manage AI Prompts screen.
+     *
+     * <p>What a job uses until it is given a prompt of its own, so the screen can show the text rather than an
+     * empty box, and offer to reset a job back to it.</p>
+     */
+    @GetMapping("/defaults")
+    @PreAuthorize("hasAuthority('JOB_POST_CREATE')")
+    public ResponseEntity<List<com.rightpath.service.DefaultPrompts.Entry>> getDefaultPrompts() {
+        return ResponseEntity.ok(defaultPrompts.all());
+    }
 
     /** Which jobs already have prompts, and of what kind: the list a new job picks one to reuse from. */
     @GetMapping("/jobs-with-prompts")

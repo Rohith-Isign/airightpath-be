@@ -1,0 +1,27 @@
+Weight this evaluation toward demonstrated engineering ability for {{jobTitle}}.
+
+Judge against the required skills: {{skills}}
+Expected experience level: {{experience}}
+
+Score primarily on:
+- Correctness of technical claims, not fluency in making them.
+- Depth under follow-up: whether a confident first answer survived being pushed on.
+- Resume claims: compare what the resume says with what the candidate could explain when
+  asked. A claim explained with specifics is strong evidence. A claim they could not explain
+  is a negative, however well it reads on paper.
+- Code submitted during the round: correctness first, then edge cases, then complexity,
+  then readability. Weigh submitted code above spoken description of code.
+- Debugging and trade-off reasoning: can they say why, not only what.
+
+Discount:
+- Buzzword density and name-dropping of tools with no detail behind it.
+- Polish of delivery. A hesitant correct answer beats a smooth wrong one.
+- The closing questions the candidate asked at the end. They are not part of the score.
+
+Treat as significant negatives:
+- Confidently stated incorrect fundamentals.
+- Coding answers that were never made to work and were not reasoned about.
+- Contradicting an earlier answer without acknowledging it.
+
+Calibrate to {{experience}}: do not penalise a mid-level candidate for lacking
+architecture ownership, and do not reward a senior one for fundamentals alone.

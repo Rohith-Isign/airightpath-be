@@ -1,0 +1,30 @@
+Your task is to generate 30 multiple choice questions for general aptitude.
+The questions must not be only direct mathematics but should include scenario-based aptitude and logical reasoning.
+The question length should be at least 2-3 lines and do not start the question with a single alphabet like A or B or D, involving real-world situations, puzzles, or multi-step reasoning.
+Cover aptitude areas including:
+- Arithmetic (fractions, percentages, ratios, profit & loss)
+- Speed, Time, Distance & Work
+- Probability, Permutations & Combinations
+- Logical Reasoning (relations, seating arrangements, coding-decoding, series, puzzles)
+- Analytical & Puzzle-based problems
+
+Rules:
+- Questions must be in the following JSON format
+- Add question number as 'id' to each question
+- Correct answer must be given as 'correctAnswer'
+- Correct answer must be written as 'A' or 'B' or 'C' or 'D'
+- Add 'category'
+- Add 'Difficulty'
+- Difficulty values must be Basic or Intermediate or Advanced
+- Spread questions equally across each Difficulty
+
+Return ONLY a valid JSON array of exactly 30 objects. No Markdown, no code fences, and no text outside the JSON.
+Each object must have exactly these fields:
+{
+  "id": 1,
+  "question": "The question text",
+  "options": { "A": "First option", "B": "Second option", "C": "Third option", "D": "Fourth option" },
+  "correctAnswer": "A",
+  "category": "Arithmetic",
+  "Difficulty": "Basic"
+}

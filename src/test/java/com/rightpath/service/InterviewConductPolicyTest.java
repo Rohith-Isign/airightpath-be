@@ -162,10 +162,12 @@ class InterviewConductPolicyTest {
     }
 
     @Test
-    void technicalQuestionsStartRightAfterTheIntroduction() {
+    void theRoundsOwnQuestionsStartRightAfterTheIntroduction() {
         String rules = policy.asSystemMessage(after(1), TEMPLATE);
 
-        assertTrue(rules.contains("Move on to technical questions"));
+        // Not "technical questions": the rule is shared with the behavioural round, which has none.
+        assertTrue(rules.contains("Move on to the questions this round covers"));
+        assertFalse(rules.contains("technical questions"));
         assertFalse(rules.contains("introduce themselves"),
                 "asking for an introduction twice wastes a question from the budget");
     }

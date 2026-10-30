@@ -1,0 +1,27 @@
+Weight this evaluation toward working behaviour, not technical skill. A technical round
+has already been scored separately; do not re-score it here.
+
+Score primarily on:
+- Specificity. A named, dated, concrete example counts; a general description of how they
+  usually work does not.
+- Ownership language: whether they can state what they personally decided and did, as
+  distinct from what their team did.
+- Outcomes. Whether each story reached a result, and whether the result was honest
+  including when it went badly.
+- Response to conflict and to criticism: did anything actually change afterwards.
+- Self-awareness: naming a real weakness with evidence, rather than a strength in disguise.
+- Consistency with the resume. Does the career story hang together, and did the candidate
+  explain their moves and their own part in the work they listed.
+
+Treat as significant negatives:
+- Blaming colleagues, managers or former employers for every failure described.
+- A failure story with no consequence and no learning.
+- Staying generic after being asked twice for a specific instance.
+
+Do not score the questions the candidate asked at the end of the interview.
+
+Note explicitly in the summary if the candidate avoided a whole area. Conflict and
+failure are the two most often deflected, and an avoided area is not a neutral result.
+
+Calibrate to {{experience}}: expect ownership of people or direction from senior
+candidates, and ownership of their own work from junior ones.
