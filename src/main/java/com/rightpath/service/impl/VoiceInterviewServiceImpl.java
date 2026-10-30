@@ -738,12 +738,26 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // spoken answer, and any code with its output, exactly as stored.
             // The reply reacts to that answer and asks what comes next, so the
             // interview follows the candidate rather than a fixed list.
+            EffectiveInterviewTemplate template = templateService.resolve(current);
+
+            // Where the closing sequence stands, decided here rather than left to the model. The sequence is a
+            // closing question, the candidate's reply, then a final thank-you. The model used to be trusted to follow
+            // it from the prompt alone, and it would answer the candidate's question and then carry on with another
+            // interview question, or the server would end the interview on the question ceiling in the middle of one.
+            boolean closingAsked = closingQuestionAlreadyAsked(scheduleId);
+            int turnsLeft = template.maxQuestions() - current.getTotalQuestionsAsked();
+
             String turnPrompt = contextService.buildNextQuestionPrompt(
                     current,
                     skipped ? "" : request.getTranscript(),
                     skipped,
                     request.getCodeContent(),
                     request.getCodeLanguage());
+            if (closingAsked) {
+                turnPrompt += "\n\n" + FINAL_REPLY_DIRECTIVE;
+            } else if (turnsLeft == 1) {
+                turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
+            }
             String reply = openAiStreamingService.chatCompletion(
                     contextService.buildContextMessages(current, turnPrompt));
 
@@ -759,9 +773,9 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // Closes when the model says it is done, or when the budget is
             // spent. The ceiling is enforced here rather than trusted to the
             // prompt: an interview that never ends is worse than one cut short.
-            EffectiveInterviewTemplate template = templateService.resolve(current);
             boolean ceilingHit = conductPolicy.hasReachedCeiling(template, current.getTotalQuestionsAsked());
-            boolean finished = parsed.closing() || ceilingHit;
+            // The candidate has answered the closing question, so this reply is the last one whatever the model says.
+            boolean finished = parsed.closing() || ceilingHit || closingAsked;
 
             // A close is held back while material topics are still unasked and
             // there is budget to ask them. The model decides it has seen enough
@@ -771,7 +785,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // the ceiling is in sight: running out of questions mid-syllabus is
             // a configuration problem, and holding the candidate longer does not
             // fix it.
-            if (parsed.closing() && !ceilingHit) {
+            if (parsed.closing() && !ceilingHit && !closingAsked) {
                 int remaining = template.maxQuestions() - current.getTotalQuestionsAsked();
                 if (!topicCoverage.mayCloseOnCoverage(current, remaining)) {
                     ParsedInterviewReply redirected = askForOutstandingTopic(current);
@@ -780,6 +794,13 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         finished = false;
                     }
                 }
+            }
+
+            // The interview is about to end, and the candidate's last words from the interviewer must be a goodbye. A
+            // forced end (question ceiling) or a reply that closed while still asking something would otherwise show
+            // the candidate the "interview finished" screen under an unanswered question.
+            if (finished && (!parsed.closing() || parsed.spokenText().contains("?"))) {
+                parsed = askForFarewell(current, parsed);
             }
 
             String spoken = parsed.spokenText();
@@ -1046,6 +1067,66 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * little early is a far better outcome than one stuck in a loop refusing to
      * end.</p>
      */
+    private static final String CLOSING_QUESTION_DIRECTIVE =
+            "This is the last turn before the interview closes. Do NOT ask another interview question. Briefly "
+                    + "acknowledge the answer, then ask only the closing question: whether the candidate has any "
+                    + "questions for us about the role or the process. Do not end the interview in this reply and "
+                    + "do not include " + "[INTERVIEW_COMPLETE].";
+
+    private static final String FINAL_REPLY_DIRECTIVE =
+            "The candidate has replied to your closing question, so this is your FINAL reply. If they asked "
+                    + "something, answer it in a sentence or two in general terms (no salary, offers or how the "
+                    + "interview went). Then thank them, say the team will be in touch and wish them well. Do NOT "
+                    + "ask any question and do NOT start a new topic, including teamwork or behavioural questions. "
+                    + "End with [INTERVIEW_COMPLETE].";
+
+    private static final String FALLBACK_FAREWELL =
+            "Thank you for your time today. The team will be in touch. Take care.";
+
+    /**
+     * Whether the interviewer's last turn was the closing question, so the candidate's answer in hand is to it.
+     * The last interviewer entry is the one the candidate has just answered.
+     */
+    private boolean closingQuestionAlreadyAsked(Long scheduleId) {
+        java.util.List<VoiceConversationEntry> entries =
+                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId);
+        for (int i = entries.size() - 1; i >= 0; i--) {
+            VoiceConversationEntry entry = entries.get(i);
+            if (entry.getRole() != ConversationRole.INTERVIEWER) {
+                continue;
+            }
+            String text = entry.getContent() == null ? "" : entry.getContent().toLowerCase();
+            return text.contains("any questions for us") || text.contains("any questions about the role");
+        }
+        return false;
+    }
+
+    /**
+     * A goodbye to end on, when the reply in hand is not one. Asks the model once; if that is no better, a fixed
+     * thank-you is used, because an interview that ends must end on a thank-you and not on a question.
+     * The original reply's score and topic are kept so the answer is still rated.
+     */
+    private ParsedInterviewReply askForFarewell(CandidateInterviewSchedule schedule, ParsedInterviewReply original) {
+        String text = FALLBACK_FAREWELL;
+        Integer score = original.answerScore();
+        try {
+            String reply = openAiStreamingService.chatCompletion(
+                    contextService.buildContextMessages(schedule, FINAL_REPLY_DIRECTIVE));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply parsed = replyParser.parse(reply);
+                if (parsed.closing() && !parsed.spokenText().isBlank() && !parsed.spokenText().contains("?")) {
+                    text = parsed.spokenText();
+                    if (score == null) {
+                        score = parsed.answerScore();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not get a farewell for interview {}", schedule.getId(), e);
+        }
+        return new ParsedInterviewReply(text, score, original.turnKind(), original.topic(), true);
+    }
+
     private ParsedInterviewReply askForOutstandingTopic(CandidateInterviewSchedule schedule) {
         java.util.List<String> outstanding = topicCoverage.outstanding(schedule);
         if (outstanding.isEmpty()) {
