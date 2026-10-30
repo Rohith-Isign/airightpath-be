@@ -97,6 +97,42 @@ class TranscriptionSanitizerTest {
 		assertEquals("", TranscriptionSanitizer.clean(response));
 	}
 
+	/** The "Thank you." Whisper tacks on after the speech has stopped, with only a little doubt in its numbers. */
+	@Test
+	void aStraySignOffAfterRealSpeechIsDropped() {
+		JsonNode response = response(
+				speech("I have worked on Java backend services for three years."),
+				segment("Thank you.", 0.25, -0.4, 1.0, 5, 6));
+
+		assertEquals("I have worked on Java backend services for three years.",
+				TranscriptionSanitizer.clean(response));
+	}
+
+	@Test
+	void aSignOffAloneIsNotAnAnswerOverARoomTone() {
+		assertEquals("", TranscriptionSanitizer.clean(response(segment("Thank you.", 0.3, -0.3, 1.0, 0, 2))));
+	}
+
+	@Test
+	void aConfidentThankYouAfterAnAnswerIsKept() {
+		JsonNode response = response(
+				speech("That is how I would design it."),
+				segment("Thank you.", 0.02, -0.15, 1.0, 5, 6));
+
+		assertEquals("That is how I would design it. Thank you.", TranscriptionSanitizer.clean(response));
+	}
+
+	@Test
+	void aSignOffInTheMiddleOfAnAnswerIsLeftAlone() {
+		JsonNode response = response(
+				speech("First part of the answer."),
+				segment("Thank you.", 0.25, -0.4, 1.0, 5, 6),
+				segment("Second part of the answer.", 0.02, -0.3, 1.4, 6, 9));
+
+		assertEquals("First part of the answer. Thank you. Second part of the answer.",
+				TranscriptionSanitizer.clean(response));
+	}
+
 	// ── What must be kept ─────────────────────────────────────────────
 
 	@Test

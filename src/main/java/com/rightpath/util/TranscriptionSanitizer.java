@@ -145,7 +145,23 @@ public final class TranscriptionSanitizer {
 			"shhh",
 			"peace",
 			"see you next time",
-			"see you soon");
+			"see you soon",
+			// Seen appended to, or standing in for, an answer over a quiet microphone. Whole-segment matches only.
+			"thank you for joining us",
+			"thanks for joining us",
+			"thank you for joining",
+			"thanks for joining",
+			"thank you for watching this video",
+			"thank you for listening",
+			"thanks for listening",
+			"i will see you in the next video",
+			"see you in the next one",
+			"bye for now",
+			"music",
+			"applause",
+			"laughter",
+			"silence",
+			"blank audio");
 
 	/**
 	 * Generic sign-offs that are real speech about as often as they are not.
@@ -157,7 +173,7 @@ public final class TranscriptionSanitizer {
 	 */
 	private static final Set<String> WEAK_SIGN_OFFS = Set.of(
 			"thank you",
-			"thank you very much",
+			"thank you very much", "thank you so much", "thank you for your time",
 			"thanks",
 			"bye",
 			"bye bye",
@@ -214,8 +230,14 @@ public final class TranscriptionSanitizer {
 		List<double[]> spans = new ArrayList<>();
 		List<String> rejected = new ArrayList<>();
 
-		for (JsonNode segment : segments) {
+		for (int i = 0; i < segments.size(); i++) {
+			JsonNode segment = segments.get(i);
 			String reason = rejectionReason(segment);
+			// The first and last segments of a recording are where Whisper tacks on a stray sign-off after the
+			// speech has stopped, so they are held to a stricter standard than a segment in the middle.
+			if (reason == null && (i == 0 || i == segments.size() - 1)) {
+				reason = edgeSignOffReason(segment);
+			}
 			String trimmed = segment.path("text").asText("").trim();
 			if (reason != null) {
 				rejected.add("\"" + trimmed + "\" — " + reason);
@@ -313,6 +335,40 @@ public final class TranscriptionSanitizer {
 			return "stock phrase over near-silence (no_speech_prob " + noSpeech + ")";
 		}
 
+		return null;
+	}
+
+	/**
+	 * Above this, a sign-off at the edge of a recording has some doubt about it.
+	 *
+	 * <p>A candidate really saying "thank you" at the end of an answer is decoded confidently (avg_logprob close
+	 * to zero, no_speech_prob near zero). The invented one, said over the tail of room tone, is not.</p>
+	 */
+	private static final double EDGE_SIGN_OFF_NO_SPEECH = 0.2;
+	private static final double EDGE_SIGN_OFF_POOR_DECODE = -0.5;
+
+	/**
+	 * Why a stock sign-off at the start or end of the recording is not the candidate, or null if it may be.
+	 *
+	 * <p>Only a whole segment of a stock phrase, and only with some doubt in the statistics. Words that share a
+	 * segment with real speech are never touched, and a segment with no statistics is kept.</p>
+	 */
+	private static String edgeSignOffReason(JsonNode segment) {
+		String normalised = normalise(segment.path("text").asText(""));
+		if (!WEAK_SIGN_OFFS.contains(normalised)) {
+			return null;
+		}
+		JsonNode noSpeechNode = segment.path("no_speech_prob");
+		JsonNode avgLogprobNode = segment.path("avg_logprob");
+		if (noSpeechNode.isMissingNode() || avgLogprobNode.isMissingNode()) {
+			return null;
+		}
+		double noSpeech = noSpeechNode.asDouble(0);
+		double avgLogprob = avgLogprobNode.asDouble(0);
+		if (noSpeech > EDGE_SIGN_OFF_NO_SPEECH || avgLogprob < EDGE_SIGN_OFF_POOR_DECODE) {
+			return "stray sign-off at the edge of the recording (no_speech_prob " + noSpeech
+					+ ", avg_logprob " + avgLogprob + ")";
+		}
 		return null;
 	}
 
