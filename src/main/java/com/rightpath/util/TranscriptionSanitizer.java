@@ -1,10 +1,12 @@
 package com.rightpath.util;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.zip.Deflater;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -250,7 +252,15 @@ public final class TranscriptionSanitizer {
 			spans.add(new double[] { segment.path("start").asDouble(0), segment.path("end").asDouble(0) });
 		}
 
-		return new Sanitized(String.join(" ", kept).trim(), spans, rejected);
+		String joined = String.join(" ", kept).trim();
+		// A loop can be spread across several segments, each of which looks ordinary on its own, so the joined
+		// text is judged as well. Nothing in it is speech, so no word timestamp is kept either: the one span that
+		// no real word falls inside makes isWithin() reject them all, where an empty list would keep them all.
+		if (isRepetitionLoop(joined)) {
+			rejected.add("\"" + joined + "\" — repetition loop across the recording");
+			return new Sanitized("", List.of(new double[] { -1, -1 }), rejected);
+		}
+		return new Sanitized(joined, spans, rejected);
 	}
 
 	/** The comparison form used to spot the same text arriving twice in a row. */
@@ -303,6 +313,14 @@ public final class TranscriptionSanitizer {
 
 		if (SUBTITLE_ARTEFACTS.contains(normalised)) {
 			return "subtitle artefact";
+		}
+
+		if (isRepetitionLoop(segment.path("text").asText(""))) {
+			return "repetition loop (the same phrase over and over)";
+		}
+
+		if (isMostlyNonLatin(segment.path("text").asText(""))) {
+			return "not English (the interview is in English, and this is another script)";
 		}
 
 		double compressionRatio = segment.path("compression_ratio").asDouble(0);
@@ -374,10 +392,137 @@ public final class TranscriptionSanitizer {
 
 	private static String cleanWithoutSegments(String text) {
 		String normalised = normalise(text);
-		if (normalised.isEmpty() || SUBTITLE_ARTEFACTS.contains(normalised)) {
+		if (normalised.isEmpty() || SUBTITLE_ARTEFACTS.contains(normalised) || isRepetitionLoop(text)
+				|| isMostlyNonLatin(text)) {
 			return "";
 		}
 		return text.trim();
+	}
+
+	// ── Not English ─────────────────────────────────────────────────────
+
+	/** Share of letters outside the Latin alphabet above which a segment is not English. */
+	private static final double NON_LATIN_SHARE = 0.5;
+
+	/**
+	 * Whether most of the letters are in another script: Cyrillic, Arabic, Devanagari, CJK and so on.
+	 *
+	 * <p>The language is already fixed to English in the request, but on room noise Whisper still emits text in
+	 * other scripts, which is never a candidate answering an English interview. Latin-alphabet words in another
+	 * language cannot be told apart this way and are left alone; a code answer or an unusual name inside a
+	 * sentence in English is a few letters, nowhere near half.</p>
+	 */
+	static boolean isMostlyNonLatin(String text) {
+		if (text == null) {
+			return false;
+		}
+		int letters = 0;
+		int nonLatin = 0;
+		for (int i = 0; i < text.length();) {
+			int codePoint = text.codePointAt(i);
+			i += Character.charCount(codePoint);
+			if (!Character.isLetter(codePoint)) {
+				continue;
+			}
+			letters++;
+			if (Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.LATIN) {
+				nonLatin++;
+			}
+		}
+		return letters > 0 && nonLatin >= letters * NON_LATIN_SHARE;
+	}
+
+	// ── Repetition loops ────────────────────────────────────────────────
+
+	/** Fewer words than this cannot be told from someone emphasising a point. */
+	private static final int LOOP_MIN_WORDS = 8;
+
+	/** Longest phrase looked for. The loop in the field was nine words. */
+	private static final int LOOP_MAX_PHRASE = 12;
+
+	/** Share of the words that must sit inside repeats before the text is called a loop. */
+	private static final double LOOP_COVERAGE = 0.5;
+
+	/**
+	 * Deflate ratio above which a long text is a loop even where small variations broke up the exact repeats.
+	 * Ordinary speech compresses to about 1.5 to 2.2; Whisper's own segment check uses 2.4.
+	 */
+	private static final double LOOP_COMPRESSION = 2.6;
+	private static final int LOOP_COMPRESSION_MIN_WORDS = 40;
+
+	/**
+	 * Whether the text is one phrase repeated over and over, which Whisper does on low-level noise.
+	 *
+	 * <p>It is the other thing it makes up besides stock sign-offs: left to run, it loops a sentence ("I'm going
+	 * to go to the gym and then...") for the length of the recording. The per-segment statistics do not catch it
+	 * when the loop is spread over several segments, so this reads the words themselves. Nobody repeats a phrase of
+	 * two to twelve words three or more times in a row for most of an answer.</p>
+	 */
+	static boolean isRepetitionLoop(String text) {
+		String normalised = normalise(text);
+		if (normalised.isEmpty()) {
+			return false;
+		}
+		String[] words = normalised.split(" ");
+		if (words.length < LOOP_MIN_WORDS) {
+			return false;
+		}
+
+		boolean[] covered = new boolean[words.length];
+		for (int length = 1; length <= LOOP_MAX_PHRASE; length++) {
+			// A single word repeated is easier to say on purpose ("no, no, no"), so it takes more of them.
+			int minRepeats = length == 1 ? 6 : 3;
+			int i = 0;
+			while (i + length <= words.length) {
+				int repeats = 1;
+				while (matchesAt(words, i, i + repeats * length, length)) {
+					repeats++;
+				}
+				if (repeats >= minRepeats) {
+					for (int w = i; w < i + repeats * length; w++) {
+						covered[w] = true;
+					}
+					i += repeats * length;
+				} else {
+					i++;
+				}
+			}
+		}
+		int coveredCount = 0;
+		for (boolean c : covered) {
+			if (c) {
+				coveredCount++;
+			}
+		}
+		if (coveredCount >= words.length * LOOP_COVERAGE) {
+			return true;
+		}
+		return words.length >= LOOP_COMPRESSION_MIN_WORDS && deflateRatio(normalised) > LOOP_COMPRESSION;
+	}
+
+	/** Whether the {@code length} words at {@code from} are the same as the ones at {@code start}. */
+	private static boolean matchesAt(String[] words, int start, int from, int length) {
+		if (from + length > words.length) {
+			return false;
+		}
+		for (int k = 0; k < length; k++) {
+			if (!words[start + k].equals(words[from + k])) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** Bytes in over bytes out of zlib, the measure Whisper itself calls compression_ratio. */
+	private static double deflateRatio(String text) {
+		byte[] input = text.getBytes(StandardCharsets.UTF_8);
+		Deflater deflater = new Deflater();
+		deflater.setInput(input);
+		deflater.finish();
+		byte[] buffer = new byte[input.length + 64];
+		int compressed = deflater.deflate(buffer);
+		deflater.end();
+		return compressed == 0 ? 0 : (double) input.length / compressed;
 	}
 
 	/** Lowercased, stripped of punctuation and collapsed, for comparison only. */

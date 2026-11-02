@@ -290,4 +290,58 @@ class TranscriptionSanitizerTest {
 
 		assertEquals("I designed the service with a message queue", TranscriptionSanitizer.sanitize(node).text());
 	}
+
+	@Test
+	void aPhraseLoopedAcrossTheWholeRecordingIsDropped() throws Exception {
+		String loop = "I'm going to go to the gym and then ".repeat(12);
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech(loop) + "]}");
+
+		TranscriptionSanitizer.Sanitized result = TranscriptionSanitizer.sanitize(json);
+
+		assertEquals("", result.text());
+	}
+
+	@Test
+	void aLoopSplitOverSeveralOrdinaryLookingSegmentsIsDropped() throws Exception {
+		String half = "I'm going to go to the gym and then ".repeat(2);
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech(half) + "," + speech(half) + "," + speech(half)
+				+ "]}");
+
+		TranscriptionSanitizer.Sanitized result = TranscriptionSanitizer.sanitize(json);
+
+		assertEquals("", result.text());
+		assertFalse(TranscriptionSanitizer.isWithin(result.keptSpans(), 1, 2));
+	}
+
+	@Test
+	void aLoopWithNoSegmentStatisticsIsDropped() throws Exception {
+		String loop = "I'm going to go to the gym and then ".repeat(10);
+		JsonNode json = MAPPER.readTree("{\"text\": \"" + loop + "\"}");
+
+		assertEquals("", TranscriptionSanitizer.sanitize(json).text());
+	}
+
+	@Test
+	void aRealAnswerThatRepeatsAPhraseOnceOrTwiceIsKept() throws Exception {
+		String answer = "I would use a hash map here because lookups are constant time, and again, a hash map keeps "
+				+ "the code simple, so a hash map is what I would reach for first.";
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech(answer) + "]}");
+
+		assertEquals(answer, TranscriptionSanitizer.sanitize(json).text());
+	}
+
+	@Test
+	void textInAnotherScriptIsDropped() throws Exception {
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech("\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440") + "]}");
+
+		assertEquals("", TranscriptionSanitizer.sanitize(json).text());
+	}
+
+	@Test
+	void anEnglishAnswerWithACodeSymbolOrAnAccentedNameIsKept() throws Exception {
+		String answer = "I would ask Jos\u00e9 to review the \u03bb expression in the stream pipeline first.";
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech(answer) + "]}");
+
+		assertEquals(answer, TranscriptionSanitizer.sanitize(json).text());
+	}
 }
