@@ -11,7 +11,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.rightpath.dto.AtsResultDto;
 import com.rightpath.service.impl.ATSServiceImpl;
-import com.rightpath.service.impl.EmailServiceImpl;
 
 @RestController
 @RequestMapping("/api")
@@ -19,11 +18,9 @@ public class ATSController {
 
     private static final Logger logger = LoggerFactory.getLogger(ATSController.class);
     private final ATSServiceImpl atsService;
-    private final EmailServiceImpl emailService;
 
-    public ATSController(ATSServiceImpl atsService, EmailServiceImpl emailService) {
+    public ATSController(ATSServiceImpl atsService) {
         this.atsService = atsService;
-        this.emailService = emailService;
     }
 
     /**

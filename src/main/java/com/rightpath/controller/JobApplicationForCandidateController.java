@@ -315,6 +315,7 @@ public class JobApplicationForCandidateController {
                 sendWebSocketNotification(email, jobPrefix, "SHORTLISTED", "Candidate shortlisted");
                 sent.add(email);
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 failed.add(Map.of("email", email, "reason", e.getMessage() == null ? "Unknown error" : e.getMessage()));
             }
         }
@@ -392,9 +393,11 @@ public class JobApplicationForCandidateController {
                 applicationForCandidateService.sendAcknowledgementMailAndUpdateStatus(jobPrefix, email, examSlot);
                 sendWebSocketNotification(email, jobPrefix, "CONFIRMATION_SENT", "Confirmation email sent to candidate");
             } catch (IllegalStateException e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
                 hasValidationError = true;
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
             }
         }
@@ -436,9 +439,11 @@ public class JobApplicationForCandidateController {
                 applicationForCandidateService.sendReconfirmationMail(jobPrefix, email);
                 sendWebSocketNotification(email, jobPrefix, "RECONFIRMATION_SENT", "Reconfirmation mail sent with exam details");
             } catch (IllegalStateException e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
                 hasValidationError = true;
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
             }
         }
@@ -466,9 +471,11 @@ public class JobApplicationForCandidateController {
                 applicationForCandidateService.sendRejectionMail(jobPrefix, email);
                 sendWebSocketNotification(email, jobPrefix, "REJECTED", "Application rejected with notification sent");
             } catch (IllegalStateException e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
                 hasValidationError = true;
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
             }
         }
@@ -511,9 +518,11 @@ public class JobApplicationForCandidateController {
                 applicationForCandidateService.sendSuccessMail(jobPrefix, email);
                 sendWebSocketNotification(email, jobPrefix, "SELECTED", "Candidate selected successfully");
             } catch (IllegalStateException e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
                 hasValidationError = true;
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
             }
         }
@@ -541,9 +550,11 @@ public class JobApplicationForCandidateController {
                 applicationForCandidateService.sendFailureMail(jobPrefix, email);
                 sendWebSocketNotification(email, jobPrefix, "REJECTED", "Candidate rejected after evaluation");
             } catch (IllegalStateException e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
                 hasValidationError = true;
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
             }
         }
@@ -587,6 +598,7 @@ public class JobApplicationForCandidateController {
                 sendWebSocketNotification(email, jobPrefix, "EXAM_SENT", "Exam link sent to candidate");
                 sent.add(email);
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 failed.add(Map.of("email", email, "reason", e.getMessage() == null ? "Unknown error" : e.getMessage()));
             }
         }
