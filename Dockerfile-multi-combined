@@ -1,7 +1,0 @@
-FROM rprighpathacr1.azurecr.io/rightpath-app-backend-multi-standalone:v1a
-WORKDIR /app
-COPY target/rightpath.jar rightpath.jar
-RUN chmod 666 rightpath.jar
-EXPOSE 8081 
-
-ENTRYPOINT ["java","-jar","rightpath.jar"]
