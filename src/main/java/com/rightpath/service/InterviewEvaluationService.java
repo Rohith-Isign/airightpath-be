@@ -130,9 +130,12 @@ public class InterviewEvaluationService {
         // marking it down for technical depth it was never meant to ask about.
         transcript.append("Round: ").append(schedule.getEffectiveRound().getDisplayName()).append("\n\n");
 
+        // Each question is numbered as it appears, so the grader can say which ones an area's score rests on and the
+        // results page can show them. The count is of interviewer turns in order, the same count the page makes.
+        int questionNumber = 0;
         for (VoiceConversationEntry entry : entries) {
             String speaker = switch (entry.getRole()) {
-                case INTERVIEWER -> schedule.getInterviewerName();
+                case INTERVIEWER -> schedule.getInterviewerName() + " (Question " + (++questionNumber) + ")";
                 case CANDIDATE -> "Candidate";
                 case SYSTEM -> "System";
             };
@@ -275,6 +278,10 @@ public class InterviewEvaluationService {
                 produces the expected output is a strong answer (8-10 for the programming and problem-solving areas it
                 demonstrates) even if the spoken explanation was brief; never score it down for answers to other
                 questions. Score down only for wrong output, errors, or code that was never run.
+                IMPORTANT: Each interviewer line in the transcript is numbered ("Question 3"). For every category, list in
+                "questionNumbers" the numbers of the interviewer questions that bear on it: the ones its score and
+                feedback are based on. A question may count toward more than one category. Use an empty list for a
+                category that was never asked about, and say so in its feedback. Use only numbers that appear.
                 IMPORTANT: Each category's "feedback" must be 2-3 plain sentences that cite what the candidate actually
                 said: what they got right, where they fell short, and what they should do to improve.
                 IMPORTANT: "overallScore" should be consistent with the category scores and their weights.
@@ -345,6 +352,21 @@ public class InterviewEvaluationService {
     private String textOrNull(JsonNode node, String field) {
         JsonNode value = node.path(field);
         return value.isMissingNode() || value.isNull() ? null : value.asText();
+    }
+
+    /** The question numbers a category cites, or null when it cites none at all (an older or non-compliant reply). */
+    private List<Integer> questionNumbersOf(JsonNode scoreNode) {
+        JsonNode numbers = scoreNode.path("questionNumbers");
+        if (!numbers.isArray()) {
+            return null;
+        }
+        List<Integer> result = new ArrayList<>();
+        for (JsonNode number : numbers) {
+            if (number.canConvertToInt() && number.asInt() > 0 && !result.contains(number.asInt())) {
+                result.add(number.asInt());
+            }
+        }
+        return result;
     }
 
     /** Keeps a stated confidence inside 0..1 — models do return 85 for "85%". */
@@ -442,6 +464,7 @@ public class InterviewEvaluationService {
                             .score(scoreNode.path("score").asDouble())
                             .weight(scoreNode.path("weight").asDouble())
                             .feedback(textOrNull(scoreNode, "feedback"))
+                            .questionNumbers(questionNumbersOf(scoreNode))
                             .build());
                 }
             }

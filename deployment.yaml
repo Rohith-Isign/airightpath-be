@@ -44,6 +44,18 @@ spec:
         #   value: "<redis-host>"
         # - name: SPRING_DATA_REDIS_PORT
         #   value: "6379"
+        # The same Redis switch also shares interview state (answer de-duplication, audio chunk
+        # numbering) between pods; with it off that state is per pod (see SharedStateStore).
+        # MySQL read replica: read-only transactions are routed to it, everything else stays on the
+        # primary (see ReadReplicaDataSourceConfig). Off unless enabled.
+        # - name: APP_DATASOURCE_REPLICA_ENABLED
+        #   value: "true"
+        # - name: APP_DATASOURCE_REPLICA_JDBC_URL
+        #   value: "jdbc:mysql://<replica-host>:3306/Rightpath?useSSL=true"
+        # - name: APP_DATASOURCE_REPLICA_USERNAME
+        #   value: "<replica-user>"
+        # - name: APP_DATASOURCE_REPLICA_PASSWORD
+        #   valueFrom: { secretKeyRef: { name: <secret>, key: <key> } }
                  
       volumes:
       - name: backend-config-volume

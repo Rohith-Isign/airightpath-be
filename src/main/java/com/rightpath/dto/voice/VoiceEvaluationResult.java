@@ -51,6 +51,14 @@ public class VoiceEvaluationResult {
         private double score;
         private double weight;
         private String feedback;
+
+        /**
+         * The interviewer's questions this score rests on, by the number each carries in the transcript the grader
+         * was shown ("Question 3"). The results page turns them into "asked, answered, skipped" for the area and
+         * lists them. Null on an evaluation graded before this was asked for; empty when the area was never asked
+         * about.
+         */
+        private List<Integer> questionNumbers;
     }
 
     @Data

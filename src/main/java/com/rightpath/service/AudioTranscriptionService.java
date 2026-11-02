@@ -1,8 +1,8 @@
 package com.rightpath.service;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +10,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import com.rightpath.service.state.SharedStateStore;
 import com.rightpath.util.TranscriptionResult;
 import com.rightpath.util.TranscriptionSanitizer;
 
@@ -21,19 +22,28 @@ public class AudioTranscriptionService {
     private final OpenAiStreamingService openAiStreamingService;
     private final SimpMessagingTemplate messagingTemplate;
 
+    private static final Duration LAST_PUBLISHED_TTL = Duration.ofHours(2);
+
     /**
-     * The last text published for each interview, to catch the same words arriving again.
+     * Holds the last text published for each interview, to catch the same words arriving again. Shared
+     * across pods because consecutive chunks of one interview need not reach the same replica.
      *
      * <p>Fed a fan, a held breath or room tone chunk after chunk, Whisper tends to answer with the same
      * invented line each time ("I love you" a hundred times in one transcript). Real speech does not repeat
      * a whole four-second chunk word for word, so an identical text straight after itself is dropped.</p>
      */
-    private final Map<Long, String> lastPublished = new ConcurrentHashMap<>();
+    private final SharedStateStore sharedState;
 
     public AudioTranscriptionService(OpenAiStreamingService openAiStreamingService,
-                                     SimpMessagingTemplate messagingTemplate) {
+                                     SimpMessagingTemplate messagingTemplate,
+                                     SharedStateStore sharedState) {
+        this.sharedState = sharedState;
         this.openAiStreamingService = openAiStreamingService;
         this.messagingTemplate = messagingTemplate;
+    }
+
+    private static String lastPublishedKey(Long scheduleId) {
+        return "last-transcript:" + scheduleId;
     }
 
     @Async("transcriptionExecutor")
@@ -45,7 +55,7 @@ public class AudioTranscriptionService {
             TranscriptionResult result = openAiStreamingService.transcribe(audioData, filename);
 
             String comparable = result.getText() == null ? "" : TranscriptionSanitizer.comparable(result.getText());
-            if (comparable.contains(" ") && comparable.equals(lastPublished.get(scheduleId))) {
+            if (comparable.contains(" ") && comparable.equals(sharedState.get(lastPublishedKey(scheduleId)).orElse(null))) {
                 log.info("Dropped chunk {} for schedule {}: the same words as the chunk before (\"{}\")",
                         chunkIndex, scheduleId, result.getText());
                 publishDone(scheduleId, chunkIndex);
@@ -53,7 +63,7 @@ public class AudioTranscriptionService {
             }
 
             if (result.getText() != null && !result.getText().isBlank()) {
-                lastPublished.put(scheduleId, comparable);
+                sharedState.set(lastPublishedKey(scheduleId), comparable, LAST_PUBLISHED_TTL);
                 Map<String, Object> message = new HashMap<>();
                 message.put("text", result.getText());
                 message.put("words", result.getWords());
