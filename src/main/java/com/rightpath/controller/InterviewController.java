@@ -45,7 +45,6 @@ import com.rightpath.dto.voice.VoiceStartResponse;
 import com.rightpath.entity.CandidateInterviewSchedule;
 import com.rightpath.entity.ProctoringEvent;
 import com.rightpath.entity.RoomVerificationSession;
-import com.rightpath.entity.VoiceConversationEntry;
 import com.rightpath.enums.AttemptStatus;
 import com.rightpath.enums.InterviewResult;
 import com.rightpath.repository.CandidateInterviewScheduleRepository;

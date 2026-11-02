@@ -17,7 +17,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -90,9 +89,6 @@ public class JobApplicationForCandidateServiceImpl implements JobApplicationForC
 
 
 
-    @Autowired
-    private JavaMailSender mailSender;
-
     public JobApplicationForCandidateServiceImpl(JobApplicationForCandidateRepository applicationForCandidateRepository,
 			UsersRepository usersRepository, JobPostRepository jobPostRepository,@Value("${app.base.url}")  String baseUrl) {
 		super();
@@ -102,14 +98,6 @@ public class JobApplicationForCandidateServiceImpl implements JobApplicationForC
 		this.baseUrl=baseUrl;
 	}
 
-    
-    private String getLogoHtml() {
-        return """
-            <div style='text-align: center; margin-bottom: 20px;'>
-                <img src='cid:isigntech-logo' alt='Company Logo' style='height: 60px;'/>
-            </div>
-            """;
-    }
     
     @Override
     public void applyForJob(JobApplicationForCandidateDTO dto) {

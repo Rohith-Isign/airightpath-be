@@ -54,12 +54,8 @@ import com.rightpath.service.VoiceInterviewService;
 @Service
 public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 	
-	@Autowired
-	private InterviewService interviewService;
-
     private static final Logger log = LoggerFactory.getLogger(VoiceInterviewServiceImpl.class);
 
-    private static final String INTERVIEW_COMPLETE_MARKER = "[INTERVIEW_COMPLETE]";
     private static final java.util.regex.Pattern QUESTION_TYPE_TAG_PATTERN =
             java.util.regex.Pattern.compile("\\[(CODING|THEORY|NON-TECH)]\\s*", java.util.regex.Pattern.CASE_INSENSITIVE);
 
@@ -1055,17 +1051,6 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     Map.of("isComplete", true, "terminated", true, "reason", "Interview timed out")
             );
         }
-    }
-
-    private void saveInterviewerResponse(CandidateInterviewSchedule schedule, String response) {
-        VoiceConversationEntry entry = VoiceConversationEntry.builder()
-                .interviewSchedule(schedule)
-                .role(ConversationRole.INTERVIEWER)
-                .content(response)
-                .build();
-        entryRepository.save(entry);
-        schedule.incrementQuestionsAsked();
-        scheduleRepo.save(schedule);
     }
 
     private void sendFiller(Long scheduleId, String filler) {

@@ -31,9 +31,7 @@ import com.rightpath.dto.ScreeningResponseDTO;
 import com.rightpath.dto.ScreeningResultDTO;
 import com.rightpath.entity.JobApplicationForCandidate;
 import com.rightpath.repository.JobApplicationForCandidateRepository;
-import com.rightpath.rbac.PermissionName;
 import com.rightpath.service.JobApplicationForCandidateService;
-import com.rightpath.service.impl.EmailServiceImpl;
 import com.rightpath.util.BusinessSchedule;
 
 @RestController
@@ -52,9 +50,6 @@ public class JobApplicationForCandidateController {
 
     @Autowired
     private SimpMessagingTemplate messagingTemplate;
-
-    @Autowired
-    private EmailServiceImpl emailService;
 
     /** Parses and validates scheduled slots against the business clock (IST). */
     @Autowired

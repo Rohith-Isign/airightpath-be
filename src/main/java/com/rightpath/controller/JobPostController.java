@@ -15,7 +15,6 @@ import com.rightpath.dto.JobPostDeletionDTO;
 import com.rightpath.dto.JobPostSearchRequest;
 import com.rightpath.dto.JobStatusCountsDTO;
 import com.rightpath.entity.JobPost;
-import com.rightpath.rbac.PermissionName;
 import com.rightpath.service.JobPostService;
 
 import jakarta.validation.Valid;

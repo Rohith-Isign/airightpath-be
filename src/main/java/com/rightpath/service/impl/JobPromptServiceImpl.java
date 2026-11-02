@@ -4,7 +4,6 @@ import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.rightpath.dto.JobPromptRequest;
@@ -17,7 +16,6 @@ import com.rightpath.repository.JobPromptRepository;
 import com.rightpath.service.DefaultPrompts;
 import com.rightpath.service.JobPromptService;
 
-import lombok.RequiredArgsConstructor;
 
 @Service
 public class JobPromptServiceImpl implements JobPromptService {
