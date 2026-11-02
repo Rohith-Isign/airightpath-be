@@ -22,6 +22,7 @@ import com.rightpath.repository.CandidateInterviewScheduleRepository;
 import com.rightpath.repository.JobPromptRepository;
 import com.rightpath.repository.VoiceConversationEntryRepository;
 import com.rightpath.util.EvaluationCategoryFormatter;
+import com.rightpath.util.EvaluationScoreReconciler;
 import com.rightpath.util.PromptInjectionGuard;
 import com.rightpath.util.PromptPlaceholderResolver;
 
@@ -140,7 +141,8 @@ public class InterviewEvaluationService {
 
         // Build evaluation prompt for this job including categories & transcript
         String prompt = buildEvaluationPrompt(schedule.getJobPrefix(), schedule.getEffectiveRound(),
-                transcript.toString(), schedule.getCompletionReason(), schedule.getTotalQuestionsAsked());
+                transcript.toString(), schedule.getCompletionReason(), schedule.getTotalQuestionsAsked(),
+                interviewFacts(entries));
 
         List<Map<String, String>> messages = List.of(
                 Map.of("role", "system", "content", "You are an expert interview evaluator. Always respond with valid JSON only."),
@@ -151,6 +153,15 @@ public class InterviewEvaluationService {
 
         // Parse evaluation
         VoiceEvaluationResult result = parseEvaluation(evaluationJson);
+
+        // The overall follows from the area scores and the configured weights, rather than being a separate number
+        // the model chose. See EvaluationScoreReconciler.
+        double modelOverall = EvaluationScoreReconciler.reconcile(result,
+                categoryFormatter.getCategories(schedule.getJobPrefix(), schedule.getEffectiveRound()));
+        if (Math.abs(modelOverall - result.getOverallScore()) >= 1.0) {
+            log.info("Schedule {}: the model's overall score {} was replaced by the weighted area score {}",
+                    scheduleId, modelOverall, result.getOverallScore());
+        }
 
         // Add speech analysis
         VoiceEvaluationResult.SpeechAnalysis speechAnalysis = calculateSpeechAnalysis(entries);
@@ -183,7 +194,8 @@ public class InterviewEvaluationService {
 
     private String buildEvaluationPrompt(String jobPrefix, com.rightpath.enums.InterviewRound round,
                                          String transcript,
-                                         CompletionReason completionReason, int totalQuestionsAsked) {
+                                         CompletionReason completionReason, int totalQuestionsAsked,
+                                         String facts) {
         String categorySection = categoryFormatter.buildEvaluationCategorySection(jobPrefix, round);
 
         // Try to load custom SUMMARY prompt
@@ -241,8 +253,18 @@ public class InterviewEvaluationService {
                     %s
                 }
 
+                %s
+
                 IMPORTANT: Return ONLY the JSON object, no additional text or markdown.
                 IMPORTANT: Scores must be on a 0-10 scale (not 0-100).
+                IMPORTANT: Score every category on the evidence in the transcript. Use the full range: 9-10 for
+                accurate, deep answers; 7-8 for solid answers with minor gaps; 5-6 for partial understanding; 3-4 for
+                mostly incorrect or very shallow answers; 0-2 for no relevant answer. A skipped question is a missing
+                answer, not a wrong one: never invent evidence for a category that was not asked about, and say in
+                its feedback that it was not covered.
+                IMPORTANT: Each category's "feedback" must be 2-3 plain sentences that cite what the candidate actually
+                said: what they got right, where they fell short, and what they should do to improve.
+                IMPORTANT: "overallScore" should be consistent with the category scores and their weights.
                 IMPORTANT: "confidence" is how sure you are of THIS assessment, not how the candidate came across.
                 Lower it when the transcript is short, when answers were skipped or cut off, when what was discussed
                 does not cover the categories you are scoring, or when the candidate could reasonably be read either
@@ -252,8 +274,24 @@ public class InterviewEvaluationService {
 
                 Interview Transcript:
                 %s
-                """, transcriptRules, categorySection, customInstructions, earlyTerminationContext,
+                """, transcriptRules, categorySection, facts, customInstructions, earlyTerminationContext,
                 injectionGuard.fence(transcript));
+    }
+
+    /**
+     * What the grader cannot count reliably for itself: how much was asked and how much was actually answered.
+     * Stated up front so a short or half-skipped interview is scored as the thin evidence it is.
+     */
+    private String interviewFacts(List<VoiceConversationEntry> entries) {
+        long asked = entries.stream().filter(e -> e.getRole() == ConversationRole.INTERVIEWER).count();
+        long answered = countAnswers(entries);
+        long skipped = entries.stream()
+                .filter(e -> e.getRole() == ConversationRole.CANDIDATE)
+                .filter(e -> e.getContent() != null && SKIPPED_CONTENT.equals(e.getContent().trim()))
+                .count();
+        return String.format("Interview facts: the interviewer asked %d question(s) (the first is the introduction); "
+                + "the candidate answered %d and skipped %d. Weigh how little or how much evidence that is.",
+                asked, answered, skipped);
     }
 
     /**

@@ -159,6 +159,16 @@ public class JobPromptController {
         String jobPrefix = request.getJobPrefix();
         InterviewRound round = request.getRound();
 
+        // The page refuses to save unless the weights total 100; the server says the same, so a call that does not
+        // come from the page cannot store a list that no longer means "percent of the score".
+        double totalWeight = request.getCategories().stream()
+                .mapToDouble(EvaluationCategorySaveRequest.CategoryItem::getWeight).sum();
+        boolean negative = request.getCategories().stream().anyMatch(c -> c.getWeight() < 0);
+        if (negative || Math.abs(totalWeight - 100.0) > 0.01) {
+            throw new IllegalArgumentException("Category weights must be zero or more and total exactly 100; they total "
+                    + totalWeight + ".");
+        }
+
         // Scoped to the round being edited. Reading every row and deleting
         // whatever is not in this payload would wipe the other round's list
         // every time one of them was saved.
