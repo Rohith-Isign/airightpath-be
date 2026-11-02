@@ -35,3 +35,7 @@ build/
 ### Local scratch / Eclipse workspace ###
 temp/
 .metadata/
+
+### Application logs ###
+logs/
+*.log

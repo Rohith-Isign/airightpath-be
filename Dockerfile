@@ -27,6 +27,8 @@ RUN java -version && javac -version \
 RUN groupadd -r -g 1001 appuser  && useradd -r -u 1001 -g 1001 -d /app -s /usr/sbin/nologin appuser
 
 WORKDIR /app
+# Rolling application logs (see logging.file in the profile ymls). Mount a volume here to keep them.
+RUN mkdir -p /app/logs && chown appuser:appuser /app/logs
 COPY --chown=appuser:appuser target/rightpath.jar rightpath.jar
 USER appuser
 

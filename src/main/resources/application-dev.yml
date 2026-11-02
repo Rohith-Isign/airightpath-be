@@ -114,6 +114,17 @@ rightpath:
 #   com.rightpath=DEBUG shows the access log's inbound line + all app debug.
 #   Flip org.springframework.security to DEBUG for the "Securing ..." trace.
 logging:
+  # Written to ${LOG_DIR:logs}/airightpath-dev.log and rolled daily (or at 10MB),
+  # gzipped, keeping LOG_MAX_HISTORY days (default 30) capped at 1GB in total.
+  file:
+    name: "${LOG_DIR:logs}/airightpath-dev.log"
+  logback:
+    rollingpolicy:
+      file-name-pattern: "${LOG_DIR:logs}/airightpath-dev-%d{yyyy-MM-dd}.%i.log.gz"
+      max-file-size: 10MB
+      max-history: ${LOG_MAX_HISTORY:30}
+      total-size-cap: 1GB
+      clean-history-on-start: true
   level:
     com.rightpath: DEBUG
     org.springframework.security: INFO

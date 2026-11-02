@@ -122,6 +122,17 @@ rightpath:
 #   com.rightpath=INFO keeps the one-line access log per request; no debug detail.
 #   To silence the access log entirely, set the filter logger to WARN (commented below).
 logging:
+  # Written to ${LOG_DIR:logs}/airightpath-prod.log and rolled daily (or at 10MB),
+  # gzipped, keeping LOG_MAX_HISTORY days (default 30) capped at 1GB in total.
+  file:
+    name: "${LOG_DIR:logs}/airightpath-prod.log"
+  logback:
+    rollingpolicy:
+      file-name-pattern: "${LOG_DIR:logs}/airightpath-prod-%d{yyyy-MM-dd}.%i.log.gz"
+      max-file-size: 10MB
+      max-history: ${LOG_MAX_HISTORY:30}
+      total-size-cap: 1GB
+      clean-history-on-start: true
   level:
     org.springframework.security: WARN
     org.hibernate.SQL: "OFF"
