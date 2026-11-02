@@ -136,7 +136,13 @@ public class InterviewEvaluationService {
                 case CANDIDATE -> "Candidate";
                 case SYSTEM -> "System";
             };
-            transcript.append(speaker).append(": ").append(entry.getContent()).append("\n\n");
+            transcript.append(speaker).append(": ").append(entry.getContent()).append("\n");
+            // The rating the interviewer gave each answer as it was spoken, so the grader starts from it instead of
+            // re-judging every answer cold. A coded answer that ran correctly is easy to under-rate without it.
+            if (entry.getRole() == ConversationRole.CANDIDATE && entry.getAnswerScore() != null) {
+                transcript.append("[Rated at the time: ").append(entry.getAnswerScore()).append("/10]\n");
+            }
+            transcript.append("\n");
         }
 
         // Build evaluation prompt for this job including categories & transcript
@@ -262,6 +268,13 @@ public class InterviewEvaluationService {
                 mostly incorrect or very shallow answers; 0-2 for no relevant answer. A skipped question is a missing
                 answer, not a wrong one: never invent evidence for a category that was not asked about, and say in
                 its feedback that it was not covered.
+                IMPORTANT: Answers carry "[Rated at the time: n/10]" from the interviewer. Treat those as strong
+                evidence: a category's score should sit close to the ratings of the answers that bear on it, and move
+                away from them only for a reason you state in its feedback.
+                IMPORTANT: For a coding answer, judge the [CODE] and [RUN OUTPUT] themselves. Code that is correct and
+                produces the expected output is a strong answer (8-10 for the programming and problem-solving areas it
+                demonstrates) even if the spoken explanation was brief; never score it down for answers to other
+                questions. Score down only for wrong output, errors, or code that was never run.
                 IMPORTANT: Each category's "feedback" must be 2-3 plain sentences that cite what the candidate actually
                 said: what they got right, where they fell short, and what they should do to improve.
                 IMPORTANT: "overallScore" should be consistent with the category scores and their weights.
