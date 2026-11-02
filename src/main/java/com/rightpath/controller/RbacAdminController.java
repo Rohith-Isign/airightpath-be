@@ -20,7 +20,9 @@ import com.rightpath.service.rbac.RbacAdminService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/admin/rbac")
 public class RbacAdminController {
@@ -34,6 +36,7 @@ public class RbacAdminController {
     @PostMapping("/assign-role")
     @PreAuthorize("hasAuthority('ROLE_MANAGE')")
     public ResponseEntity<ApiResponse<MessageResponse>> assignRole(@Valid @RequestBody RoleAssignmentRequest req) {
+        log.info("Assigning role {} to {}", req.role(), req.userEmail());
         rbacAdminService.assignRole(req.userEmail(), req.role());
         return ResponseEntity.ok(ApiResponse.ok(new MessageResponse("Role assigned")));
     }
@@ -41,6 +44,7 @@ public class RbacAdminController {
     @PostMapping("/remove-role")
     @PreAuthorize("hasAuthority('ROLE_MANAGE')")
     public ResponseEntity<ApiResponse<MessageResponse>> removeRole(@Valid @RequestBody RoleAssignmentRequest req) {
+        log.info("Removing role {} from {}", req.role(), req.userEmail());
         rbacAdminService.removeRole(req.userEmail(), req.role());
         return ResponseEntity.ok(ApiResponse.ok(new MessageResponse("Role removed")));
     }

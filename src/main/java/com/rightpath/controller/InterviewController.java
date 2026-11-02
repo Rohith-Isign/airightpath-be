@@ -74,8 +74,6 @@ public class InterviewController {
 	@Autowired
 	private SpeechToTextService speechToTextService;
 	@Autowired
-	private com.rightpath.service.EmailService emailService;
-	@Autowired
 	private VoiceInterviewService voiceInterviewService;
 	@Autowired
 	private ProctoringEventRepository proctoringEventRepository;
@@ -94,6 +92,7 @@ public class InterviewController {
 	@PostMapping("/assign-interview")
 	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
 	public ResponseEntity<?> assignInterview(@RequestBody AssignInterviewDTO dto) {
+	    log.info("Assigning interview for job {} to {}", dto.getJobPrefix(), dto.getEmail());
 	    CandidateInterviewSchedule schedule = interviewService.assignInterview(
 	            dto.getJobPrefix(), 
 	            dto.getEmail(),
@@ -108,6 +107,8 @@ public class InterviewController {
 	@PostMapping("/assign-interview-bulk")
 	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
 	public ResponseEntity<?> assignInterviewBulk(@RequestBody AssignInterviewBulkDTO dto) {
+	    log.info("Bulk interview assignment for job {} ({} candidates)", dto.getJobPrefix(),
+	            dto.getEmails() == null ? 0 : dto.getEmails().size());
 	    LocalDateTime assignedAt = dto.getAssignedAt() != null ? dto.getAssignedAt() : businessSchedule.now();
 
 	    List<CandidateInterviewSchedule> schedules = interviewService.assignInterviewBulk(
@@ -159,6 +160,7 @@ public class InterviewController {
 	@PreAuthorize("hasAuthority('INTERVIEW_RESULT_DELETE')")
 	public ResponseEntity<?> deleteResult(@PathVariable Long id,
 			@RequestBody DeleteInterviewResultRequest request) {
+		log.info("Removal of interview result {} requested", id);
 		CandidateInterviewSchedule removed = interviewService.deleteResult(id,
 				request == null ? null : request.getReason());
 		return ResponseEntity.ok(new CandidateInterviewScheduleDTO(
@@ -169,6 +171,7 @@ public class InterviewController {
 	@PostMapping("/results/{id}/restore")
 	@PreAuthorize("hasAuthority('INTERVIEW_RESULT_DELETE')")
 	public ResponseEntity<?> restoreResult(@PathVariable Long id) {
+		log.info("Restore of interview result {} requested", id);
 		CandidateInterviewSchedule restored = interviewService.restoreResult(id);
 		return ResponseEntity.ok(new CandidateInterviewScheduleDTO(
 				restored, interviewReviewService.find(id).orElse(null)));
@@ -222,17 +225,10 @@ public class InterviewController {
 	@PostMapping("/start")
 	@PreAuthorize("hasAuthority('INTERVIEW_START')")
 	public StartInterviewResponse start(@RequestBody StartInterviewRequest req) {
+		log.info("Interview start requested for job {} by {}", req.getJobPrefix(), req.getEmail());
 		return interviewService.start(req.getJobPrefix(), req.getEmail(), req.getResumeSummary());
 	}
 
-//	@PostMapping("/answer")
-//	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
-//	public String answerQuestion(@RequestParam Long interviewScheduleId,
-//			@RequestParam(required = false) String conversationHistory, @RequestParam boolean finalAnswer,
-//			@RequestParam String jobPrefix) {
-//		return interviewService.answer(interviewScheduleId, conversationHistory, finalAnswer, jobPrefix);
-//	}
-	
 	@PostMapping("/answer")
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
 	public String answerQuestion(@RequestParam Long interviewScheduleId,
@@ -241,6 +237,7 @@ public class InterviewController {
 	                             @RequestParam String jobPrefix,
 	                             @RequestParam(required = false) String codeContent,
 	                             @RequestParam(required = false) String codeLanguage) {
+	    log.debug("Answer received for interview {} (final={})", interviewScheduleId, finalAnswer);
 	    return interviewService.answer(interviewScheduleId, answer, finalAnswer, jobPrefix, codeContent, codeLanguage);
 	}
 
@@ -250,6 +247,7 @@ public class InterviewController {
 
 		byte[] audioBytes = file.getBytes();
 		if (audioBytes == null || audioBytes.length == 0) {
+			log.warn("Voice-to-text rejected: empty audio file");
 			throw new IllegalArgumentException("Audio file is empty");
 		}
 
@@ -260,6 +258,7 @@ public class InterviewController {
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
 	public String uploadInterviewVideo(@PathVariable Long interviewScheduleId,
 			@RequestParam("file") MultipartFile videoFile) {
+		log.info("Camera recording upload for interview {}", interviewScheduleId);
 		return interviewService.storeRecording(interviewScheduleId, videoFile);
 	}
 
@@ -267,6 +266,7 @@ public class InterviewController {
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
 	public String uploadScreenRecording(@PathVariable Long interviewScheduleId,
 			@RequestParam("file") MultipartFile screenFile) {
+		log.info("Screen recording upload for interview {}", interviewScheduleId);
 		return interviewService.storeScreenRecording(interviewScheduleId, screenFile);
 	}
 
@@ -293,6 +293,7 @@ public class InterviewController {
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
 	public String completeRecordingUpload(@PathVariable Long interviewScheduleId, @RequestParam String kind,
 			@RequestParam String uploadId, @RequestParam String blobName) {
+		log.info("Completing {} recording upload for interview {}", kind, interviewScheduleId);
 		return interviewService.completeRecordingUpload(interviewScheduleId, kind, blobName, uploadId);
 	}
 
@@ -301,6 +302,8 @@ public class InterviewController {
 	@PostMapping("/voice/start")
 	@PreAuthorize("hasAuthority('INTERVIEW_START')")
 	public ResponseEntity<VoiceStartResponse> startVoiceInterview(@RequestBody StartInterviewRequest req) {
+	    log.info("Voice interview start requested for job {} by {} (schedule {})", req.getJobPrefix(),
+	            req.getEmail(), req.getScheduleId());
 	    VoiceStartResponse response = voiceInterviewService.startVoiceInterview(
 	            req.getJobPrefix(),
 	            req.getEmail(),
@@ -314,6 +317,7 @@ public class InterviewController {
 	@PostMapping("/voice/{id}/end")
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
 	public ResponseEntity<?> endVoiceInterview(@PathVariable Long id) {
+		log.info("Voice interview {} end requested", id);
 		voiceInterviewService.endVoiceInterview(id);
 		return ResponseEntity.ok().build();
 	}
@@ -330,10 +334,10 @@ public class InterviewController {
 		return ResponseEntity.ok(voiceInterviewService.getEvaluation(id));
 	}
 
-	// Item 4: Resume endpoint
 	@GetMapping("/voice/{scheduleId}/resume")
 	@PreAuthorize("hasAuthority('INTERVIEW_START')")
 	public ResponseEntity<ResumeResponse> resumeVoiceInterview(@PathVariable Long scheduleId) {
+		log.info("Voice interview {} resume requested", scheduleId);
 		return ResponseEntity.ok(voiceInterviewService.resumeInterview(scheduleId));
 	}
 
@@ -425,25 +429,6 @@ public class InterviewController {
 		return ResponseEntity.ok().build();
 	}
 
-	// Item 16: Get full conversation transcript for a schedule
-	/**
-	 * The full transcript of one interview, oldest turn first.
-	 *
-	 * <p>Projected rather than returned as entities: the entry's schedule is a
-	 * lazy relation, and serialising it outside a transaction answered 500 for
-	 * every interview — see {@link VoiceConversationEntryDTO}.</p>
-	 */
-	/**
-	 * A playable link to one of an interview's recordings.
-	 *
-	 * <p>The schedule stores {@code s3://bucket/key}, which a browser cannot
-	 * open — reviewers clicking "Camera" or "Shared screen" got a blank tab. A
-	 * signed URL is returned rather than the bytes: a full interview's screen
-	 * recording is far too large to pass through the application, and a video
-	 * player needs range requests to seek.</p>
-	 *
-	 * @param kind {@code camera} for the webcam, {@code screen} for the shared screen
-	 */
 	@Autowired
 	private com.rightpath.repository.InterviewRecordingUploadRepository recordingUploadRepository;
 
@@ -467,6 +452,7 @@ public class InterviewController {
 			@RequestParam(value = "chunkIndex", defaultValue = "0") int chunkIndex,
 			org.springframework.security.core.Authentication authentication) throws java.io.IOException {
 		if (scheduleRepo.findByIdAndEmail(scheduleId, authentication.getName()).isEmpty()) {
+			log.warn("Audio chunk refused: interview {} is not assigned to {}", scheduleId, authentication.getName());
 			throw new org.springframework.security.access.AccessDeniedException(
 					"Interview " + scheduleId + " is not assigned to the authenticated candidate");
 		}
@@ -476,10 +462,22 @@ public class InterviewController {
 		if (audio.getSize() > MAX_ANSWER_AUDIO_BYTES) {
 			throw new IllegalArgumentException("The audio is larger than " + (MAX_ANSWER_AUDIO_BYTES / (1024 * 1024)) + " MB");
 		}
+		log.debug("Audio chunk {} ({} bytes) received for interview {}", chunkIndex, audio.getSize(), scheduleId);
 		audioTranscriptionService.transcribeAsync(scheduleId, audio.getBytes(), chunkIndex);
 		return ResponseEntity.accepted().build();
 	}
 
+	/**
+	 * A playable link to one of an interview's recordings.
+	 *
+	 * <p>The schedule stores {@code s3://bucket/key}, which a browser cannot
+	 * open — reviewers clicking "Camera" or "Shared screen" got a blank tab. A
+	 * signed URL is returned rather than the bytes: a full interview's screen
+	 * recording is far too large to pass through the application, and a video
+	 * player needs range requests to seek.</p>
+	 *
+	 * @param kind {@code camera} for the webcam, {@code screen} for the shared screen
+	 */
 	@GetMapping("/{scheduleId}/recording")
 	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
 	public ResponseEntity<Map<String, Object>> getRecordingLink(@PathVariable Long scheduleId,
@@ -497,6 +495,7 @@ public class InterviewController {
 						: schedule.getRecordReferences();
 
 		if (stored == null || stored.isBlank()) {
+			log.warn("No {} recording stored for interview {}", recordingKind, scheduleId);
 			// A 404 rather than an empty 200: "never recorded" is a different
 			// thing from "here is a link to nothing", and the reviewer's screen
 			// says which.
@@ -590,6 +589,13 @@ public class InterviewController {
 		return ResponseEntity.ok(body);
 	}
 
+	/**
+	 * The full transcript of one interview, oldest turn first.
+	 *
+	 * <p>Projected rather than returned as entities: the entry's schedule is a
+	 * lazy relation, and serialising it outside a transaction answered 500 for
+	 * every interview — see {@link VoiceConversationEntryDTO}.</p>
+	 */
 	@GetMapping("/{scheduleId}/conversation")
 	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
 	public ResponseEntity<List<VoiceConversationEntryDTO>> getConversation(@PathVariable Long scheduleId) {
@@ -601,7 +607,6 @@ public class InterviewController {
 		return ResponseEntity.ok(transcript);
 	}
 
-	// Item 16: Get interview stats
 	@GetMapping("/stats")
 	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
 	public ResponseEntity<InterviewStatsDTO> getInterviewStats(@RequestParam(required = false) String jobPrefix,
@@ -632,6 +637,7 @@ public class InterviewController {
 						}
 						return num.length() > 0 ? Double.parseDouble(num.toString()) : 0;
 					} catch (Exception e) {
+						log.debug("Could not read overallScore for schedule {}", s.getId());
 						return 0;
 					}
 				})
@@ -657,6 +663,7 @@ public class InterviewController {
 	public ResponseEntity<?> createVerificationSession() {
 
 	    String sessionId = roomVerificationService.createSession();
+	    log.info("Room verification session created");
 
 	    return ResponseEntity.ok(
 	            Map.of("sessionId", sessionId)
@@ -669,6 +676,7 @@ public class InterviewController {
 	        @RequestParam MultipartFile image
 	) {
 
+	    log.info("Room verification image received for session {}", sessionId);
 	    roomVerificationService.verifyRoom(sessionId, image);
 
 	    return ResponseEntity.ok().build();
@@ -694,6 +702,7 @@ public class InterviewController {
 	        @RequestParam String jobPrefix,
 	        @RequestParam("file") MultipartFile file) {
 
+	    log.info("Interview questions upload for job {}", jobPrefix);
 	    interviewQuestionsService.uploadInterviewQuestions(jobPrefix, file);
 
 	    return ResponseEntity.ok(
@@ -727,6 +736,7 @@ public class InterviewController {
 	    if (totalQuestions == null || totalQuestions <= 0) {
 	        totalQuestions = 100;
 	    }
+	    log.info("Interview question refresh for job {} ({} questions)", jobPrefix, totalQuestions);
 	    interviewQuestionsService.updateInterviewQuestionsWithAI(jobPrefix, categories, totalQuestions);
 	    return ResponseEntity.ok(Map.of("message", "Interview questions updated successfully"));
 	}
@@ -771,6 +781,7 @@ public class InterviewController {
 				? "system"
 				: authentication.getName();
 
+		log.info("Interview {} review saved by {}", scheduleId, reviewer);
 		InterviewReview saved = interviewReviewService.save(
 				scheduleId,
 				reviewer,

@@ -92,29 +92,4 @@ public class ATSController {
                 matchedCount, results.size());
         return ResponseEntity.ok(results);
     }
-
-    /**
-     * Sends a rejection email to a candidate.
-     * Currently commented out for future use.
-     */
-//    @PostMapping("/send-rejection")
-//    @PreAuthorize("hasRole('ROLE_ADMIN')")
-//    public ResponseEntity<Map<String, String>> sendRejectionEmail(@RequestBody Map<String, String> payload) {
-//        String toEmail = payload.get("toEmail");
-//        String firstName = payload.get("firstName");
-//        String lastName = payload.get("lastName");
-//
-//        Map<String, String> response = new HashMap<>();
-//
-//        try {
-//            logger.info("Sending rejection email to: {}", toEmail);
-//            emailService.sendRejectionEmail(toEmail, firstName, lastName);
-//            response.put("message", "Rejection email sent to " + toEmail);
-//            return ResponseEntity.ok(response);
-//        } catch (Exception e) {
-//            logger.error("Failed to send rejection email to {}: {}", toEmail, e.getMessage());
-//            response.put("error", "Failed to send email: " + e.getMessage());
-//            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
-//        }
-//    }
 }

@@ -14,6 +14,9 @@ import com.rightpath.rbac.RoleName;
 import com.rightpath.repository.PermissionRepository;
 import com.rightpath.repository.RoleRepository;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Configuration
 public class RbacSeedConfig {
 
@@ -136,6 +139,7 @@ public class RbacSeedConfig {
                 user.getPermissions().add(get.apply(pn));
             }
             roles.save(user);
+            log.info("RBAC seed complete: {} permissions, roles SUPER_ADMIN/ADMIN/USER synced", PermissionName.values().length);
         };
     }
 }

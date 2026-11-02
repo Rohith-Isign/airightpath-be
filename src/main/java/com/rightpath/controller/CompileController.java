@@ -7,6 +7,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @RestController
 @RequestMapping("/api/compile")
 public class CompileController {
@@ -16,6 +19,7 @@ public class CompileController {
 
     @PostMapping
     public ResponseEntity<CompileResponse> compile(@RequestBody CompileRequest request) {
+        log.debug("Compile requested");
         CompileResponse response = compileService.compile(request);
         return ResponseEntity.ok(response);
     }

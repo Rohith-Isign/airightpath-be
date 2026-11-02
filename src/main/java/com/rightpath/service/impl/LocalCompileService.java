@@ -4,6 +4,8 @@ import java.util.List;
 
 import org.springframework.stereotype.Service;
 
+import lombok.extern.slf4j.Slf4j;
+
 import com.rightpath.dto.CompileRequest;
 import com.rightpath.dto.CompileResponse;
 import com.rightpath.service.CompileService;
@@ -21,6 +23,7 @@ import com.rightpath.service.impl.CodeExecutionEngine.RunCase;
  * JavaScript, C and C++, in a working directory of its own for every run and with limits on time and output, so this
  * now simply uses it.</p>
  */
+@Slf4j
 @Service
 public class LocalCompileService implements CompileService {
 
@@ -39,6 +42,7 @@ public class LocalCompileService implements CompileService {
 				List.of(RunCase.freeRun(stdin)));
 		response.setExecutionTimeMs(report.totalMs());
 
+		log.debug("Compile & run finished for language {} in {} ms", request.getLanguage(), report.totalMs());
 		if (report.compileError() != null) {
 			response.setError(report.compileError().getMessage());
 			return response;

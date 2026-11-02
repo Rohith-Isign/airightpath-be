@@ -3,10 +3,10 @@ package com.rightpath.service.impl;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.JwtParser;
-import io.jsonwebtoken.JwtParserBuilder;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Component
 public class JwtService {
 
@@ -44,7 +45,7 @@ public class JwtService {
 		String authorities = userDetails.getAuthorities().stream().map(GrantedAuthority::getAuthority)
 				.collect(Collectors.joining(","));
 
-		// Build and return the JWT token
+		log.debug("Generating JWT for {}", userDetails.getUsername());
 		return Jwts.builder().setSubject(userDetails.getUsername()).claim("authorities", authorities)
 				.setIssuedAt(new Date()).setExpiration(new Date(System.currentTimeMillis() + 654000000))
 				.signWith(getKey(), SignatureAlgorithm.HS512).compact();
@@ -100,7 +101,11 @@ public class JwtService {
 	 */
 	public Boolean validateToken(String token, String username) {
 		final String extractedUsername = extractEmailname(token);
-		return (extractedUsername.equals(username) && !isTokenExpired(token));
+		boolean valid = extractedUsername.equals(username) && !isTokenExpired(token);
+		if (!valid) {
+			log.warn("JWT validation failed for {}", username);
+		}
+		return valid;
 	}
 
 	/**

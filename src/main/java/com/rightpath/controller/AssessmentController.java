@@ -40,10 +40,12 @@ import com.rightpath.repository.ResultRepository;
 import com.rightpath.service.AssessmentService;
 
 import jakarta.persistence.EntityNotFoundException;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Controller class to handle endpoints related to Assessments.
  */
+@Slf4j
 @RestController
 @RequestMapping("/api")
 public class AssessmentController {
@@ -84,6 +86,7 @@ public class AssessmentController {
 	@PreAuthorize("hasAuthority('ASSESSMENT_UPLOAD')")
 	public ResponseEntity<Map<String, String>> uploadAssessment(@ModelAttribute AssessmentUploadDto dto) {
 		Map<String, String> response = new HashMap<>();
+		log.info("Assessment upload requested");
 		assessmentService.uploadAssessment(dto);
 		response.put("status", "success");
 		response.put("message", "Assessment uploaded successfully.");
@@ -122,7 +125,9 @@ public class AssessmentController {
         LocalDateTime parsedDeadline = LocalDateTime.parse(deadline, formatter);
 
         // Validate time range
+        log.info("Assign assessment requested for job {} by {}", jobPrefix, uploadedBy);
         if (parsedStartTime.isAfter(parsedDeadline)) {
+            log.warn("Assign assessment rejected for job {}: start time after deadline", jobPrefix);
             response.put("status", "error");
             response.put("message", "Start time must be before deadline");
             return ResponseEntity.badRequest().body(response);
@@ -154,6 +159,7 @@ public class AssessmentController {
             dto.setCodingEstimatedDurationMinutes(
                     parseCount(codingEstimatedDurationMinutes, "codingEstimatedDurationMinutes"));
         } catch (IllegalArgumentException e) {
+            log.warn("Assign assessment rejected for job {}: {}", jobPrefix, e.getMessage());
             response.put("status", "error");
             response.put("message", e.getMessage());
             return ResponseEntity.badRequest().body(response);
@@ -161,6 +167,8 @@ public class AssessmentController {
 
         // Call service
         AssignmentReportDTO report = assessmentService.assignAssessment(dto, jobPrefix);
+        log.info("Assessment assigned for job {}: {} assigned, {} not notified", jobPrefix,
+                report.getAssignedCount(), report.getNotNotifiedCount());
 
         response.put("status", report.allNotified() ? "success" : "partial");
         response.put("message", report.getMessage());
@@ -236,6 +244,7 @@ public class AssessmentController {
 			List<Assessment> assessments = assessmentService.getCandidateAssessments(candidateEmail);
 			return ResponseEntity.ok(assessments);
 		} catch (IllegalStateException e) {
+			log.warn("Could not load assessments for {}: {}", candidateEmail, e.getMessage());
 			return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
 		}
 	}
@@ -282,6 +291,7 @@ public class AssessmentController {
 	    @RequestParam(required = false) Double percentage,
 	    @RequestParam(required = false) Double totalMarks
 	) {
+	    log.info("Assessment result submitted by {} for job {} ({})", candidateEmail, jobPrefix, assessmentType);
 	    String message = com.rightpath.util.OptimisticRetry.run(() -> assessmentService.resultAssessment(
 	            candidateEmail, assessmentType, score, resultsJson, jobPrefix, assessmentId, percentage, totalMarks));
 
@@ -302,7 +312,7 @@ public class AssessmentController {
 	@PreAuthorize("hasAuthority('ASSESSMENT_SUBMIT')")
 	public ResponseEntity<Map<String, Object>> submitAssessment(@PathVariable Long id) {
 		try {
-			// Call service method to submit assessment
+			log.info("Assessment {} submit requested", id);
 			String message = com.rightpath.util.OptimisticRetry.run(() -> assessmentService.submitAssessment(id));
 
 			// Prepare success response
@@ -311,7 +321,7 @@ public class AssessmentController {
 			response.put("status", "success");
 			return ResponseEntity.ok(response);
 		} catch (EntityNotFoundException e) {
-			// Handle not found error
+			log.warn("Assessment {} not found on submit", id);
 			Map<String, Object> response = new HashMap<>();
 			response.put("message", e.getMessage());
 			response.put("status", "error");
@@ -339,27 +349,10 @@ public class AssessmentController {
 	 */
 	@Scheduled(cron = "0 0 * * * *") // Runs every hour
 	public void scheduleExpireAssessments() {
+		log.info("Running scheduled assessment expiry");
 		assessmentService.expireAssessments();
-
 	}
 
-	/**
-	 * Retrieves results based on the candidate's email.
-	 *
-	 * @param email The candidate's email address.
-	 * @return A list of Result entities.
-	 */
-//	@GetMapping("/get-results/{email}")
-//	public ResponseEntity<List<Result>> getResultsByEmail(@PathVariable("email") String email) {
-//		try {
-//			List<Result> results = assessmentService.getResultsByEmail(email);
-//
-//			return ResponseEntity.ok(results);
-//		} catch (IllegalArgumentException e) { 
-//			return ResponseEntity.badRequest().body(null);
-//		}
-//	}
-	
 	@GetMapping("/get-results")
 	public ResponseEntity<List<Result>> getResultsByEmailAndJobPrefix(
 	    @RequestParam String email,
@@ -369,6 +362,7 @@ public class AssessmentController {
 	        List<Result> results = assessmentService.getResultsByEmailAndJobPrefix(email, jobPrefix);
 	        return ResponseEntity.ok(results);
 	    } catch (IllegalArgumentException e) {
+	        log.warn("Invalid results lookup for {} / {}: {}", email, jobPrefix, e.getMessage());
 	        return ResponseEntity.badRequest().body(null);
 	    }
 	}
@@ -417,6 +411,7 @@ public class AssessmentController {
 		if (result.isPresent()) {
 			return result.map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).build());
 		} else {
+			log.warn("Result {} not found", id);
 			return ResponseEntity.status(HttpStatus.NOT_FOUND).body("No result found for the given ID.");
 		}
 	}
@@ -457,6 +452,7 @@ public class AssessmentController {
 		Map<String, Object> response = new HashMap<>();
 		if (startRaw == null || deadlineRaw == null) {
 			response.put("status", "error");
+			log.warn("Reschedule of assessment {} rejected: missing startTime/deadline", id);
 			response.put("message", "Both startTime and deadline are required.");
 			return ResponseEntity.badRequest().body(response);
 		}
@@ -467,12 +463,14 @@ public class AssessmentController {
 			start = LocalDateTime.parse(startRaw, formatter);
 			deadline = LocalDateTime.parse(deadlineRaw, formatter);
 		} catch (DateTimeParseException e) {
+			log.warn("Reschedule of assessment {} rejected: unparseable times", id);
 			response.put("status", "error");
 			response.put("message", "Times must look like yyyy-MM-ddTHH:mm.");
 			return ResponseEntity.badRequest().body(response);
 		}
 	
 		Assessment updated = assessmentService.rescheduleAssessment(id, start, deadline, notify);
+		log.info("Assessment {} rescheduled (notify={})", id, notify);
 	
 		response.put("status", "success");
 		response.put("message", notify
@@ -488,7 +486,7 @@ public class AssessmentController {
     public ResponseEntity<?> markExamAttended(@RequestBody Map<String, Object> request) {
         String candidateEmail = (String) request.get("candidateEmail");
         Long assessmentId = Long.parseLong(request.get("assessmentId").toString());
-      //  String jobPrefix = (String) request.get("jobPrefix");
+        log.info("Exam attended marked for {} on assessment {}", candidateEmail, assessmentId);
 
         LocalDateTime startedAt = assessmentService.markExamAsAttended(candidateEmail, assessmentId);
 
@@ -522,7 +520,9 @@ public class AssessmentController {
 		LocalDateTime parsedStartTime = LocalDateTime.parse(startTime, formatter);
 		LocalDateTime parsedDeadline = LocalDateTime.parse(deadline, formatter);
 
+		log.info("Assign-blob requested for job {} by {}", jobPrefix, uploadedBy);
 		if (parsedStartTime.isAfter(parsedDeadline)) {
+			log.warn("Assign-blob rejected for job {}: start time after deadline", jobPrefix);
 			response.put("status", "error");
 			response.put("message", "Start time must be before deadline");
 			return ResponseEntity.badRequest().body(response);
@@ -539,6 +539,7 @@ public class AssessmentController {
 		dto.setAssessmentType(assessmentType);
 
 		assessmentService.assignAssessmentToStorage(dto);
+		log.info("Assign-blob completed for job {}", jobPrefix);
 
 		response.put("status", "success");
 		response.put("message", "Assessments assigned with storage successfully");
@@ -587,10 +588,4 @@ public class AssessmentController {
 
 	    return ResponseEntity.ok(questions);
 	}
-
-	
-
-
-	
-	
 }

@@ -15,6 +15,9 @@ import org.springframework.web.multipart.MultipartFile;
 import com.rightpath.dto.ResumeDownload;
 import com.rightpath.service.ResumeService;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @RestController
 @RequestMapping("/api")
 public class ResumeController {
@@ -42,6 +45,7 @@ public class ResumeController {
 
         String email = authentication.getName();
 
+        log.info("Resume upload by {} for job {}", email, jobPrefix);
         resumeService.saveResume(file, email, jobPrefix);
 
         return ResponseEntity.ok("Resume uploaded successfully.");
@@ -63,6 +67,7 @@ public class ResumeController {
             @RequestParam("file") MultipartFile file,
             @RequestParam("email") String email) throws Exception {
         Map<String, String> response = new HashMap<>();
+        log.info("Resume update for {}", email);
         resumeService.updateResume(file, email);
         response.put("message", "Resume updated successfully.");
         return ResponseEntity.ok(response);
@@ -84,6 +89,7 @@ public class ResumeController {
         // (JobApplicationForCandidate.resumeData) — the same source the ATS engine
         // scores. A genuinely missing resume throws ResourceNotFoundException, which
         // the global handler maps to 404 (not the old misleading 400).
+        log.info("Resume download requested for {}", email);
         ResumeDownload resume = resumeService.getResumeForDownload(email);
 
         return ResponseEntity.ok()

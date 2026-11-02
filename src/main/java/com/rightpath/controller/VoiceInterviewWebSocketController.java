@@ -124,7 +124,7 @@ public class VoiceInterviewWebSocketController {
 
         byte[] audioData = Base64.getDecoder().decode(base64Audio);
 
-        // Item 2: Audio chunk size limit (200KB)
+        // Audio chunk size limit (200KB)
         if (audioData.length > MAX_AUDIO_CHUNK_BYTES) {
             log.warn("Audio chunk too large for schedule {}: {} bytes (max {})",
                     scheduleId, audioData.length, MAX_AUDIO_CHUNK_BYTES);
@@ -154,7 +154,7 @@ public class VoiceInterviewWebSocketController {
                 scheduleId,
                 request.getTranscript() != null ? request.getTranscript().length() : 0);
 
-        // Item 5: Message deduplication — skip dedup check for skipped questions
+        // Message deduplication — skip dedup check for skipped questions
         // (empty transcript would hash-collide across consecutive skips)
         if (!request.isSkipped() && request.getTranscript() != null) {
             String dedupKey = scheduleId + ":" + request.getTranscript().hashCode();
@@ -206,7 +206,7 @@ public class VoiceInterviewWebSocketController {
             log.info("Proctoring record for schedule {}: {} - {}", scheduleId, eventType, details);
         }
 
-        // Item 15: Save proctoring event to database. Saved whatever its
+        // Save proctoring event to database. Saved whatever its
         // severity — the recording audit is only useful because it is kept.
         try {
             ProctoringEvent event = ProctoringEvent.builder()

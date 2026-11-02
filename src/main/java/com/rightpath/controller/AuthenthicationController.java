@@ -1,12 +1,9 @@
 package com.rightpath.controller;
 
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpHeaders;
@@ -32,7 +29,6 @@ import com.rightpath.dto.UsersDto;
 import com.rightpath.rbac.RoleName;
 import com.rightpath.entity.Users;
 import com.rightpath.exceptions.InvalidRefreshTokenException;
-import com.rightpath.repository.OtpRepository;
 import com.rightpath.service.OtpService;
 import com.rightpath.service.impl.LoginService;
 import com.rightpath.service.impl.RefreshTokenService;
@@ -83,20 +79,11 @@ public class AuthenthicationController {
 		return ResponseEntity.ok(userDetailsServiceImpl.addUser(usersDto));
 	}
 
-//	/**
-//	 * Authenticate user login.
-//	 */
-//	@PostMapping("/login")
-//	public ResponseEntity<Map<String, String>> login(@Valid @RequestBody Login loginUser) {
-//		logger.info("Login attempt for email: {}", loginUser.getEmail());
-//		return ResponseEntity.ok(userDetailsServiceImpl.getLoginDetails(loginUser));
-//	}
-
 	@PostMapping("/login")
 	public ResponseEntity<ApiResponse<LoginResponse>> login(@Valid @RequestBody LoginRequest request,
 			HttpServletRequest http) {
 		var result = loginService.login(request, http);
-		logger.info("V2 login success");
+		logger.info("Login success");
 		ResponseEntity.BodyBuilder response = ResponseEntity.ok().header(HttpHeaders.SET_COOKIE,
 				result.refreshCookie().toString());
 		if (result.accessCookie() != null) {
@@ -113,12 +100,14 @@ public class AuthenthicationController {
 			token = extractCookie(http, "refresh_token");
 		}
 		if (token == null || token.isBlank()) {
+			logger.warn("Token refresh rejected: missing refresh token cookie");
 			throw new InvalidRefreshTokenException("Missing refresh token cookie");
 		}
 
 		var rotated = refreshTokenService.rotate(token, http.getRemoteAddr(), http.getHeader("User-Agent"));
 
 		AccessTokenResponse newAccess = tokenFacade.issueAccessTokenForSubject(rotated.userEmail());
+		logger.debug("Access token refreshed for {}", rotated.userEmail());
 
 		var cookie = refreshCookieFactory.build(rotated.rawToken());
 		ResponseEntity.BodyBuilder response = ResponseEntity.ok().header(HttpHeaders.SET_COOKIE, cookie.toString());
@@ -139,6 +128,7 @@ public class AuthenthicationController {
 			token = extractCookie(http, "refresh_token");
 		}
 		refreshTokenService.revokeByRawTokenIfPresent(token);
+		logger.info("User logged out");
 
 		var cleared = refreshCookieFactory.clear();
 		return ResponseEntity.ok().header(HttpHeaders.SET_COOKIE, cleared.toString())
@@ -149,6 +139,7 @@ public class AuthenthicationController {
 	@GetMapping("/me")
 	public ResponseEntity<ApiResponse<MeResponse>> me(Authentication authentication) {
 		if (authentication == null || authentication.getName() == null) {
+			logger.warn("/me called without an authenticated user");
 			return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
 					.body(new ApiResponse<>(false, null, java.time.Instant.now()));
 		}
@@ -203,9 +194,6 @@ public class AuthenthicationController {
 	}
 
 	/**
-	 * Get all non-admin users (Admin only).
-	 */
-	/**
 	 * One page of candidate accounts — everyone holding no staff role.
 	 *
 	 * <p>Paginated and ordered by email. It used to return the whole table, and
@@ -228,14 +216,6 @@ public class AuthenthicationController {
 		return ResponseEntity.ok(new PaginatedResponse<>(userDetailsServiceImpl.getCandidateUsers(pageable)));
 	}
 
-	/**
-	 * Every staff account — anyone holding ADMIN or SUPER_ADMIN.
-	 *
-	 * <p>{@code /users} above deliberately excludes administrators, so before
-	 * this there was no way to see who holds privileged access. Same
-	 * {@code USER_LIST} authority as the candidate list: whoever may enumerate
-	 * accounts may enumerate all of them.</p>
-	 */
 	/**
 	 * One page of every account, optionally filtered by role and free text.
 	 *
@@ -261,6 +241,14 @@ public class AuthenthicationController {
 				new PaginatedResponse<>(userDetailsServiceImpl.getDirectory(role, search, pageable)));
 	}
 
+	/**
+	 * Every staff account — anyone holding ADMIN or SUPER_ADMIN.
+	 *
+	 * <p>{@code /users} above deliberately excludes administrators, so before
+	 * this there was no way to see who holds privileged access. Same
+	 * {@code USER_LIST} authority as the candidate list: whoever may enumerate
+	 * accounts may enumerate all of them.</p>
+	 */
 	@GetMapping("/users/staff")
 	@PreAuthorize("hasAuthority('USER_LIST')")
 	public ResponseEntity<PaginatedResponse<UsersDto>> getStaffUsers(
@@ -291,6 +279,7 @@ public class AuthenthicationController {
 		// the registration flow's steps — no welcome mail, no OTP. Registration
 		// owns that path.
 		if (request.role() == RoleName.USER) {
+			logger.warn("Staff account creation for {} rejected: USER role not allowed", request.email());
 			return ResponseEntity.badRequest()
 					.body(Map.of("message", "Use registration to create a candidate account",
 							"status", "error"));
@@ -376,6 +365,7 @@ public class AuthenthicationController {
 	    byte[] image = userDetailsServiceImpl.getProfileImage(email);
 
 	    if (image == null) {
+	        logger.debug("No profile image for {}", email);
 	        return ResponseEntity.noContent().build();
 	    }
 

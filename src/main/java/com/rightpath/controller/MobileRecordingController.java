@@ -16,6 +16,8 @@ import com.rightpath.entity.InterviewMobilePairing;
 import com.rightpath.service.InterviewService;
 import com.rightpath.service.MobilePairingService;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * The paired phone sending its own recording, filed against the interview its
  * pairing token was registered for.
@@ -26,6 +28,7 @@ import com.rightpath.service.MobilePairingService;
  * from there, so the recording exists whether or not the live picture ever
  * reached the interview screen.</p>
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/mobile")
 public class MobileRecordingController {
@@ -54,6 +57,7 @@ public class MobileRecordingController {
 	public ResponseEntity<Map<String, String>> begin(@RequestParam String token,
 			@RequestParam(required = false) String type) {
 		InterviewMobilePairing pairing = pairingService.resolve(token);
+		log.info("Mobile recording upload started for interview {}", pairing.getInterviewScheduleId());
 		return ResponseEntity.ok(interviewService.beginRecordingUpload(pairing.getInterviewScheduleId(), "mobile", type));
 	}
 
@@ -69,6 +73,7 @@ public class MobileRecordingController {
 	@PostMapping("/recording-upload/complete")
 	public String complete(@RequestParam String token, @RequestParam String uploadId, @RequestParam String blobName) {
 		InterviewMobilePairing pairing = pairingService.resolve(token);
+		log.info("Mobile recording upload completing for interview {}", pairing.getInterviewScheduleId());
 		return interviewService.completeRecordingUpload(pairing.getInterviewScheduleId(), "mobile", blobName, uploadId);
 	}
 
@@ -78,9 +83,11 @@ public class MobileRecordingController {
 			@RequestParam(required = false) String details) {
 		InterviewMobilePairing pairing = pairingService.resolve(token);
 		if (!PHONE_EVENTS.contains(type)) {
+			log.warn("Unknown phone event '{}' for interview {}", type, pairing.getInterviewScheduleId());
 			throw new IllegalArgumentException("Unknown phone event: " + type);
 		}
 		String text = details == null ? "" : details.trim();
+		log.info("Phone event {} for interview {}", type, pairing.getInterviewScheduleId());
 		pairingService.recordEvent(pairing, type, text.length() > 500 ? text.substring(0, 500) : text);
 		if ("mobile_exited".equals(type)) {
 			// A deliberate exit: the computer's page should say so now, not after the check-ins have been quiet a minute.
@@ -108,6 +115,11 @@ public class MobileRecordingController {
 		details.append(')');
 		if (!request.isSuccess() && request.getFailureReason() != null && !request.getFailureReason().isBlank()) {
 			details.append(": ").append(request.getFailureReason().trim());
+		}
+		if (request.isSuccess()) {
+			log.info("Mobile recording saved for interview {}", pairing.getInterviewScheduleId());
+		} else {
+			log.warn("Mobile recording not saved for interview {}", pairing.getInterviewScheduleId());
 		}
 		pairingService.recordEvent(pairing, request.isSuccess() ? "recording_uploaded" : "recording_upload_failed",
 				details.toString());

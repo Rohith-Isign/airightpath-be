@@ -79,15 +79,6 @@ public class InterviewServiceImpl implements InterviewService {
 		this.emailAsyncService = emailAsyncService;
 	}
 
-//	@Override
-//	public StartInterviewResponse start(String jobPrefix, String email, String resumeSummary) {
-//
-//		String systemPrompt = jobPromptService.buildStartPrompt(jobPrefix, resumeSummary);
-//
-//		String firstQuestion = openAiService.ask(systemPrompt);
-//
-//		return new StartInterviewResponse(systemPrompt, firstQuestion);
-//	}
 	@Override
 	public StartInterviewResponse start(String jobPrefix, String email, String resumeSummary) {
 	    // fetch schedule
@@ -96,6 +87,7 @@ public class InterviewServiceImpl implements InterviewService {
 	            .orElseThrow(() -> new ResourceNotFoundException("Interview not assigned"));
 
 	    Long interviewScheduleId = schedule.getId();
+	    log.info("Starting interview: schedule={}, jobPrefix={}", interviewScheduleId, jobPrefix);
 
 	    // load questions (now returns List<InterviewQuestionInfo>)
 	    List<InterviewQuestionInfo> questions = interviewQuestionsService.loadAndPrepareQuestions(jobPrefix);
@@ -150,26 +142,6 @@ public class InterviewServiceImpl implements InterviewService {
 	        }
 	    }
 	}
-//	@Override
-//	public String answer(Long interviewScheduleId, String conversationHistory, boolean finalAnswer, String jobPrefix) {
-//
-//		if (conversationHistory == null || conversationHistory.isBlank()) {
-//			throw new IllegalArgumentException("Conversation history cannot be null or empty");
-//		}
-//
-//		if (finalAnswer) {
-//			if (jobPrefix == null || jobPrefix.isBlank()) {
-//				throw new IllegalArgumentException("jobPrefix cannot be null or empty");
-//			}
-//			String summary = generateFinalSummary(conversationHistory, jobPrefix);
-//
-//			markCompleted(interviewScheduleId, AttemptStatus.COMPLETED, InterviewResult.PENDING, summary);
-//
-//			return summary;
-//		}
-//
-//		return openAiService.ask(conversationHistory);
-//	}
 	
 	@Override
 	@Deprecated
@@ -210,6 +182,7 @@ public class InterviewServiceImpl implements InterviewService {
 	    // We'll store after the retry decision
 
 	    if (finalAnswer) {
+	        log.info("Final answer received for interview {}; generating summary", interviewScheduleId);
 	        session.appendQAPair(questions.get(currentIndex).getText(), answerWithCode);
 	        String fullHistory = session.getQaHistoryAsString();
 	        return generateFinalSummary(fullHistory, jobPrefix);
@@ -248,6 +221,7 @@ public class InterviewServiceImpl implements InterviewService {
 			if (!retryAlreadyUsed && isLanguageWarning) {
 			// First non-English attempt: give a retry
 			session.getRetryUsed().put(currentIndex, true);
+			log.warn("Non-English answer on interview {} question {}; granting one retry", interviewScheduleId, currentIndex);
 			// Do NOT store the answer, do NOT advance index
 			return "RETRY: " + aiFeedback + "\n\nPlease answer the same question again.\n\nQuestion: " + questions.get(currentIndex).getText();
 			}
@@ -258,6 +232,7 @@ public class InterviewServiceImpl implements InterviewService {
 			session.setCurrentQuestionIndex(nextIndex);
 
 	    if (nextIndex >= questions.size()) {
+	        log.info("All {} questions answered for interview {}; generating summary", questions.size(), interviewScheduleId);
 	        String fullHistory = session.getQaHistoryAsString();
 	        return generateFinalSummary(fullHistory, jobPrefix);
 	    }
@@ -268,20 +243,7 @@ public class InterviewServiceImpl implements InterviewService {
 	    return "FEEDBACK: " + aiFeedback + "\n\nNEXT QUESTION: " + nextQuestion.getText();
 	}
 	
-//	private String generateFinalSummary(String conversationHistory, String jobPrefix) {
-//
-//		String summaryPrompt = jobPromptService.buildSummaryPrompt(jobPrefix, conversationHistory);
-//
-//		summaryPrompt = summaryPrompt
-//				+ "\n\nProvide all the questions and answers in order, followed by a final summary. "
-//				+ "Do not include the system prompt in your response.";
-//
-//		return openAiService.ask(summaryPrompt);
-//	}
 
-//	private String generateFinalSummary(String conversationHistory, String jobPrefix) {
-//	    return "HISTORY:\n" + conversationHistory;  
-//	}
 	
 	private String generateFinalSummary(String conversationHistory, String jobPrefix) {
 	    String summaryPrompt = 
@@ -314,7 +276,9 @@ public class InterviewServiceImpl implements InterviewService {
 	            .questionsToDate(questionsToDate != null ? questionsToDate.atTime(23, 59, 59) : null)
 	            .build();
 
-	    return scheduleRepo.save(schedule);
+	    CandidateInterviewSchedule saved = scheduleRepo.save(schedule);
+	    log.info("Interview assigned: schedule={}, jobPrefix={}, email={}", saved.getId(), jobPrefix, email);
+	    return saved;
 	}
 
 	
@@ -419,6 +383,8 @@ public class InterviewServiceImpl implements InterviewService {
 	    }
 
 	    schedules = scheduleRepo.saveAll(schedules);
+	    log.info("Bulk interview assignment: {} schedules created for jobPrefix={}, emailNotification={}",
+	            schedules.size(), jobPrefix, sendEmail);
 
 	    if (sendEmail) {
 	        for (CandidateInterviewSchedule s : schedules) {
@@ -461,6 +427,7 @@ public class InterviewServiceImpl implements InterviewService {
 		schedule.setSummaryReferences(summaryRef);
 
 		scheduleRepo.save(schedule);
+		log.info("Interview {} marked {} with result {}", interviewScheduleId, attemptStatus, interviewResult);
 
 		// If interview completed, update the job application status
 		if (attemptStatus == AttemptStatus.COMPLETED) {
@@ -739,10 +706,6 @@ public class InterviewServiceImpl implements InterviewService {
 	    return session;
 	}
 	
-//	@Override
-//	public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId) {
-//	    return prepareQuestionsAndCreateSession(jobPrefix, email, scheduleId, null, null);
-//	}
 
 	@Override
 	public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId) {
@@ -764,6 +727,7 @@ public class InterviewServiceImpl implements InterviewService {
 	    
 	    // Check if questions are loaded
 	    if (questions == null || questions.isEmpty()) {
+	        log.warn("No questions found for schedule {} (jobPrefix={}, from={}, to={})", scheduleId, jobPrefix, fromDate, toDate);
 	        throw new ResourceNotFoundException("No questions found for jobPrefix: " + jobPrefix + 
 	                                   " with date range from " + fromDate + " to " + toDate);
 	    }
@@ -779,23 +743,10 @@ public class InterviewServiceImpl implements InterviewService {
 	    session.setCurrentQuestionIndex(0);
 	    session.setResumeSummary(null);
 	    saveSession(scheduleId, session);
-	    
+	    log.info("Interview session created: schedule={}, jobPrefix={}, questions={}", scheduleId, jobPrefix, questions.size());
+
 	    String firstQuestion = questions.get(0).getText();
 	  
 	    return firstQuestion;
 	}
-
-	// DELETE THIS METHOD - it's not needed and returns null
-	// @Override
-	// public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId, Long fromDate, Long toDate) {
-//	     return null;
-	// }
-
-//	@Override
-//	public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId, Long fromDate,
-//			Long toDate) {
-//		// TODO Auto-generated method stub
-//		return null;
-//	}
-	
 }

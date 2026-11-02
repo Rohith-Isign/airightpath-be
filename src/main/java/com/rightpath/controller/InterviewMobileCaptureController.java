@@ -21,10 +21,13 @@ import com.rightpath.dto.ProctoringCaptureImage;
 import com.rightpath.service.MobileCaptureService;
 import com.rightpath.service.MobilePairingService;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * Stills from the candidate's paired phone, filed against the interview.
  * See {@link MobileCaptureService} for why the candidate's browser uploads them.
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/interview")
 public class InterviewMobileCaptureController {
@@ -47,6 +50,7 @@ public class InterviewMobileCaptureController {
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
 	public ResponseEntity<Void> registerPairing(@PathVariable Long interviewScheduleId, @RequestParam String token,
 			Authentication authentication) {
+		log.info("Mobile pairing registered for interview {} by {}", interviewScheduleId, authentication.getName());
 		mobilePairingService.register(interviewScheduleId, authentication.getName(), token);
 		return ResponseEntity.ok().build();
 	}
@@ -70,6 +74,7 @@ public class InterviewMobileCaptureController {
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
 	public ResponseEntity<Void> revokePairing(@PathVariable Long interviewScheduleId,
 			@RequestParam(required = false) String token, Authentication authentication) {
+		log.info("Mobile pairing revoked for interview {} by {}", interviewScheduleId, authentication.getName());
 		mobilePairingService.revoke(interviewScheduleId, authentication.getName(), token);
 		return ResponseEntity.ok().build();
 	}
@@ -80,6 +85,8 @@ public class InterviewMobileCaptureController {
 			@RequestParam("kind") String kind,
 			@RequestParam(value = "capturedAt", required = false) String capturedAt,
 			@RequestPart("photo") MultipartFile photo, Authentication authentication) {
+		log.info("Mobile capture ({}) uploaded for interview {} by {}", kind, interviewScheduleId,
+				authentication.getName());
 		return ResponseEntity
 				.ok(mobileCaptureService.save(interviewScheduleId, authentication.getName(), kind, capturedAt, photo));
 	}

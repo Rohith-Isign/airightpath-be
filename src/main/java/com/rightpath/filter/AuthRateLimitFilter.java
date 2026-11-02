@@ -18,12 +18,14 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Caps how often one address may try to log in or ask for / guess a one-time code.
  * The per-account lockout stops one account being guessed; this stops one address
  * walking through many accounts.
  */
+@Slf4j
 @Component
 public class AuthRateLimitFilter extends OncePerRequestFilter {
 
@@ -65,6 +67,7 @@ public class AuthRateLimitFilter extends OncePerRequestFilter {
         Duration window = Duration.ofMinutes(cfg.getWindowMinutes());
 
         if (!rateLimits.tryAcquire(scope + ":" + clientAddress(request), limit, window)) {
+            log.warn("Rate limit exceeded for scope {} from {}", scope, clientAddress(request));
             response.setStatus(429);
             response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(window.toSeconds()));
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);

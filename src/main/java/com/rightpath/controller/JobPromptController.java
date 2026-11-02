@@ -25,7 +25,9 @@ import com.rightpath.service.JobPromptService;
 import com.rightpath.util.EvaluationCategoryFormatter;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/prompts")
 @RequiredArgsConstructor
@@ -64,6 +66,7 @@ public class JobPromptController {
     @PostMapping("/copy")
     @PreAuthorize("hasAuthority('JOB_POST_CREATE')")
     public ResponseEntity<Map<String, Integer>> copyPrompts(@RequestBody Map<String, String> request) {
+        log.info("Copying prompts from job {} to job {}", request.get("fromJobPrefix"), request.get("toJobPrefix"));
         return ResponseEntity.ok(copyService.copy(request.get("fromJobPrefix"), request.get("toJobPrefix")));
     }
 
@@ -79,6 +82,7 @@ public class JobPromptController {
     public ResponseEntity<JobPrompt> savePrompt(
             @RequestBody JobPromptRequest request) {
 
+        log.info("Saving job prompt");
         JobPrompt savedPrompt = jobPromptService.saveJobPrompt(request);
         return ResponseEntity.ok(savedPrompt);
     }
@@ -141,6 +145,7 @@ public class JobPromptController {
     @PreAuthorize("hasAuthority('JOB_POST_CREATE')")
     public ResponseEntity<InterviewTemplate> saveInterviewTemplate(
             @RequestBody InterviewTemplateRequest request) {
+        log.info("Saving interview template for job {} round {}", request.getJobPrefix(), request.getRound());
         return ResponseEntity.ok(templateService.save(
                 request.getJobPrefix(),
                 request.getRound(),
@@ -165,6 +170,7 @@ public class JobPromptController {
                 .mapToDouble(EvaluationCategorySaveRequest.CategoryItem::getWeight).sum();
         boolean negative = request.getCategories().stream().anyMatch(c -> c.getWeight() < 0);
         if (negative || Math.abs(totalWeight - 100.0) > 0.01) {
+            log.warn("Evaluation categories for job {} rejected: weights total {}", jobPrefix, totalWeight);
             throw new IllegalArgumentException("Category weights must be zero or more and total exactly 100; they total "
                     + totalWeight + ".");
         }
@@ -216,6 +222,8 @@ public class JobPromptController {
         }
 
         List<EvaluationCategory> saved = evaluationCategoryRepository.saveAll(toSave);
+        log.info("Evaluation categories saved for job {} round {}: {} saved, {} removed", jobPrefix, round,
+                saved.size(), toDelete.size());
         return ResponseEntity.ok(saved);
     }
 }

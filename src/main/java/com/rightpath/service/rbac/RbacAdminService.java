@@ -12,6 +12,9 @@ import com.rightpath.repository.UserRoleRepository;
 import com.rightpath.repository.UsersRepository;
 import com.rightpath.rbac.RoleName;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Service
 public class RbacAdminService {
 
@@ -49,6 +52,7 @@ public class RbacAdminService {
         link.setRole(role);
         link.setActive(true);
         userRoleRepository.save(link);
+        log.info("Role {} assigned to {}", roleName, userEmail);
     }
 
     @Transactional
@@ -59,6 +63,7 @@ public class RbacAdminService {
         }
         link.setActive(false);
         userRoleRepository.save(link);
+        log.info("Role {} removed from {}", roleName, userEmail);
     }
 
     @Transactional(readOnly = true)

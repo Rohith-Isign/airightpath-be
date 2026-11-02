@@ -15,14 +15,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionCallbackWithoutResult;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.rightpath.dto.EffectiveInterviewTemplate;
 import com.rightpath.dto.voice.ParsedInterviewReply;
-import com.rightpath.dto.voice.PerformanceSnapshot;
 import com.rightpath.dto.voice.ResumeResponse;
 import com.rightpath.dto.voice.VoiceAnswerRequest;
 import com.rightpath.dto.voice.VoiceEvaluationResult;
@@ -186,7 +183,6 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         "Interview schedule not found for " + jobPrefix + " / " + email));
     }
 
-
     /**
      * The greeting that opens every interview.
      *
@@ -272,67 +268,6 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         return QUESTION_TYPE_TAG_PATTERN.matcher(text).replaceAll("").trim();
     }
 
-//    @Override
-//    @Transactional
-//    public VoiceStartResponse startVoiceInterview(String jobPrefix, String email) {
-//        CandidateInterviewSchedule schedule = scheduleRepo.findFirstByJobPrefixAndEmailOrderByAssignedAtDesc(jobPrefix, email)
-//                .orElseThrow(() -> new RuntimeException("Interview schedule not found for " + jobPrefix + " / " + email));
-//
-//        // Item 4: If already IN_PROGRESS, return existing state instead of creating new
-//        if (schedule.getAttemptStatus() == AttemptStatus.IN_PROGRESS) {
-//            log.info("Resuming existing voice interview for schedule {} ({})", schedule.getId(), email);
-//            List<VoiceConversationEntry> entries = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId());
-//            String lastQuestion = entries.stream()
-//                    .filter(e -> e.getRole() == ConversationRole.INTERVIEWER)
-//                    .reduce((first, second) -> second)
-//                    .map(VoiceConversationEntry::getContent)
-//                    .orElse("Welcome back. Let's continue the interview.");
-//
-//            String lastQuestionAudio = textToSpeechService.generateTTSBase64(lastQuestion);
-//
-//            return VoiceStartResponse.builder()
-//                    .scheduleId(schedule.getId())
-//                    .firstQuestion(lastQuestion)
-//                    .interviewerName(schedule.getInterviewerName())
-//                    .firstQuestionAudio(lastQuestionAudio)
-//                    .build();
-//        }
-//
-//        schedule.setAttemptStatus(AttemptStatus.IN_PROGRESS);
-//        schedule.setStartedAt(LocalDateTime.now());
-//        schedule.setTotalQuestionsAsked(0);
-//        schedule = scheduleRepo.save(schedule);
-//
-//        // Generate first question using DB system prompt
-//        String firstQuestionPrompt = contextService.buildFirstQuestionPrompt();
-//        List<Map<String, String>> messages = contextService.buildContextMessages(schedule, firstQuestionPrompt);
-//        String firstQuestion = openAiStreamingService.chatCompletion(messages);
-//
-//        // Strip question type tags for TTS and DB (frontend detects tags from raw text)
-//        String firstQuestionClean = stripQuestionTypeTags(firstQuestion);
-//
-//        // Save interviewer's first question (clean, without tags)
-//        VoiceConversationEntry entry = VoiceConversationEntry.builder()
-//                .interviewSchedule(schedule)
-//                .role(ConversationRole.INTERVIEWER)
-//                .content(firstQuestionClean)
-//                .build();
-//        entryRepository.save(entry);
-//        schedule.incrementQuestionsAsked();
-//        scheduleRepo.save(schedule);
-//
-//        // Generate TTS for first question (clean, without tags)
-//        String firstQuestionAudio = textToSpeechService.generateTTSBase64(firstQuestionClean);
-//
-//        log.info("Started voice interview for schedule {} ({})", schedule.getId(), email);
-//
-//        return VoiceStartResponse.builder()
-//                .scheduleId(schedule.getId())
-//                .firstQuestion(firstQuestion)
-//                .interviewerName(schedule.getInterviewerName())
-//                .firstQuestionAudio(firstQuestionAudio)
-//                .build();
-//    }
     
     @Override
     @Transactional
@@ -430,8 +365,6 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         String firstQuestionRaw = mergeWelcomeWithQuestion(buildWelcome(schedule), parsedFirst.spokenText());
         String firstQuestionClean = stripQuestionTypeTags(firstQuestionRaw);
 
-
-
         // Save interviewer's first question (clean) to the voice conversation table
         VoiceConversationEntry entry = VoiceConversationEntry.builder()
                 .interviewSchedule(schedule)
@@ -493,173 +426,6 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 .orElse(ResumeResponse.builder().hasActiveSession(false).build());
     }
 
-//    @Override
-//    public void processVoiceAnswer(Long scheduleId, VoiceAnswerRequest request) {
-//        try {
-//            boolean skipped = request.isSkipped();
-//
-//            // ── Phase 1: Short TX (~50ms) — Validate + Save candidate answer ──
-//            CandidateInterviewSchedule schedule = transactionTemplate.execute(status -> {
-//                CandidateInterviewSchedule s = scheduleRepo.findById(scheduleId)
-//                        .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
-//
-//                if (s.getAttemptStatus() != AttemptStatus.IN_PROGRESS) {
-//                    throw new RuntimeException("Interview is not active");
-//                }
-//
-//                if (skipped) {
-//                    // Save skipped entry — no tone analysis needed
-//                    VoiceConversationEntry candidateEntry = VoiceConversationEntry.builder()
-//                            .interviewSchedule(s)
-//                            .role(ConversationRole.CANDIDATE)
-//                            .content("[NO RESPONSE - SKIPPED]")
-//                            .build();
-//                    entryRepository.save(candidateEntry);
-//                } else {
-//                    // Analyze tone metrics
-//                    double speechDuration = (request.getWordTimestamps() != null && !request.getWordTimestamps().isEmpty())
-//                            ? request.getWordTimestamps().get(request.getWordTimestamps().size() - 1).getEnd()
-//                            : 0;
-//                    ToneAnalysisService.ToneMetrics toneMetrics = toneAnalysisService.analyze(
-//                            request.getTranscript(), request.getWordTimestamps(), speechDuration);
-//
-//                    // Build content — append code block if code was submitted
-//                    String answerContent = request.getTranscript();
-//                    if (request.getCodeContent() != null && !request.getCodeContent().isBlank()) {
-//                        answerContent += "\n\n[CODE (" + (request.getCodeLanguage() != null ? request.getCodeLanguage() : "text") + ")]\n" + request.getCodeContent();
-//                    }
-//
-//                    // Save candidate answer
-//                    VoiceConversationEntry candidateEntry = VoiceConversationEntry.builder()
-//                            .interviewSchedule(s)
-//                            .role(ConversationRole.CANDIDATE)
-//                            .content(answerContent)
-//                            .wordCount(toneMetrics.getWordCount())
-//                            .wordsPerMinute(toneMetrics.getWordsPerMinute())
-//                            .fillerWordCount(toneMetrics.getFillerWordCount())
-//                            .confidenceScore(toneMetrics.getConfidenceScore())
-//                            .speechDurationSeconds(toneMetrics.getSpeechDurationSeconds())
-//                            .codeContent(request.getCodeContent())
-//                            .codeLanguage(request.getCodeLanguage())
-//                            .build();
-//                    entryRepository.save(candidateEntry);
-//                }
-//
-//                return s;
-//            });
-//
-//            // Send filler only for real answers (skips don't need "let me think...")
-//            if (!skipped) {
-//                String filler = FILLERS.get(random.nextInt(FILLERS.size()));
-//                sendFiller(scheduleId, filler);
-//            }
-//
-//            // ── Phase 2: No TX — OpenAI calls (3-30s) ──
-//
-//            // Update running summary (synchronous OpenAI call)
-//            String summary = contextService.updateRunningSummary(schedule);
-//            if (summary != null) {
-//                // Short TX to persist the summary
-//                transactionTemplate.execute(new TransactionCallbackWithoutResult() {
-//                    @Override
-//                    protected void doInTransactionWithoutResult(TransactionStatus status) {
-//                        CandidateInterviewSchedule fresh = scheduleRepo.findById(scheduleId)
-//                                .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
-//                        fresh.setRunningSummary(summary);
-//                        scheduleRepo.save(fresh);
-//                    }
-//                });
-//                // Update local reference for context building
-//                schedule.setRunningSummary(summary);
-//            }
-//
-//            // Compute performance snapshot before building prompt (guidance is injected by contextService)
-//            PerformanceSnapshot performanceSnapshot = performanceAnalyzer.analyze(schedule);
-//
-//            // Build prompt — AI decides what to ask next (or end the interview)
-//            String userMessage = contextService.buildNextQuestionPrompt(schedule, request.getTranscript(), skipped,
-//                    request.getCodeContent(), request.getCodeLanguage());
-//            List<Map<String, String>> messages = contextService.buildContextMessages(schedule, userMessage);
-//
-//            // Stream GPT response
-//            openAiStreamingService.streamChatCompletion(messages,
-//                    // onToken
-//                    token -> {
-//                        Map<String, Object> tokenMsg = new HashMap<>();
-//                        tokenMsg.put("token", token);
-//                        tokenMsg.put("done", false);
-//                        messagingTemplate.convertAndSend(
-//                                "/topic/interview/" + scheduleId + "/ai-token",
-//                                tokenMsg
-//                        );
-//                    },
-//                    // onComplete
-//                    completeText -> {
-//                        try {
-//                            // Check if AI decided to end the interview
-//                            boolean isComplete = completeText.contains(INTERVIEW_COMPLETE_MARKER);
-//                            String cleanedText = completeText.replace(INTERVIEW_COMPLETE_MARKER, "").trim();
-//
-//                            // Send fullText WITH tags to frontend (frontend detects [CODING] etc.)
-//                            Map<String, Object> doneMsg = new HashMap<>();
-//                            doneMsg.put("token", "");
-//                            doneMsg.put("done", true);
-//                            doneMsg.put("fullText", cleanedText);
-//                            messagingTemplate.convertAndSend(
-//                                    "/topic/interview/" + scheduleId + "/ai-token",
-//                                    doneMsg
-//                            );
-//
-//                            // Strip question type tags for DB and TTS
-//                            String textForStorage = stripQuestionTypeTags(cleanedText);
-//
-//                            // ── Phase 3: Short TX (~50ms) — Save interviewer response ──
-//                            transactionTemplate.execute(new TransactionCallbackWithoutResult() {
-//                                @Override
-//                                protected void doInTransactionWithoutResult(TransactionStatus status) {
-//                                    CandidateInterviewSchedule fresh = scheduleRepo.findById(scheduleId)
-//                                            .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
-//
-//                                    VoiceConversationEntry entry = VoiceConversationEntry.builder()
-//                                            .interviewSchedule(fresh)
-//                                            .role(ConversationRole.INTERVIEWER)
-//                                            .content(textForStorage)
-//                                            .build();
-//                                    entryRepository.save(entry);
-//                                    fresh.incrementQuestionsAsked();
-//
-//                                    if (isComplete) {
-//                                        fresh.setAttemptStatus(AttemptStatus.COMPLETED);
-//                                        fresh.setEndedAt(LocalDateTime.now());
-//                                        fresh.setCompletionReason(
-//                                                performanceSnapshot.isEarlyTerminationSuggested()
-//                                                        ? CompletionReason.EARLY_TERMINATION_POOR_PERFORMANCE
-//                                                        : CompletionReason.NATURAL_COMPLETION);
-//                                    }
-//                                    scheduleRepo.save(fresh);
-//                                }
-//                            });
-//
-//                            // Send response-complete and TTS (no TX needed)
-//                            CandidateInterviewSchedule updated = scheduleRepo.findById(scheduleId)
-//                                    .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
-//                            sendResponseComplete(scheduleId, updated, isComplete);
-//                            textToSpeechService.generateAndStreamTTS(scheduleId, textForStorage);
-//
-//                            if (isComplete) {
-//                                evaluationService.triggerEvaluationAsync(scheduleId);
-//                            }
-//                        } catch (Exception e) {
-//                            log.error("Error in onComplete callback for schedule {}: {}", scheduleId, e.getMessage(), e);
-//                            sendResponseCompleteError(scheduleId);
-//                        }
-//                    }
-//            );
-//        } catch (Exception e) {
-//            log.error("Error processing voice answer for schedule {}: {}", scheduleId, e.getMessage(), e);
-//            sendResponseCompleteError(scheduleId);
-//        }
-//    }
 	
     @Override
     public void processVoiceAnswer(Long scheduleId, VoiceAnswerRequest request) {
@@ -1308,26 +1074,6 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         msg.put("type", "filler");
         messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/filler", msg);
     }
-//
-//    private void sendResponseComplete(Long scheduleId, CandidateInterviewSchedule schedule, boolean isComplete) {
-//        sendResponseComplete(scheduleId, schedule, isComplete, false);
-//    }
-//
-//    private void sendResponseComplete(Long scheduleId, CandidateInterviewSchedule schedule, boolean isComplete, boolean terminated) {
-//        Map<String, Object> msg = new HashMap<>();
-//        msg.put("questionsAsked", schedule.getTotalQuestionsAsked());
-//        msg.put("isComplete", isComplete);
-//        msg.put("terminated", terminated);
-//        messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/response-complete", msg);
-//    }
-//
-//    private void sendResponseCompleteError(Long scheduleId) {
-//        Map<String, Object> msg = new HashMap<>();
-//        msg.put("questionsAsked", -1);
-//        msg.put("isComplete", false);
-//        msg.put("error", true);
-//        messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/response-complete", msg);
-//    }
     
  // Send response using a String (fetches schedule from DB)
     private void sendResponseComplete(Long scheduleId, String response, boolean isComplete, String endReason) {

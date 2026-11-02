@@ -47,54 +47,6 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
         this.accessTokenService = accessTokenService;
     }
 
-//    @Override
-//    public boolean beforeHandshake(
-//            ServerHttpRequest request,
-//            ServerHttpResponse response,
-//            WebSocketHandler wsHandler,
-//            Map<String, Object> attributes) {
-//
-//        // 1. Check for mobile pairing token (no JWT validation)
-//        String mobileToken = extractMobileToken(request);
-//        if (mobileToken != null && !mobileToken.isBlank()) {
-//            log.debug("Mobile WebSocket connection with token: {}", mobileToken);
-//            attributes.put(MOBILE_TOKEN_ATTR, mobileToken);
-//            return true; // allow handshake without JWT
-//        }
-//
-//        // 2. Otherwise, proceed with normal JWT authentication
-//        String token = extractToken(request);
-//
-//        if (token == null || token.isBlank()) {
-//            log.warn("WebSocket connection rejected: No token provided. URI={}", request.getURI());
-//            response.setStatusCode(HttpStatus.UNAUTHORIZED);
-//            return false;
-//        }
-//
-//        try {
-//            Claims claims = accessTokenService.validateAndGetClaims(token);
-//            String userEmail = claims.getSubject();
-//            String authorities = (String) claims.get("authorities");
-//
-//            // Store user info in session attributes for use by handlers
-//            attributes.put(USER_EMAIL_ATTR, userEmail);
-//            attributes.put(USER_AUTHORITIES_ATTR, authorities != null ? authorities : "");
-//            attributes.put(AUTHENTICATED_ATTR, true);
-//
-//            log.info("WebSocket connection authenticated for user: {}", userEmail);
-//            return true;
-//
-//        } catch (InvalidAccessTokenException e) {
-//            log.warn("WebSocket connection rejected: Invalid token. URI={}, reason={}",
-//                    request.getURI(), e.getMessage());
-//            response.setStatusCode(HttpStatus.UNAUTHORIZED);
-//            return false;
-//        } catch (Exception e) {
-//            log.error("WebSocket authentication error. URI={}", request.getURI(), e);
-//            response.setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR);
-//            return false;
-//        }
-//    }
     
     @Override
     public boolean beforeHandshake(

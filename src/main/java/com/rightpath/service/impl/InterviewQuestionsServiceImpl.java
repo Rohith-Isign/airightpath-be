@@ -27,7 +27,6 @@ import com.rightpath.service.InterviewQuestionsService;
 import com.rightpath.service.OpenAiService;
 import com.rightpath.service.StorageService;
 
-
 @Service
 @lombok.extern.slf4j.Slf4j
 public class InterviewQuestionsServiceImpl implements InterviewQuestionsService {
@@ -255,7 +254,6 @@ public class InterviewQuestionsServiceImpl implements InterviewQuestionsService 
         	    "Tell me about yourself", "INTRO", "INTRODUCTION", "INTRODUCTION", null);
         selected.add(0, intro);
 
-//        log.info("Successfully selected {} questions (7 technical, 2 coding, 2 snippet) with category variety.", selected.size());
         return selected;
     }
 

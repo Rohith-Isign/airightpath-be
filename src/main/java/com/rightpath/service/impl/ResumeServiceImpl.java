@@ -15,6 +15,9 @@ import com.rightpath.exceptions.ResourceNotFoundException;
 import com.rightpath.repository.JobApplicationForCandidateRepository;
 import com.rightpath.service.ResumeService;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Service
 public class ResumeServiceImpl implements ResumeService {
 
@@ -39,6 +42,7 @@ public class ResumeServiceImpl implements ResumeService {
 	    application.setContentType(file.getContentType());
 	    application.setResumeData(file.getBytes());
 	    applicationForCandidateRepository.save(application);
+	    log.info("Resume saved for {} (job {})", email, jobPrefix);
 	}
 
 
@@ -67,6 +71,7 @@ public class ResumeServiceImpl implements ResumeService {
 		application.setContentType(file.getContentType());
 		application.setResumeData(file.getBytes());
 		applicationForCandidateRepository.save(application);
+		log.info("Resume updated for {}", email);
 	}
 
 	/**
@@ -103,6 +108,7 @@ public class ResumeServiceImpl implements ResumeService {
         try (ByteArrayInputStream inputStream = new ByteArrayInputStream(resumeData)) {
             return tika.parseToString(inputStream);
         } catch (Exception e) {
+            log.error("Error parsing resume data", e);
             throw new RuntimeException("Error parsing resume data", e);
         }
     }

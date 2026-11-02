@@ -19,10 +19,12 @@ import com.rightpath.util.ThreadLocalUserContext;
 import com.rightpath.entity.Users;
 
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.LinkedHashSet;
 import java.util.Set;
 
+@Slf4j
 @Service
 public class LoginService {
 
@@ -60,10 +62,12 @@ public class LoginService {
             auth = authenticationManager.authenticate(
                     new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword()));
         } catch (BadCredentialsException e) {
+            log.warn("Login failed: bad credentials for {}", request.getEmail());
             loginAttempts.onFailure(request.getEmail());
             throw e;
         }
         loginAttempts.onSuccess(request.getEmail());
+        log.info("Login successful for {}", request.getEmail());
 
         UserDetails userDetails = (UserDetails) auth.getPrincipal();
 
