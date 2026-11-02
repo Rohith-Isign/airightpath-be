@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -1014,6 +1015,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * Runs every 5 minutes to find and auto-complete stale IN_PROGRESS interviews.
      */
     @Scheduled(fixedRate = 300000)
+    @SchedulerLock(name = "enforceInterviewTimeouts", lockAtLeastFor = "PT2M", lockAtMostFor = "PT10M")
     @Transactional
     public void enforceInterviewTimeouts() {
         LocalDateTime cutoff = LocalDateTime.now().minusMinutes(maxDurationMinutes);

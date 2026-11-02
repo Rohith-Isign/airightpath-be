@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Component;
 
 import com.rightpath.entity.InterviewMobilePairing;
@@ -42,6 +43,7 @@ public class MobileDisconnectWatcher {
     }
 
     @Scheduled(fixedDelay = 30_000, initialDelay = 60_000)
+    @SchedulerLock(name = "mobileDisconnectSweep", lockAtLeastFor = "PT15S", lockAtMostFor = "PT2M")
     public void sweep() {
         try {
             Set<Long> silentNow = new HashSet<>();

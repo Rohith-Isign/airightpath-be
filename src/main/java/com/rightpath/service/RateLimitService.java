@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Service;
 
 import com.rightpath.entity.RateLimitBucket;
@@ -52,6 +53,7 @@ public class RateLimitService {
     }
 
     @Scheduled(fixedDelay = 30 * 60 * 1000, initialDelay = 5 * 60 * 1000)
+    @SchedulerLock(name = "rateLimitPurge", lockAtLeastFor = "PT10M", lockAtMostFor = "PT30M")
     public void purge() {
         try {
             buckets.deleteOlderThan(LocalDateTime.now().minusHours(2));

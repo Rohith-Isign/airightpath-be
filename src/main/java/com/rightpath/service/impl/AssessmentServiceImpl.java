@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.MailException;
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -652,6 +653,7 @@ public class AssessmentServiceImpl implements AssessmentService {
 	 * Scheduled task that updates expired assessments every minute.
 	 */
 	@Scheduled(cron = "0 * * * * *")
+	@SchedulerLock(name = "updateExpiredAssessments", lockAtLeastFor = "PT30S", lockAtMostFor = "PT5M")
 	@Transactional
 	public void updateExpiredAssessments() {
 		int updatedCount = assessmentRepository.updateExpiredAssessments();

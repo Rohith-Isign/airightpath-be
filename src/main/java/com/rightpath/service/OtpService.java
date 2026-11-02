@@ -4,6 +4,7 @@ import java.time.LocalDateTime;
 import java.util.Optional;
 
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -146,6 +147,7 @@ public class OtpService {
      * Removes expired OTPs from the database every 5 minutes.
      */
     @Scheduled(fixedRate = 300000) // Every 5 minutes
+    @SchedulerLock(name = "removeExpiredOtps", lockAtLeastFor = "PT2M", lockAtMostFor = "PT10M")
     public void removeExpiredOtps() {
         try {
             log.debug("Scheduled cleanup: removing expired OTPs");
