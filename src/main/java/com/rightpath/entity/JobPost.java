@@ -103,6 +103,7 @@ public class JobPost {
 
 	@OneToMany(mappedBy = "jobPost", cascade = CascadeType.ALL, orphanRemoval = true)
 	@JsonIgnore
+	@Builder.Default
 	private Set<JobApplicationForCandidate> jobApplications = new HashSet<>();
 
 	
