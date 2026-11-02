@@ -441,8 +441,9 @@ public class InterviewController {
 	 * A stretch of the candidate's answer, to be turned into text.
 	 *
 	 * <p>A file over HTTP rather than base64 over the socket, which takes about 200 KB a message and so forced
-	 * the audio into pieces of a few seconds. A file here can be minutes long, so the browser cuts it at a natural
-	 * pause and an ordinary answer is one call to the speech service. The text comes back on the interview's
+	 * the audio into pieces of a few seconds. A file here is cut by the browser at a natural pause, about every
+	 * 20 to 40 seconds (the span the speech model reads at once), so an answer is a few ordered calls; the page
+	 * joins the texts by {@code chunkIndex}. The text comes back on the interview's
 	 * transcription topic, one message per chunk, with {@code done} set even when the chunk held no speech.</p>
 	 */
 	@PostMapping(value = "/voice/{scheduleId}/audio-chunk", consumes = org.springframework.http.MediaType.MULTIPART_FORM_DATA_VALUE)
