@@ -114,10 +114,10 @@ class InterviewReplyParserTest {
     }
 
     @Test
-    void anUntaggedQuestionNeverOpensTheEditorWhateverItAsks() {
-        // The editor follows the model's [CODING] tag and nothing else. Guessing from the wording opened it for
-        // spoken questions ("walk me through how you would solve a problem in a component").
-        var parsed = parser.parse("[SCORE:6] [TOPIC:Programming] Nice. Now write a function that reverses a linked list.");
+    void anUntaggedQuestionThatDoesNotAskForCodeNeverOpensTheEditor() {
+        // Guessing from loose wording opened the editor for spoken questions ("walk me through how you would solve a
+        // problem in a component"), so only an instruction to write code is recognised (see the test below).
+        var parsed = parser.parse("[SCORE:6] [TOPIC:Programming] Walk me through how you would solve a problem in a component.");
 
         org.junit.jupiter.api.Assertions.assertFalse(parsed.spokenText().contains("[CODING]"), parsed.spokenText());
     }
@@ -143,5 +143,26 @@ class InterviewReplyParserTest {
         String spoken = parsed.spokenText();
         org.junit.jupiter.api.Assertions.assertEquals(spoken.indexOf("[CODING]"), spoken.lastIndexOf("[CODING]"));
         org.junit.jupiter.api.Assertions.assertTrue(spoken.startsWith("[CODING]"), spoken);
+    }
+
+    @Test
+    @DisplayName("a plain request to write code opens the editor even when the model forgot the tag")
+    void anUntaggedWriteCodeRequestGetsTheEditor() {
+        ParsedInterviewReply reply = parser.parse(
+                "That's a solid explanation. Now, let's move on to a coding question. "
+                        + "Write a Python function that calculates the mean of a list.");
+
+        org.junit.jupiter.api.Assertions.assertTrue(reply.spokenText().startsWith("[CODING]"), reply.spokenText());
+    }
+
+    @Test
+    @DisplayName("a spoken question, or one tagged as theory, never opens the editor")
+    void spokenQuestionsKeepTheEditorClosed() {
+        org.junit.jupiter.api.Assertions.assertFalse(
+                parser.parse("Could you explain what a function is and why we write them?").spokenText()
+                        .startsWith("[CODING]"));
+        org.junit.jupiter.api.Assertions.assertFalse(
+                parser.parse("[THEORY] Explain how you would write a class that is thread safe.").spokenText()
+                        .startsWith("[CODING]"));
     }
 }

@@ -206,10 +206,64 @@ public class InterviewContextService {
         // is all a job configured before rounds existed has.
         String template = jobPromptService.getInterviewPrompt(
                 schedule.getJobPrefix(), schedule.getEffectiveRound(), PromptStage.START);
-        return placeholderResolver.resolveAllInterviewPlaceholders(
+        String resolved = placeholderResolver.resolveAllInterviewPlaceholders(
                 template, schedule.getJobPrefix(), schedule.getEmail(), schedule.getInterviewerName(),
                 schedule.getEffectiveRound());
+        return resolved + varietyNote(schedule);
     }
+
+    /** Most earlier questions listed, and how much of each, so the note stays short. */
+    private static final int EARLIER_QUESTIONS_LISTED = 25;
+    private static final int EARLIER_QUESTION_CHARS = 160;
+
+    /**
+     * Keeps one candidate's re-sit, and different candidates' sittings, from being the same interview.
+     *
+     * <p>The model is steady: given the same role and skills it picks the same first questions every time. So it is
+     * told what this candidate was already asked on this job and round, and told to choose differently, and each
+     * sitting is given a random starting angle so two candidates for one role do not open the same way.</p>
+     */
+    private String varietyNote(CandidateInterviewSchedule schedule) {
+        StringBuilder note = new StringBuilder("\n\nVARIETY RULES\n")
+                .append("- Choose questions, examples and scenarios that are different from a typical interview for this ")
+                .append("role. Do not default to the most common question for a topic.\n")
+                .append("- Starting angle for this sitting (use it to pick where to begin, not as the only topic): ")
+                .append(STARTING_ANGLES.get(java.util.concurrent.ThreadLocalRandom.current()
+                        .nextInt(STARTING_ANGLES.size())))
+                .append(".\n");
+        try {
+            var round = schedule.getEffectiveRound();
+            List<String> earlier = entryRepository.findEarlierQuestions(
+                    schedule.getEmail(), schedule.getJobPrefix(), schedule.getId(), round,
+                    round == com.rightpath.enums.InterviewRound.L2_TECHNICAL,
+                    org.springframework.data.domain.PageRequest.of(0, EARLIER_QUESTIONS_LISTED));
+            if (!earlier.isEmpty()) {
+                note.append("- This candidate has sat this interview before. They were already asked the questions ")
+                        .append("below. Do NOT ask them again or ask close variations of them; cover different ")
+                        .append("subtopics, or the same skill from a different angle and at greater depth.\n");
+                for (String question : earlier) {
+                    String text = question == null ? "" : question.replaceAll("\\s+", " ").trim();
+                    if (text.isEmpty()) {
+                        continue;
+                    }
+                    note.append("  * ").append(text.length() > EARLIER_QUESTION_CHARS
+                            ? text.substring(0, EARLIER_QUESTION_CHARS) + "..." : text).append('\n');
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not list the earlier questions for interview {}", schedule.getId(), e);
+        }
+        return note.toString();
+    }
+
+    private static final List<String> STARTING_ANGLES = List.of(
+            "start from the candidate's most recent project",
+            "start from the skill listed first in the required skills",
+            "start from the skill listed last in the required skills",
+            "start from a core fundamental of the main technology",
+            "start from a real-world failure or debugging scenario in the main technology",
+            "start from performance or scaling in the main technology",
+            "start from the data and storage side of the role");
 
     /**
      * Build prompt for generating the first question.

@@ -508,6 +508,15 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // it from the prompt alone, and it would answer the candidate's question and then carry on with another
             // interview question, or the server would end the interview on the question ceiling in the middle of one.
             boolean closingAsked = closingQuestionAlreadyAsked(scheduleId);
+            // The candidate may ask up to three things at the close. While they are still asking, and under the
+            // limit, the interviewer answers and invites the next one; the final thank-you comes when they have
+            // none left, or on the third.
+            boolean moreQuestionsWelcome = closingAsked && !skipped
+                    && looksLikeAQuestion(request.getTranscript())
+                    && candidateRepliesToClosing(scheduleId) < MAX_CLOSING_QUESTIONS;
+            if (moreQuestionsWelcome) {
+                closingAsked = false;
+            }
             int turnsLeft = template.maxQuestions() - current.getTotalQuestionsAsked();
 
             String turnPrompt = contextService.buildNextQuestionPrompt(
@@ -516,7 +525,9 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     skipped,
                     request.getCodeContent(),
                     request.getCodeLanguage());
-            if (closingAsked) {
+            if (moreQuestionsWelcome) {
+                turnPrompt += "\n\n" + CLOSING_ANSWER_DIRECTIVE;
+            } else if (closingAsked) {
                 turnPrompt += "\n\n" + FINAL_REPLY_DIRECTIVE;
             } else if (turnsLeft == 1) {
                 turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
@@ -538,7 +549,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // prompt: an interview that never ends is worse than one cut short.
             boolean ceilingHit = conductPolicy.hasReachedCeiling(template, current.getTotalQuestionsAsked());
             // The candidate has answered the closing question, so this reply is the last one whatever the model says.
-            boolean finished = parsed.closing() || ceilingHit || closingAsked;
+            boolean finished = !moreQuestionsWelcome && (parsed.closing() || ceilingHit || closingAsked);
 
             // A close is held back while material topics are still unasked and
             // there is budget to ask them. The model decides it has seen enough
@@ -548,7 +559,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // the ceiling is in sight: running out of questions mid-syllabus is
             // a configuration problem, and holding the candidate longer does not
             // fix it.
-            if (parsed.closing() && !ceilingHit && !closingAsked) {
+            if (parsed.closing() && !ceilingHit && !closingAsked && !moreQuestionsWelcome) {
                 int remaining = template.maxQuestions() - current.getTotalQuestionsAsked();
                 if (!topicCoverage.mayCloseOnCoverage(current, remaining)) {
                     ParsedInterviewReply redirected = askForOutstandingTopic(current);
@@ -836,6 +847,15 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     + "questions for us about the role or the process. Do not end the interview in this reply and "
                     + "do not include " + "[INTERVIEW_COMPLETE].";
 
+    /** How many questions the candidate may put to us once the closing question has been asked. */
+    private static final int MAX_CLOSING_QUESTIONS = 3;
+
+    private static final String CLOSING_ANSWER_DIRECTIVE =
+            "The candidate has asked a question in reply to your closing question. Answer it in a sentence or two "
+                    + "in general terms (no salary, offers or how the interview went). Then ask whether they have any "
+                    + "other questions for us. Do NOT ask an interview question, do NOT start a new topic, do not "
+                    + "end the interview in this reply and do not include [INTERVIEW_COMPLETE].";
+
     private static final String FINAL_REPLY_DIRECTIVE =
             "The candidate has replied to your closing question, so this is your FINAL reply. If they asked "
                     + "something, answer it in a sentence or two in general terms (no salary, offers or how the "
@@ -858,10 +878,57 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             if (entry.getRole() != ConversationRole.INTERVIEWER) {
                 continue;
             }
-            String text = entry.getContent() == null ? "" : entry.getContent().toLowerCase();
-            return text.contains("any questions for us") || text.contains("any questions about the role");
+            return isClosingQuestion(entry.getContent());
         }
         return false;
+    }
+
+    /** The closing question in any of its wordings, including "any other questions for us?" after an answer. */
+    private static boolean isClosingQuestion(String content) {
+        String text = content == null ? "" : content.toLowerCase();
+        return text.contains("any questions for us") || text.contains("any questions about the role")
+                || text.contains("any other questions") || text.contains("any more questions");
+    }
+
+    /** How many times the candidate has replied since the closing question was first asked, the current reply included. */
+    private int candidateRepliesToClosing(Long scheduleId) {
+        java.util.List<VoiceConversationEntry> entries =
+                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId);
+        int firstClosing = -1;
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i).getRole() == ConversationRole.INTERVIEWER && isClosingQuestion(entries.get(i).getContent())) {
+                firstClosing = i;
+                break;
+            }
+        }
+        if (firstClosing < 0) {
+            return 0;
+        }
+        int replies = 0;
+        for (int i = firstClosing + 1; i < entries.size(); i++) {
+            if (entries.get(i).getRole() == ConversationRole.CANDIDATE) {
+                replies++;
+            }
+        }
+        return replies;
+    }
+
+    /**
+     * Whether what the candidate said is a question, as opposed to "no, that's all". Judged on a question mark or an
+     * opening question word, because the transcript is plain text with no other cue.
+     */
+    private static boolean looksLikeAQuestion(String transcript) {
+        if (transcript == null) {
+            return false;
+        }
+        String text = transcript.trim().toLowerCase();
+        if (text.isEmpty()) {
+            return false;
+        }
+        if (text.contains("?")) {
+            return true;
+        }
+        return text.matches("^(what|when|where|which|who|why|how|can|could|will|would|is|are|do|does|did|may)\\b.*");
     }
 
     /**
