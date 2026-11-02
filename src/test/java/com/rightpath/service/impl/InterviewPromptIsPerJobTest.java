@@ -93,7 +93,7 @@ class InterviewPromptIsPerJobTest {
         String l3 = service.getInterviewPrompt(JOB, InterviewRound.L3_BEHAVIORAL, PromptStage.START);
 
         assertTrue(l2.contains("L2 technical"), l2);
-        assertTrue(l3.contains("behavioural"), l3);
+        assertTrue(l3.contains("L3 Behavioral"), l3);
         assertTrue(!l3.contains("L2 technical"), "the behavioural round must not get the technical prompt");
     }
 

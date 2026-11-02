@@ -49,8 +49,8 @@ class DefaultPromptsTest {
             String prompt = defaults.find(round, PromptStage.START).orElseThrow();
 
             assertTrue(prompt.contains("{{resumeSummary}}"), round + " should be given the resume");
-            assertTrue(prompt.contains("do you have\n   any questions for us"),
-                    round + " should ask the closing question");
+            // Neither default spells out the closing question: the server asks it in code
+            // (VoiceInterviewServiceImpl's closing directive), so the prompts only need the marker.
             assertTrue(prompt.contains("[INTERVIEW_COMPLETE]"), round + " should end on the completion marker");
         }
     }
