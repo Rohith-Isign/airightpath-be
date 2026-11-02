@@ -3,6 +3,7 @@ package com.rightpath.controller;
 import java.util.Map;
 import java.util.Set;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -37,6 +38,10 @@ public class MobileRecordingController {
 	private static final Set<String> PHONE_EVENTS = Set.of("mobile_recording_started", "mobile_recording_not_started",
 			"mobile_recording_issue", "mobile_exited", "mobile_reconnected");
 
+	/** Largest piece accepted through this server; bigger ones must go straight to storage. */
+	@Value("${recording.legacy-part-max-bytes:33554432}")
+	private long legacyPartMaxBytes;
+
 	private final MobilePairingService pairingService;
 	private final InterviewService interviewService;
 
@@ -61,9 +66,26 @@ public class MobileRecordingController {
 		return ResponseEntity.ok(interviewService.beginRecordingUpload(pairing.getInterviewScheduleId(), "mobile", type));
 	}
 
+	// The way a phone should send a recording: ask for a URL per piece and PUT the bytes straight to storage.
+	// The size it declares is signed into the URL and counted against the pairing's upload allowance here,
+	// since the bytes themselves no longer pass through this server.
+	@PostMapping("/recording-upload/part-url")
+	public ResponseEntity<Map<String, Object>> partUrl(@RequestParam String token, @RequestParam String uploadId,
+			@RequestParam String blobName, @RequestParam int part, @RequestParam long size) {
+		InterviewMobilePairing pairing = pairingService.resolve(token);
+		String url = interviewService.presignRecordingPart(pairing.getInterviewScheduleId(), blobName, uploadId, part,
+				size);
+		pairingService.accept(pairing, size);
+		return ResponseEntity.ok(Map.of("url", url, "method", "PUT"));
+	}
+
+	// Kept for phones that predate part-url. Bounded: a piece larger than recording.legacy-part-max-bytes is
+	// refused before any of it is read.
 	@PostMapping(value = "/recording-upload/part", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
 	public ResponseEntity<Void> part(@RequestParam String token, @RequestParam String uploadId,
-			@RequestParam String blobName, @RequestParam int part, @RequestBody byte[] data) {
+			@RequestParam String blobName, @RequestParam int part, jakarta.servlet.http.HttpServletRequest request)
+			throws java.io.IOException {
+		byte[] data = com.rightpath.util.BoundedBody.read(request, legacyPartMaxBytes);
 		InterviewMobilePairing pairing = pairingService.resolve(token);
 		pairingService.accept(pairing, data.length);
 		interviewService.uploadRecordingPart(pairing.getInterviewScheduleId(), blobName, uploadId, part, data);

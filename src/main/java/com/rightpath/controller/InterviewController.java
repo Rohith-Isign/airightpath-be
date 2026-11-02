@@ -9,6 +9,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -59,6 +60,10 @@ import com.rightpath.service.VoiceInterviewService;
 @RestController
 @RequestMapping("/api/interview")
 public class InterviewController {
+
+	/** Largest piece accepted through this server; bigger ones must go straight to storage. */
+	@Value("${recording.legacy-part-max-bytes:33554432}")
+	private long legacyPartMaxBytes;
 
 	private static final Logger log = LoggerFactory.getLogger(InterviewController.class);
 	
@@ -279,11 +284,26 @@ public class InterviewController {
 		return ResponseEntity.ok(interviewService.beginRecordingUpload(interviewScheduleId, kind));
 	}
 
+	// The way large recordings should be sent: the browser asks for a URL for each piece and PUTs the bytes
+	// straight to storage, so they never pass through (or sit in the memory of) this server. The piece's size
+	// is signed into the URL. complete, below, joins whatever storage holds.
+	@PostMapping("/{interviewScheduleId}/recording-upload/part-url")
+	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
+	public ResponseEntity<Map<String, Object>> recordingPartUrl(@PathVariable Long interviewScheduleId,
+			@RequestParam String uploadId, @RequestParam String blobName, @RequestParam int part,
+			@RequestParam long size) {
+		String url = interviewService.presignRecordingPart(interviewScheduleId, blobName, uploadId, part, size);
+		return ResponseEntity.ok(Map.of("url", url, "method", "PUT"));
+	}
+
+	// Kept for clients that predate part-url. Bounded: a piece larger than recording.legacy-part-max-bytes is
+	// refused before any of it is read.
 	@PostMapping(value = "/{interviewScheduleId}/recording-upload/part", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
 	public ResponseEntity<Void> uploadRecordingPart(@PathVariable Long interviewScheduleId,
 			@RequestParam String uploadId, @RequestParam String blobName, @RequestParam int part,
-			@RequestBody byte[] data) {
+			jakarta.servlet.http.HttpServletRequest request) throws java.io.IOException {
+		byte[] data = com.rightpath.util.BoundedBody.read(request, legacyPartMaxBytes);
 		interviewService.uploadRecordingPart(interviewScheduleId, blobName, uploadId, part, data);
 		return ResponseEntity.ok().build();
 	}

@@ -44,6 +44,14 @@ public class InterviewServiceImpl implements InterviewService {
 	@Value("${aws.s3.prefix.interview:interview}")
 	private String interviewPrefix;
 
+	/** How long a presigned piece URL stays valid. Short: the browser asks for one just before it sends the piece. */
+	@Value("${recording.part-url-ttl-minutes:15}")
+	private long partUrlTtlMinutes;
+
+	/** Largest single piece the browser may send straight to storage. Storage's own limit is 5 GB. */
+	@Value("${recording.part-max-bytes:268435456}")
+	private long partMaxBytes;
+
 	/** Every recording upload in flight, so an abandoned one can be finished by the server. */
 	@Autowired
 	private com.rightpath.util.BusinessSchedule businessSchedule;
@@ -557,6 +565,24 @@ public class InterviewServiceImpl implements InterviewService {
 		recordingUploads.requireOpen(uploadId);
 		storageService.uploadMultipartPart(interviewPrefix, blobName, uploadId, part, data);
 		recordingUploads.touched(uploadId);
+	}
+
+	@Override
+	public String presignRecordingPart(Long interviewScheduleId, String blobName, String uploadId, int part,
+			long size) {
+		requireOwnBlob(interviewScheduleId, blobName);
+		if (part < 1 || part > 10_000) {
+			throw new IllegalArgumentException("Part number out of range");
+		}
+		if (size < 1 || size > partMaxBytes) {
+			throw new IllegalArgumentException("Part size must be between 1 and " + partMaxBytes + " bytes");
+		}
+		// Refused with 410 once the server has finished this upload, as for a piece sent through the application.
+		recordingUploads.requireOpen(uploadId);
+		// The bytes never reach this server, so asking for the URL is the sign that the upload is alive.
+		recordingUploads.touched(uploadId);
+		return storageService.presignUploadPart(interviewPrefix, blobName, uploadId, part, size,
+				java.time.Duration.ofMinutes(partUrlTtlMinutes));
 	}
 
 	@Override

@@ -44,6 +44,14 @@ public interface InterviewService {
 	/** Store one piece of a recording that is being sent in pieces. */
 	void uploadRecordingPart(Long interviewScheduleId, String blobName, String uploadId, int part, byte[] data);
 
+	/**
+	 * A URL the browser sends one piece of a recording to directly, bypassing this server.
+	 *
+	 * @param size the exact size in bytes of the piece the browser will send; storage rejects any other length
+	 * @return the URL, valid for a few minutes
+	 */
+	String presignRecordingPart(Long interviewScheduleId, String blobName, String uploadId, int part, long size);
+
 	/** Join the pieces, and add the finished recording to the interview's list. */
 	String completeRecordingUpload(Long interviewScheduleId, String kind, String blobName, String uploadId);
 
