@@ -113,6 +113,22 @@ class ScopedScreeningTest {
 		assertEquals(1, response.rejectedCount());
 	}
 
+	// ------------------------------------------------------------- score check (read only)
+
+	@Test
+	void aScoreCheckGivesTheScoreAndChangesNothingForACandidateAtAnyStage() {
+		JobApplicationForCandidate interviewing =
+				applicant("interview@example.test", ApplicationStatus.INTERVIEW_SCHEDULED, STRONG_RESUME);
+		givenApplicants(interviewing);
+
+		List<ScreeningResultDTO> rows = service.previewScores(PREFIX, List.of("interview@example.test"));
+
+		assertEquals(1, rows.size());
+		assertTrue(rows.get(0).matchPercent() > 0, "got: " + rows.get(0).matchPercent());
+		assertEquals(ApplicationStatus.INTERVIEW_SCHEDULED, interviewing.getStatus());
+		verify(applications, never()).save(any(JobApplicationForCandidate.class));
+	}
+
 	// ------------------------------------------------------------- scoped screening
 
 	@Test

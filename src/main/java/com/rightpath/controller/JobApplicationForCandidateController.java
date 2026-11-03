@@ -209,6 +209,20 @@ public class JobApplicationForCandidateController {
     }
 
     /**
+     * Admin: see what candidates would score, changing nothing. Same body as {@code /screen}. Nothing is saved and
+     * no stage moves, so it is safe for a candidate at any stage.
+     */
+    @PostMapping("/score-check")
+    @PreAuthorize("hasAuthority('JOB_APPLICATION_READ_ALL')")
+    public ResponseEntity<List<ScreeningResultDTO>> checkScores(@RequestBody ScreeningRequestDTO request) {
+        if (request.getJobPrefix() == null || request.getJobPrefix().isBlank()) {
+            throw new IllegalArgumentException("Job prefix is required.");
+        }
+        return ResponseEntity.ok(
+            applicationForCandidateService.previewScores(request.getJobPrefix(), request.getEmails()));
+    }
+
+    /**
      * Admin: Get all applicants for a job
      */
     @GetMapping("/applicants/{jobPostId}")

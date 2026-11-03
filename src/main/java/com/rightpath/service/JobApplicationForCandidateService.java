@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 
 import com.rightpath.dto.JobApplicationForCandidateDTO;
 import com.rightpath.dto.ScreeningResponseDTO;
+import com.rightpath.dto.ScreeningResultDTO;
 import com.rightpath.entity.JobApplicationForCandidate;
 
 @Service
@@ -77,6 +78,12 @@ public interface JobApplicationForCandidateService {
      * @return Per-candidate outcomes plus summary counts for the run.
      */
     ScreeningResponseDTO screenCandidates(String jobPrefix, List<String> emails);
+
+    /**
+     * What each candidate scores against the job's required skills, without changing anything: no status, no
+     * shortlist decision, no stored score. For an admin who only wants to see the number.
+     */
+    List<ScreeningResultDTO> previewScores(String jobPrefix, List<String> emails);
 
     /**
      * Retrieves applicants by job post ID.

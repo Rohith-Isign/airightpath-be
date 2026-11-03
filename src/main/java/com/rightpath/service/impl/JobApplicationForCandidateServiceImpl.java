@@ -6,6 +6,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -421,6 +422,40 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
                 wholeJob ? ScreeningResponseDTO.SCOPE_ALL : ScreeningResponseDTO.SCOPE_SELECTED, results);
         logger.info("ATS screening on {} ({}): {}", jobPrefix, response.scope(), response.message());
         return response;
+    }
+
+    @Override
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public List<ScreeningResultDTO> previewScores(String jobPrefix, List<String> emails) {
+        JobPost jobPost = requireJobPost(jobPrefix);
+        String[] requiredSkills = requiredSkills(jobPost);
+        Map<String, List<String>> synonyms = synonymLoader.getSynonymMap();
+        boolean wholeJob = emails == null || emails.isEmpty();
+        Set<String> wanted = new HashSet<>();
+        if (!wholeJob) {
+            emails.stream().filter(e -> e != null && !e.isBlank()).forEach(e -> wanted.add(normalizeEmail(e)));
+        }
+
+        List<ScreeningResultDTO> results = new ArrayList<>();
+        for (JobApplicationForCandidate app : applicationForCandidateRepository.findByJobPost(jobPost)) {
+            String email = app.getUser() != null ? app.getUser().getEmail() : null;
+            if (!wholeJob && (email == null || !wanted.contains(normalizeEmail(email)))) {
+                continue;
+            }
+            String fullName = (trimToEmpty(app.getFirstName()) + " " + trimToEmpty(app.getLastName())).trim();
+            String resumeText = readableResumeText(app);
+            String status = app.getStatus() != null ? app.getStatus().name() : null;
+            if (resumeText == null) {
+                results.add(new ScreeningResultDTO(email, fullName, null, status, false,
+                        "The resume is missing or could not be read, so there is no score."));
+                continue;
+            }
+            // Never saved: this path has no repository write, and the transaction is read-only.
+            double score = calculateMatchPercent(resumeText, requiredSkills, synonyms);
+            results.add(ScreeningResultDTO.skipped(email, fullName, score, status,
+                    "Score check only. Nothing was changed."));
+        }
+        return results;
     }
 
     /**
