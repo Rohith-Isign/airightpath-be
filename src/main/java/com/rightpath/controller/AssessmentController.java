@@ -179,6 +179,8 @@ public class AssessmentController {
         response.put("assignedCount", report.getAssignedCount());
         response.put("notifiedCount", report.getNotifiedCount());
         response.put("notNotifiedCount", report.getNotNotifiedCount());
+        response.put("skipped", report.getSkipped());
+        response.put("skippedCount", report.getSkippedCount());
 
         // 207 when the exams exist but some candidates were not emailed. A plain 200
         // would report a mail outage as an unqualified success; the old 500 threw the

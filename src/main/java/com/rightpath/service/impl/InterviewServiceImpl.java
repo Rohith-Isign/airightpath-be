@@ -347,7 +347,25 @@ public class InterviewServiceImpl implements InterviewService {
 	    // role, instead of the bare job prefix they never see anywhere else.
 	    Map<String, JobApplicationForCandidate> applicationsByEmail = new HashMap<>();
 
+	    com.rightpath.enums.InterviewRound bookedRound = com.rightpath.enums.InterviewRound.orDefault(round);
+	    LocalDateTime nowInBusinessZone = businessSchedule.now();
+	    List<CandidateInterviewSchedule> existing = scheduleRepo.findAllByJobPrefix(jobPrefix);
+
 	    for (String email : emails) {
+	        // A round the candidate was already sent, and has neither started nor missed, is not booked again:
+	        // that would send a second invitation for the same interview. Once it is done (or its window has
+	        // closed) a further attempt can be booked.
+	        boolean alreadyOpen = existing.stream()
+	                .filter(x -> !x.isDeleted() && email.equalsIgnoreCase(x.getEmail()))
+	                .filter(x -> x.getEffectiveRound() == bookedRound)
+	                .anyMatch(x -> x.getAttemptStatus() != AttemptStatus.COMPLETED
+	                        && (x.getDeadlineTime() == null || x.getDeadlineTime().isAfter(nowInBusinessZone)));
+	        if (alreadyOpen) {
+	            log.info("Skipping {} on {}: {} interview already assigned and still open", email, jobPrefix,
+	                    bookedRound);
+	            continue;
+	        }
+
 	        JobApplicationForCandidate application = jobAppRepo
 	                .findByJobPost_JobPrefixAndUser_Email(jobPrefix, email)
 	                .orElseThrow(() -> new ResourceNotFoundException("Application not found for " + email));

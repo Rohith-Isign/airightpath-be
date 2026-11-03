@@ -516,8 +516,27 @@ public class AssessmentServiceImpl implements AssessmentService {
 		String aptitudePaper = paperText(dto.getAptitudeQuestionPaper());
 		String codingPaper = paperText(dto.getCodingQuestionPaper());
 		for (String email : dto.getCandidateEmails()) {
+			// A paper of a type the candidate was already sent, and has neither sat nor missed, is not sent
+			// again: that would hand them a second invitation for the same exam. Only once the earlier one is
+			// submitted (or its window has closed) can the same type be assigned again.
+			boolean aptitudeAlreadySent = hasOpenAssignment(jobPrefix, email, AssessmentType.APTITUDE);
+			boolean codingAlreadySent = hasOpenAssignment(jobPrefix, email, AssessmentType.CODING);
+			boolean sendAptitude = dto.getAptitudeQuestionPaper() != null && !dto.getAptitudeQuestionPaper().isEmpty()
+					&& !aptitudeAlreadySent;
+			boolean sendCoding = dto.getCodingQuestionPaper() != null && !dto.getCodingQuestionPaper().isEmpty()
+					&& !codingAlreadySent;
+			if (aptitudeAlreadySent && dto.getAptitudeQuestionPaper() != null) {
+				report.recordSkipped(email, "Aptitude already assigned and not yet submitted");
+			}
+			if (codingAlreadySent && dto.getCodingQuestionPaper() != null) {
+				report.recordSkipped(email, "Coding already assigned and not yet submitted");
+			}
+			if (!sendAptitude && !sendCoding) {
+				continue;
+			}
+
 			// Process Aptitude Assessment
-			if (dto.getAptitudeQuestionPaper() != null && !dto.getAptitudeQuestionPaper().isEmpty()) {
+			if (sendAptitude) {
 				Assessment aptitudeAssessment = new Assessment();
 				aptitudeAssessment.setAssessmentType(AssessmentType.APTITUDE);
 				aptitudeAssessment.setCandidateEmail(email);
@@ -549,7 +568,7 @@ public class AssessmentServiceImpl implements AssessmentService {
 			}
 
 			// Process Coding Assessment (without answer key)
-			if (dto.getCodingQuestionPaper() != null && !dto.getCodingQuestionPaper().isEmpty()) {
+			if (sendCoding) {
 				Assessment codingAssessment = new Assessment();
 				codingAssessment.setAssessmentType(AssessmentType.CODING);
 				codingAssessment.setCandidateEmail(email);
@@ -593,6 +612,18 @@ public class AssessmentServiceImpl implements AssessmentService {
 			}
 		}
 		return report;
+	}
+
+	/**
+	 * Whether the candidate holds a paper of this type for the job that is still open: not sat, and its window has
+	 * not closed. Such a paper is the invitation already sent.
+	 */
+	private boolean hasOpenAssignment(String jobPrefix, String email, AssessmentType type) {
+		return assessmentRepository
+				.findTopByCandidateEmailAndJobPrefixAndAssessmentTypeAndExamAttendedFalseOrderByAssignedAtAsc(email,
+						jobPrefix, type)
+				.filter(a -> !a.isExpired() && (a.getDeadline() == null || a.getDeadline().isAfter(LocalDateTime.now())))
+				.isPresent();
 	}
 
 	/** True when this failure came out of the mail stack rather than our own code. */
