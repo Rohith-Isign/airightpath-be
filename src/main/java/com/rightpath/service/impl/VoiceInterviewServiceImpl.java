@@ -89,6 +89,9 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     /** The zone interview slots are written in; see {@link BusinessSchedule}. */
     @Autowired
     private BusinessSchedule businessSchedule;
+
+    @Autowired
+    private com.rightpath.repository.JobApplicationForCandidateRepository jobAppRepo;
     private final InterviewTopicCoverage topicCoverage;
     private final PromptInjectionGuard injectionGuard;
     private final InterviewTemplateService templateService;
@@ -610,6 +613,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     // commonest outcome of all reached the reviewer's screen
                     // as "how this interview ended was not recorded".
                     s.setCompletionReason(CompletionReason.NATURAL_COMPLETION);
+                    advanceApplicationAfterInterview(s);
                 } else {
                     // Every turn spends from the ceiling, probes included —
                     // otherwise an interview could be stretched indefinitely by
@@ -988,6 +992,24 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         endVoiceInterview(scheduleId, CompletionReason.CANDIDATE_ENDED);
     }
 
+    /**
+     * Moves the candidate's application on once an interview has finished, so the pipeline stage follows what has
+     * happened instead of staying at "Interview Scheduled" for good. Only an application still at that stage moves:
+     * a later round, or a candidate already selected or rejected, keeps the stage they are at.
+     */
+    private void advanceApplicationAfterInterview(CandidateInterviewSchedule schedule) {
+        jobAppRepo.findByJobPost_JobPrefixAndUser_Email(schedule.getJobPrefix(), schedule.getEmail())
+                .ifPresent(application -> {
+                    if (application.getStatus() == com.rightpath.enums.ApplicationStatus.INTERVIEW_SCHEDULED) {
+                        application.setStatus(com.rightpath.enums.ApplicationStatus.INTERVIEW_COMPLETED);
+                        application.setInterview("Completed");
+                        jobAppRepo.save(application);
+                        log.info("Application of {} on {} moved to INTERVIEW_COMPLETED", schedule.getEmail(),
+                                schedule.getJobPrefix());
+                    }
+                });
+    }
+
     @Override
     @Transactional
     public void endVoiceInterview(Long scheduleId, CompletionReason reason) {
@@ -1002,6 +1024,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         schedule.setEndedAt(LocalDateTime.now());
         schedule.setCompletionReason(reason);
         scheduleRepo.save(schedule);
+        advanceApplicationAfterInterview(schedule);
 
         // Fire-and-forget async evaluation generation, once this has committed.
         // Started from inside the transaction it could read the schedule before
@@ -1050,6 +1073,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             schedule.setEndedAt(LocalDateTime.now());
             schedule.setCompletionReason(CompletionReason.PROCTORING_VIOLATION);
             scheduleRepo.save(schedule);
+            advanceApplicationAfterInterview(schedule);
             log.warn("Schedule {} terminated due to excessive warnings", scheduleId);
             return true;
         }
@@ -1106,6 +1130,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             schedule.setEndedAt(endOfActivity(schedule));
             schedule.setCompletionReason(CompletionReason.TIMEOUT);
             scheduleRepo.save(schedule);
+            advanceApplicationAfterInterview(schedule);
 
             // Try to generate evaluation
             try {
