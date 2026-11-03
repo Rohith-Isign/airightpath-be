@@ -891,7 +891,15 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     private static boolean isClosingQuestion(String content) {
         String text = content == null ? "" : content.toLowerCase();
         return text.contains("any questions for us") || text.contains("any questions about the role")
-                || text.contains("any other questions") || text.contains("any more questions");
+                || text.contains("any other questions") || text.contains("any more questions")
+                // Other wordings the model reaches for. Left out, a closing question the matcher did not recognise
+                // read as "not asked", so the next reply was treated as an ordinary answer and the interview was
+                // closed after a single feedback question instead of letting the candidate ask their questions.
+                || text.contains("questions for me") || text.contains("any questions on the role")
+                || text.contains("anything you would like to ask") || text.contains("anything you'd like to ask")
+                || text.contains("anything else you would like to know") || text.contains("anything else you'd like to know")
+                || text.contains("any feedback or questions") || text.contains("any questions or feedback")
+                || text.contains("any questions you would like to ask") || text.contains("any questions you'd like to ask");
     }
 
     /** How many times the candidate has replied since the closing question was first asked, the current reply included. */

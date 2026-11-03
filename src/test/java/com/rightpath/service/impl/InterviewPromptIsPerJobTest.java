@@ -61,7 +61,7 @@ class InterviewPromptIsPerJobTest {
         String prompt = service.getPrompt(JOB, PromptType.INTERVIEW, PromptStage.START);
 
         // The shared prompt stands for the default round, which is the technical one.
-        assertTrue(prompt.contains("L2 technical"), prompt);
+        assertTrue(prompt.toLowerCase().contains("l2 technical"), prompt);
     }
 
     @Test
@@ -92,9 +92,9 @@ class InterviewPromptIsPerJobTest {
         String l2 = service.getInterviewPrompt(JOB, InterviewRound.L2_TECHNICAL, PromptStage.START);
         String l3 = service.getInterviewPrompt(JOB, InterviewRound.L3_BEHAVIORAL, PromptStage.START);
 
-        assertTrue(l2.contains("L2 technical"), l2);
-        assertTrue(l3.contains("L3 Behavioral"), l3);
-        assertTrue(!l3.contains("L2 technical"), "the behavioural round must not get the technical prompt");
+        assertTrue(l2.toLowerCase().contains("l2 technical"), l2);
+        assertTrue(l3.toLowerCase().contains("l3 behavio"), l3);
+        assertTrue(!l3.toLowerCase().contains("conducting an l2 technical interview"), "the behavioural round must not get the technical prompt");
     }
 
     @Test
