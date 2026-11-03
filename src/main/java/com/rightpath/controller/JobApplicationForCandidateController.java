@@ -41,6 +41,9 @@ public class JobApplicationForCandidateController {
 
     @Autowired
     private JobApplicationForCandidateService applicationForCandidateService;
+
+    @Autowired
+    private com.rightpath.util.AcknowledgeLinkSigner acknowledgeLinkSigner;
     
     @Autowired
     private JobApplicationForCandidateRepository applicationForCandidateRepository;
@@ -408,15 +411,48 @@ public class JobApplicationForCandidateController {
     /**
      * Candidate Acknowledges confirmation
      */
-    @GetMapping("/acknowledge")
-    @PreAuthorize("hasAuthority('JOB_APPLY')")
-    public ResponseEntity<Map<String, String>> acknowledgeMail(
+    @GetMapping(value = "/acknowledge", produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> acknowledgeMail(
         @RequestParam String jobPrefix,
-        @RequestParam String email) {
+        @RequestParam String email,
+        @RequestParam(required = false) String token) {
 
-        String result = applicationForCandidateService.acknowledgeCandidate(jobPrefix, email);
-        sendWebSocketNotification(email, jobPrefix, "ACKNOWLEDGED_BACK", "Candidate acknowledged the confirmation");
-        return ResponseEntity.ok(Map.of("status", "success", "message", result));
+        // Opened from the mail with no login: the signed token is the only proof the link is ours and is for this
+        // application. This used to sit behind a login, so every candidate who clicked it got a 403 page.
+        if (!acknowledgeLinkSigner.verify(jobPrefix, email, token)) {
+            log.warn("Acknowledgement link refused for {} / {}: missing or invalid token", jobPrefix, email);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(acknowledgePage(false,
+                    "This confirmation link is not valid. Please use the link in the latest email we sent you."));
+        }
+        try {
+            String result = applicationForCandidateService.acknowledgeCandidate(jobPrefix, email);
+            String lower = result == null ? "" : result.toLowerCase();
+            boolean confirmed = !lower.startsWith("cannot") && !lower.startsWith("acknowledgement not allowed");
+            if (confirmed) {
+                sendWebSocketNotification(email, jobPrefix, "ACKNOWLEDGED_BACK", "Candidate acknowledged the confirmation");
+            }
+            return ResponseEntity.ok(acknowledgePage(confirmed,
+                    confirmed ? "Thank you. Your test slot is confirmed. Check your email for the details." : result));
+        } catch (RuntimeException e) {
+            log.warn("Acknowledgement failed for {} / {}: {}", jobPrefix, email, e.getMessage());
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(acknowledgePage(false,
+                    "We could not find this application. Please reply to the email we sent you."));
+        }
+    }
+
+    /** A small page the candidate sees after clicking the link, in place of raw JSON or an error page. */
+    private static String acknowledgePage(boolean ok, String message) {
+        String colour = ok ? "#16a34a" : "#dc2626";
+        String title = ok ? "Slot confirmed" : "Could not confirm";
+        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" "
+                + "content=\"width=device-width,initial-scale=1\"><title>" + title + "</title></head>"
+                + "<body style=\"font-family:Arial,sans-serif;background:#f4f6f8;margin:0;display:flex;"
+                + "align-items:center;justify-content:center;min-height:100vh\"><div style=\"background:#fff;"
+                + "max-width:420px;padding:32px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.08);"
+                + "text-align:center\"><h2 style=\"color:" + colour + ";margin:0 0 12px\">" + title + "</h2>"
+                + "<p style=\"color:#374151;line-height:1.5;margin:0\">"
+                + org.springframework.web.util.HtmlUtils.htmlEscape(message == null ? "" : message)
+                + "</p></div></body></html>";
     }
 
     /**

@@ -67,6 +67,10 @@ public class ApiSecurityConfig {
 					"/api/generate-otp", "/api/validate-otp").permitAll()
 			.requestMatchers(HttpMethod.PUT, "/api/update-password").permitAll()
 
+			// The "confirm your slot" link in the acknowledgement mail. It is opened from a mail client, so there is
+			// no login; the controller refuses any request whose signed token does not match the application.
+			.requestMatchers(HttpMethod.GET, "/api/job-applications/acknowledge").permitAll()
+
 			// The candidate's phone has no login. Each of these resolves a pairing token
 			// (MobilePairingService) and refuses without one. Listed one by one so a new
 			// /api/mobile endpoint is private until someone decides otherwise.

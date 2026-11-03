@@ -216,7 +216,7 @@ app:
     website: "${APP_MAIL_WEBSITE:https://www.airightpath.com}"
     company-address: "${APP_MAIL_COMPANY_ADDRESS:ISIGN TECH PRIVATE LIMITED, 1st floor, Plot No: 2-87/3, Mn Rd, beside Reliance Trends, Sreeramaaramam, Narsingi, Hyderabad, Telangana 500089}"
     # Target of the "Start my test" / "Go to my dashboard" buttons.
-    candidate-portal-url: "${APP_MAIL_CANDIDATE_PORTAL_URL:https://stage.airightpath.com}"
+    candidate-portal-url: "${APP_MAIL_CANDIDATE_PORTAL_URL:https://dev.airightpath.com/candidate/interviews}"
     # Shown on every on-site test mail, so all three quote one address.
     test-venue: "${APP_MAIL_TEST_VENUE:ISIGN TECH PRIVATE LIMITED, 1st floor, Plot No: 2-87/3, Mn Rd, beside Reliance Trends, Sreeramaaramam, Narsingi, Hyderabad, Telangana 500089}"
 

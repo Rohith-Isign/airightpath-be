@@ -84,6 +84,9 @@ public class JobApplicationForCandidateServiceImpl implements JobApplicationForC
 
     private final String baseUrl;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.rightpath.util.AcknowledgeLinkSigner acknowledgeLinkSigner;
+
     @Value("${ats.screening.threshold:60.0}")
     private double atsThreshold;
 
@@ -700,8 +703,13 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
 	            application.setExamTime(examSlot.toLocalTime());
 	            applicationForCandidateRepository.save(application);
 
-	            String acknowledgeUrl = baseUrl +"/api/job-applications/acknowledge?jobPrefix="
-	                    + jobPrefix + "&email=" + email;
+	            // Signed and encoded: the link is opened from a mail client with no login, so the signature is what
+	            // proves it came from us, and the encoding keeps a "+" or "&" in an address from breaking it.
+	            String acknowledgeUrl = baseUrl + "/api/job-applications/acknowledge?jobPrefix="
+	                    + java.net.URLEncoder.encode(jobPrefix, java.nio.charset.StandardCharsets.UTF_8)
+	                    + "&email=" + java.net.URLEncoder.encode(email, java.nio.charset.StandardCharsets.UTF_8)
+	                    + (acknowledgeLinkSigner == null ? ""
+	                            : "&token=" + acknowledgeLinkSigner.sign(jobPrefix, email));
 
 	            // Prepare params for universal email
 	            Map<String, Object> emailParams = new HashMap<>();
