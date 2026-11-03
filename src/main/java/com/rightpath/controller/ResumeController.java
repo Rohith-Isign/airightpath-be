@@ -65,8 +65,12 @@ public class ResumeController {
     @PreAuthorize("hasAuthority('RESUME_UPDATE')")
     public ResponseEntity<Map<String, String>> updateResume(
             @RequestParam("file") MultipartFile file,
-            @RequestParam("email") String email) throws Exception {
+            @RequestParam(value = "email", required = false) String ignoredEmail,
+            Authentication authentication) throws Exception {
         Map<String, String> response = new HashMap<>();
+        // The signed-in candidate's own address, never the one in the request: it was taken from the form, so any
+        // candidate could replace another's resume by sending their email.
+        String email = authentication.getName();
         log.info("Resume update for {}", email);
         resumeService.updateResume(file, email);
         response.put("message", "Resume updated successfully.");
