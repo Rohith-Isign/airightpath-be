@@ -29,7 +29,7 @@ public class StatusTransitionValidator {
         // The ack / reconfirm round-trip stays available, it is just no longer
         // the only way to reach an exam.
         Map.entry(ApplicationStatus.SHORTLISTED,           Set.of(ApplicationStatus.ACKNOWLEDGED, ApplicationStatus.EXAM_SENT, ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)),
-        Map.entry(ApplicationStatus.ACKNOWLEDGED,          Set.of(ApplicationStatus.ACKNOWLEDGED_BACK, ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)),
+        Map.entry(ApplicationStatus.ACKNOWLEDGED,          Set.of(ApplicationStatus.ACKNOWLEDGED_BACK, ApplicationStatus.EXAM_SENT, ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)),
         Map.entry(ApplicationStatus.ACKNOWLEDGED_BACK,     Set.of(ApplicationStatus.RECONFIRMED, ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)),
         Map.entry(ApplicationStatus.RECONFIRMED,           Set.of(ApplicationStatus.EXAM_SENT, ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)),
         // EXAM_SENT -> EXAM_SENT, and EXAM_COMPLETED -> EXAM_SENT: an exam round

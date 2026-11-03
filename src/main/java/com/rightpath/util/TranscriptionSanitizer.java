@@ -237,6 +237,9 @@ public final class TranscriptionSanitizer {
 			// speech has stopped, so they are held to a stricter standard than a segment in the middle.
 			if (reason == null && (i == 0 || i == segments.size() - 1)) {
 				reason = edgeSignOffReason(segment);
+				if (reason == null) {
+					reason = edgeLowConfidenceReason(segment);
+				}
 			}
 			String trimmed = segment.path("text").asText("").trim();
 			if (reason != null) {
@@ -389,6 +392,33 @@ public final class TranscriptionSanitizer {
 		double avgLogprob = avgLogprobNode.asDouble(0);
 		if (noSpeech > EDGE_SIGN_OFF_NO_SPEECH || avgLogprob < EDGE_SIGN_OFF_POOR_DECODE) {
 			return "stray sign-off at the edge of the recording (no_speech_prob " + noSpeech
+					+ ", avg_logprob " + avgLogprob + ")";
+		}
+		return null;
+	}
+
+	/** At the edges of a recording, a segment with this much doubt on both counts is room noise, not speech. */
+	private static final double EDGE_NOISE_NO_SPEECH = 0.3;
+	private static final double EDGE_NOISE_POOR_DECODE = -0.7;
+
+	/**
+	 * Why the first or last segment, whatever it says, is not the candidate, or null if it may be.
+	 *
+	 * <p>The words Whisper invents over room noise gather at the start and end of a recording, where the sound is
+	 * either settling or trailing off. Real speech is decoded with confidence (no_speech_prob low, avg_logprob near
+	 * zero); both numbers being poor together is what an invented sentence looks like. Requires both, so a quiet or
+	 * accented but real segment, which is poor on at most one, is kept.</p>
+	 */
+	private static String edgeLowConfidenceReason(JsonNode segment) {
+		JsonNode noSpeechNode = segment.path("no_speech_prob");
+		JsonNode avgLogprobNode = segment.path("avg_logprob");
+		if (noSpeechNode.isMissingNode() || avgLogprobNode.isMissingNode()) {
+			return null;
+		}
+		double noSpeech = noSpeechNode.asDouble(0);
+		double avgLogprob = avgLogprobNode.asDouble(0);
+		if (noSpeech > EDGE_NOISE_NO_SPEECH && avgLogprob < EDGE_NOISE_POOR_DECODE) {
+			return "low-confidence segment at the edge of the recording (no_speech_prob " + noSpeech
 					+ ", avg_logprob " + avgLogprob + ")";
 		}
 		return null;

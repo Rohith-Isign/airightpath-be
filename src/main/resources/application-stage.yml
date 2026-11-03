@@ -43,7 +43,6 @@ spring:
     properties:
       hibernate:
         format_sql: false
-        dialect: org.hibernate.dialect.MySQLDialect
   mail:
     host: ${MAIL_HOST:smtp.hostinger.com}
     port: ${MAIL_PORT:587}

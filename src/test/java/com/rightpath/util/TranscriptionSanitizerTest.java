@@ -352,4 +352,21 @@ class TranscriptionSanitizerTest {
 
 		assertEquals("I would use a hash map here.", TranscriptionSanitizer.sanitize(json).text());
 	}
+
+	@Test
+	void aLowConfidenceSentenceAtTheStartIsDroppedButTheSpeechAfterItIsKept() throws Exception {
+		String invented = segment("This is all I have for you this year.", 0.42, -0.9, 1.4, 0, 3);
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + invented + ","
+				+ segment("My name is Rupa and I work with Spring Boot.", 0.01, -0.25, 1.4, 3, 8) + "]}");
+
+		assertEquals("My name is Rupa and I work with Spring Boot.", TranscriptionSanitizer.sanitize(json).text());
+	}
+
+	@Test
+	void aQuietButRealEdgeSegmentIsKept() throws Exception {
+		// Poor on one count only: an accent or a soft voice, not an invented sentence.
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + segment("I mostly use React.", 0.05, -0.8, 1.4, 0, 3) + "]}");
+
+		assertEquals("I mostly use React.", TranscriptionSanitizer.sanitize(json).text());
+	}
 }
