@@ -344,4 +344,12 @@ class TranscriptionSanitizerTest {
 
 		assertEquals(answer, TranscriptionSanitizer.sanitize(json).text());
 	}
+
+	@Test
+	void aSignOffGluedOntoRealSpeechIsStrippedAndTheSpeechKept() throws Exception {
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech(
+				"I would use a hash map here. Thank you for watching and please subscribe to my channel.") + "]}");
+
+		assertEquals("I would use a hash map here.", TranscriptionSanitizer.sanitize(json).text());
+	}
 }

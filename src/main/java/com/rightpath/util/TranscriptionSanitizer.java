@@ -1,12 +1,10 @@
 package com.rightpath.util;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
-import java.util.zip.Deflater;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -248,6 +246,12 @@ public final class TranscriptionSanitizer {
 			if (trimmed.isEmpty()) {
 				continue;
 			}
+			// A stock sign-off glued onto the end of real speech ("... Thank you for watching and please subscribe to
+			// my channel.") is taken out; the words before it stay.
+			trimmed = stripArtefactSentences(trimmed);
+			if (trimmed.isEmpty()) {
+				continue;
+			}
 			kept.add(trimmed);
 			spans.add(new double[] { segment.path("start").asDouble(0), segment.path("end").asDouble(0) });
 		}
@@ -399,6 +403,30 @@ public final class TranscriptionSanitizer {
 		return text.trim();
 	}
 
+	/** Phrases no candidate says in an interview; a sentence holding one is a video sign-off Whisper made up. */
+	private static final List<String> SIGN_OFF_MARKERS = List.of("thank you for watching", "thanks for watching",
+			"subscribe to my channel", "please subscribe", "like and subscribe");
+
+	/** Sentences that are only a subtitle sign-off, wherever they sit in a segment. */
+	private static String stripArtefactSentences(String text) {
+		String[] sentences = text.split("(?<=[.!?])\s+");
+		if (sentences.length < 2) {
+			return text;
+		}
+		StringBuilder out = new StringBuilder();
+		for (String sentence : sentences) {
+			String normalised = normalise(sentence);
+			if (SUBTITLE_ARTEFACTS.contains(normalised) || SIGN_OFF_MARKERS.stream().anyMatch(normalised::contains)) {
+				continue;
+			}
+			if (out.length() > 0) {
+				out.append(' ');
+			}
+			out.append(sentence);
+		}
+		return out.toString().trim();
+	}
+
 	// ── Not English ─────────────────────────────────────────────────────
 
 	/** Share of letters outside the Latin alphabet above which a segment is not English. */
@@ -442,13 +470,6 @@ public final class TranscriptionSanitizer {
 
 	/** Share of the words that must sit inside repeats before the text is called a loop. */
 	private static final double LOOP_COVERAGE = 0.5;
-
-	/**
-	 * Deflate ratio above which a long text is a loop even where small variations broke up the exact repeats.
-	 * Ordinary speech compresses to about 1.5 to 2.2; Whisper's own segment check uses 2.4.
-	 */
-	private static final double LOOP_COMPRESSION = 2.6;
-	private static final int LOOP_COMPRESSION_MIN_WORDS = 40;
 
 	/**
 	 * Whether the text is one phrase repeated over and over, which Whisper does on low-level noise.
@@ -497,7 +518,7 @@ public final class TranscriptionSanitizer {
 		if (coveredCount >= words.length * LOOP_COVERAGE) {
 			return true;
 		}
-		return words.length >= LOOP_COMPRESSION_MIN_WORDS && deflateRatio(normalised) > LOOP_COMPRESSION;
+		return false;
 	}
 
 	/** Whether the {@code length} words at {@code from} are the same as the ones at {@code start}. */
@@ -511,18 +532,6 @@ public final class TranscriptionSanitizer {
 			}
 		}
 		return true;
-	}
-
-	/** Bytes in over bytes out of zlib, the measure Whisper itself calls compression_ratio. */
-	private static double deflateRatio(String text) {
-		byte[] input = text.getBytes(StandardCharsets.UTF_8);
-		Deflater deflater = new Deflater();
-		deflater.setInput(input);
-		deflater.finish();
-		byte[] buffer = new byte[input.length + 64];
-		int compressed = deflater.deflate(buffer);
-		deflater.end();
-		return compressed == 0 ? 0 : (double) input.length / compressed;
 	}
 
 	/** Lowercased, stripped of punctuation and collapsed, for comparison only. */
