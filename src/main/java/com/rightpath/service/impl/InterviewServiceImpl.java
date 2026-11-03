@@ -425,6 +425,57 @@ public class InterviewServiceImpl implements InterviewService {
 
 	@Transactional
 	@Override
+	public CandidateInterviewSchedule rescheduleInterview(Long id, LocalDateTime assignedAt,
+			LocalDateTime deadlineTime, boolean notify) {
+		CandidateInterviewSchedule schedule = scheduleRepo.findById(id)
+				.orElseThrow(() -> new ResourceNotFoundException("Interview not found"));
+
+		if (schedule.getAttemptStatus() != AttemptStatus.NOT_ATTEMPTED || schedule.getStartedAt() != null) {
+			throw new IllegalStateException(
+					"This interview has already been started, so its time window can no longer be changed.");
+		}
+		requireDeadline(deadlineTime);
+		if (assignedAt == null) {
+			throw new IllegalArgumentException("The interview start time is required");
+		}
+		requireWindow(assignedAt, deadlineTime);
+		if (!deadlineTime.isAfter(businessSchedule.now())) {
+			throw new IllegalArgumentException("The new end time has already passed");
+		}
+
+		schedule.setAssignedAt(assignedAt);
+		schedule.setDeadlineTime(deadlineTime);
+		scheduleRepo.save(schedule);
+		log.info("Rescheduled interview {} for {} to {} - {}", id, schedule.getEmail(), assignedAt, deadlineTime);
+
+		if (notify) {
+			Map<String, Object> emailParams = new HashMap<>();
+			emailParams.put("recipientEmail", schedule.getEmail());
+			emailParams.put("jobPrefix", schedule.getJobPrefix());
+			emailParams.put("startTime", assignedAt);
+			emailParams.put("endTime", deadlineTime);
+			jobAppRepo.findByJobPost_JobPrefixAndUser_Email(schedule.getJobPrefix(), schedule.getEmail())
+					.ifPresent(application -> {
+						emailParams.put("firstName", application.getFirstName());
+						emailParams.put("lastName", application.getLastName());
+						emailParams.put("mobileNumber", application.getMobileNumber());
+						if (application.getJobPost() != null) {
+							emailParams.put("jobTitle", application.getJobPost().getJobTitle());
+						}
+					});
+			// Best effort: the window has moved either way.
+			try {
+				emailAsyncService.sendTemplatedEmail(EmailType.INTERVIEW_SCHEDULE, emailParams);
+			} catch (Exception e) {
+				log.warn("Rescheduled interview {} but could not email {}: {}", id, schedule.getEmail(),
+						e.getMessage());
+			}
+		}
+		return schedule;
+	}
+
+	@Transactional
+	@Override
 	public void markCompleted(Long interviewScheduleId, AttemptStatus attemptStatus, InterviewResult interviewResult,
 			String summaryRef) {
 		CandidateInterviewSchedule schedule = scheduleRepo.findById(interviewScheduleId)

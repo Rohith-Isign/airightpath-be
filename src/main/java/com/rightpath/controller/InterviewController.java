@@ -18,6 +18,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -131,6 +132,16 @@ public class InterviewController {
 	            .toList();
 
 	    return ResponseEntity.ok(results);
+	}
+
+	/** Moves the window of a booked interview that has not been started, and tells the candidate. */
+	@PatchMapping("/schedules/{id}/schedule")
+	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
+	public ResponseEntity<?> rescheduleInterview(@PathVariable Long id,
+			@RequestBody com.rightpath.dto.RescheduleInterviewDTO dto) {
+		CandidateInterviewSchedule schedule = interviewService.rescheduleInterview(id, dto.getAssignedAt(),
+				dto.getDeadlineTime(), dto.isNotify());
+		return ResponseEntity.ok(new CandidateInterviewScheduleDTO(schedule));
 	}
 
 	/**

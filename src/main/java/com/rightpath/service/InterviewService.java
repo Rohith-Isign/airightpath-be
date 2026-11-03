@@ -173,4 +173,11 @@ public interface InterviewService {
 	            LocalDate questionsFromDate, LocalDate questionsToDate,
 	            com.rightpath.enums.InterviewRound round);
 
+	    /**
+	     * Moves the window of a booked interview the candidate has not started.
+	     * Once it has been started, the window it ran under is part of the record.
+	     */
+	    CandidateInterviewSchedule rescheduleInterview(Long id, LocalDateTime assignedAt, LocalDateTime deadlineTime,
+	            boolean notify);
+
 }
