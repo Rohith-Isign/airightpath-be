@@ -193,7 +193,10 @@ public class InterviewConductPolicy {
         // settle into — while the introduction itself is evidence, both of
         // communication and of what is worth asking about next.
         if (turnsUsed == 0) {
-            rules.append("\nThis is your first question. Ask the candidate to introduce themselves — ")
+            rules.append("\nThe candidate has ALREADY been welcomed by name and told who you are, by the system, ")
+                    .append("so do NOT greet them, do not say hello or welcome, do not introduce yourself and do not ")
+                    .append("say \"let's begin\". ")
+                    .append("This is your first question: ask the candidate to introduce themselves — ")
                     .append("who they are, what they have studied or worked on. ")
                     .append("Do not ask anything technical yet, and send no score tag: ")
                     .append("there is no answer to rate yet.\n");

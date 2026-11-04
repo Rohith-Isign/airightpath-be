@@ -45,4 +45,7 @@ public class VoiceStartResponse {
      * instant the server already enforces when it times an interview out.</p>
      */
     private java.time.LocalDateTime expiresAt;
+
+    /** When the interview began, so the screen can show how long it has been running, however often it is reloaded. */
+    private java.time.LocalDateTime startedAt;
 }

@@ -119,8 +119,19 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     @Value("${interview.terminate-on-max-warnings:false}")
     private boolean terminateOnMaxWarnings;
 
-    @Value("${interview.max-duration-minutes:60}")
+    /**
+     * The longest an interview may run, in minutes. 0 (the default) means no limit: an interview ends when the
+     * interviewer has covered what it needs to, or when the candidate ends it, never because a clock ran out.
+     */
+    @Value("${interview.max-duration-minutes:0}")
     private int maxDurationMinutes;
+
+    /**
+     * How long an interview left open with nobody in it is kept before it is closed on the candidate's behalf. Only
+     * for interviews that were abandoned (a closed tab, a dead connection); it is far longer than any real interview.
+     */
+    @Value("${interview.abandoned-after-hours:12}")
+    private int abandonedAfterHours;
 
     public VoiceInterviewServiceImpl(
             CandidateInterviewScheduleRepository scheduleRepo,
@@ -251,6 +262,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * candidate reads rather than a signal the client acts on.</p>
      */
     private String mergeWelcomeWithQuestion(String welcome, String question) {
+        // The server's welcome is the only greeting. If the model greeted too, take that off so it is not said twice.
+        question = com.rightpath.util.GreetingStripper.strip(question);
         java.util.regex.Matcher tag = QUESTION_TYPE_TAG_PATTERN.matcher(question);
         if (tag.find()) {
             String marker = tag.group().trim();
@@ -310,6 +323,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     // to restart the browser's countdown from the full
                     // duration, so reloading was a way to buy another hour.
                     .expiresAt(expiryOf(schedule))
+                    .startedAt(schedule.getStartedAt())
                     .build();
         }
 
@@ -396,6 +410,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 // so the clock on the candidate's screen and the one that
                 // actually ends the interview cannot disagree.
                 .expiresAt(expiryOf(schedule))
+                .startedAt(schedule.getStartedAt())
                 .build();
     }
 
@@ -547,6 +562,12 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
             ParsedInterviewReply parsed = replyParser.parse(reply);
 
+            // A coding question has to come with its examples. The prompt asks for two, but the model leaves them
+            // off some problems, and the candidate is then left guessing the input and output they must handle.
+            if (isCodingQuestion(parsed) && !hasExamples(parsed.spokenText())) {
+                parsed = askForExamples(current, parsed, turnPrompt);
+            }
+
             // Closes when the model says it is done, or when the budget is
             // spent. The ceiling is enforced here rather than trusted to the
             // prompt: an interview that never ends is worse than one cut short.
@@ -668,7 +689,9 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * interview. The limit is still the ceiling: nothing can have gone on past it.</p>
      */
     private LocalDateTime endOfActivity(CandidateInterviewSchedule schedule) {
-        LocalDateTime limit = expiryOf(schedule);
+        LocalDateTime configuredLimit = expiryOf(schedule);
+        // With no time limit, the end is the last activity, or now if nothing was said.
+        LocalDateTime limit = configuredLimit != null ? configuredLimit : LocalDateTime.now();
         try {
             List<VoiceConversationEntry> entries =
                     entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId());
@@ -686,6 +709,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     }
 
     private LocalDateTime expiryOf(CandidateInterviewSchedule schedule) {
+        // No limit configured: there is no moment the interview runs out.
+        if (maxDurationMinutes <= 0) {
+            return null;
+        }
         LocalDateTime startedAt = schedule.getStartedAt();
         return startedAt == null ? LocalDateTime.now() : startedAt.plusMinutes(maxDurationMinutes);
     }
@@ -943,6 +970,51 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         return text.matches("^(what|when|where|which|who|why|how|can|could|will|would|is|are|do|does|did|may)\\b.*");
     }
 
+    private static final java.util.regex.Pattern CODING_OPENING =
+            java.util.regex.Pattern.compile("^\\s*\\[\\s*CODING\\s*\\]", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** Whether the reply asks the candidate to write code (it opens with the coding tag). */
+    private static boolean isCodingQuestion(ParsedInterviewReply reply) {
+        return reply != null && !reply.closing() && reply.spokenText() != null
+                && CODING_OPENING.matcher(reply.spokenText()).find();
+    }
+
+    /** Whether a coding question shows at least one example, or states an input and an output. */
+    static boolean hasExamples(String text) {
+        String lower = text == null ? "" : text.toLowerCase();
+        return lower.contains("example") || lower.contains("sample")
+                || (lower.contains("input") && lower.contains("output"));
+    }
+
+    /**
+     * Asks once for the same coding question again, with two examples. If the second try is no better the original
+     * stands: a coding question without examples is better than a stalled interview.
+     */
+    private ParsedInterviewReply askForExamples(CandidateInterviewSchedule schedule, ParsedInterviewReply original,
+            String turnPrompt) {
+        try {
+            String reply = openAiStreamingService.chatCompletion(contextService.buildContextMessages(schedule,
+                    turnPrompt + "\n\n" + CODING_EXAMPLES_DIRECTIVE));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply retry = replyParser.parse(reply);
+                if (isCodingQuestion(retry) && hasExamples(retry.spokenText())) {
+                    Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
+                    String topic = retry.topic() != null ? retry.topic() : original.topic();
+                    return new ParsedInterviewReply(retry.spokenText(), score, retry.turnKind(), topic, false);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not get examples for the coding question of interview {}", schedule.getId(), e);
+        }
+        return original;
+    }
+
+    private static final String CODING_EXAMPLES_DIRECTIVE =
+            "Your reply asked a coding question without examples. Send the SAME coding question again, starting "
+                    + "with [CODING], and after the problem statement add exactly two examples, each written as "
+                    + "\"Example 1: Input: ... Output: ...\" and \"Example 2: Input: ... Output: ...\". Do not change "
+                    + "the problem, do not add a solution and do not ask anything else.";
+
     /**
      * A goodbye to end on, when the reply in hand is not one. Asks the model once; if that is no better, a fixed
      * thank-you is used, because an interview that ends must end on a thank-you and not on a question.
@@ -1117,7 +1189,11 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     @SchedulerLock(name = "enforceInterviewTimeouts", lockAtLeastFor = "PT2M", lockAtMostFor = "PT10M")
     @Transactional
     public void enforceInterviewTimeouts() {
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(maxDurationMinutes);
+        // With a time limit set, that is the cutoff. With none, only an interview open for the abandonment period is
+        // closed, and that is a clean-up of sessions nobody is in, not a clock on a real interview.
+        LocalDateTime cutoff = maxDurationMinutes > 0
+                ? LocalDateTime.now().minusMinutes(maxDurationMinutes)
+                : LocalDateTime.now().minusHours(abandonedAfterHours);
         List<CandidateInterviewSchedule> staleInterviews =
                 scheduleRepo.findByAttemptStatusAndStartedAtBefore(AttemptStatus.IN_PROGRESS, cutoff);
 

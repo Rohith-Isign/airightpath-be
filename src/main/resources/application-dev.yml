@@ -221,7 +221,7 @@ ats:
 
 # Voice Interview / TTS Configuration + early termination tuning
 interview:
-  max-duration-minutes: 60
+  max-duration-minutes: 0
   max-warnings: 5
   # Reaching max-warnings does NOT end the interview; it flags it for a
   # person to look at. Ending one on a count is a hiring decision made by a

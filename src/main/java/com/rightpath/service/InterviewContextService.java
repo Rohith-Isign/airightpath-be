@@ -269,7 +269,7 @@ public class InterviewContextService {
      * Build prompt for generating the first question.
      */
     public String buildFirstQuestionPrompt() {
-        return "Begin the interview now.";
+        return "The welcome has already been given. Ask your first question now, with no greeting.";
     }
 
     /**

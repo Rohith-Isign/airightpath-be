@@ -185,7 +185,13 @@ public class InterviewEvaluationService {
 
         // B4: Set interviewResult based on recommendation
         String recommendation = result.getRecommendation();
-        if (recommendation != null) {
+        // Enough was asked and answered, across the scoring areas, to decide on. If not, the score and notes stand
+        // but pass or fail is left for a person, rather than the verdict resting on the part that was covered.
+        boolean decidable = !reviewTriage.insufficientEvidence(result, entries);
+        if (!decidable) {
+            log.info("Schedule {}: too little asked or answered to call a pass or a fail; left for review", scheduleId);
+        }
+        if (recommendation != null && decidable) {
             if (PASS_RECOMMENDATIONS.contains(recommendation)) {
                 schedule.setInterviewResult(InterviewResult.PASSED);
             } else if (FAIL_RECOMMENDATIONS.contains(recommendation)) {
