@@ -329,6 +329,22 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
     }
 
     /**
+     * The ATS score of a resume against the whole job posting: key skills, job description, experience, role and
+     * education, weighted (see {@link com.rightpath.util.AtsScorer}). Not the key skills alone.
+     */
+    private double calculateMatchPercent(String resumeText, JobPost job, Map<String, List<String>> synonyms) {
+        if (job == null) {
+            return 0.0;
+        }
+        com.rightpath.util.AtsScorer.Result result = com.rightpath.util.AtsScorer.score(resumeText,
+                new com.rightpath.util.AtsScorer.Posting(job.getKeySkills(), job.getJobDescription(),
+                        job.getExperience(), job.getEducation(), job.getJobTitle(), job.getRole()),
+                synonyms);
+        logger.debug("ATS score for job {}: {}% from {}", job.getJobPrefix(), result.percent(), result.components());
+        return result.percent();
+    }
+
+    /**
      * The resume's text, or null when there is nothing to score: no file, or one that parses to no text
      * (a scanned image, a corrupt or password-protected file). Scoring those as 0% would reject a candidate
      * for a problem with the file, so the caller leaves them alone and says why.
@@ -451,7 +467,7 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
                 continue;
             }
             // Never saved: this path has no repository write, and the transaction is read-only.
-            double score = calculateMatchPercent(resumeText, requiredSkills, synonyms);
+            double score = calculateMatchPercent(resumeText, app.getJobPost(), synonyms);
             results.add(ScreeningResultDTO.skipped(email, fullName, score, status,
                     "Score check only. Nothing was changed."));
         }
@@ -470,7 +486,7 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
         String email = app.getUser() != null ? app.getUser().getEmail() : null;
         String fullName = (trimToEmpty(app.getFirstName()) + " " + trimToEmpty(app.getLastName())).trim();
         String resumeText = readableResumeText(app);
-        double matchPercent = resumeText == null ? 0.0 : calculateMatchPercent(resumeText, requiredSkills, synonyms);
+        double matchPercent = resumeText == null ? 0.0 : calculateMatchPercent(resumeText, app.getJobPost(), synonyms);
 
         String blockReason = screeningBlockReason(app);
         if (blockReason != null) {
@@ -716,7 +732,7 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
 	                    if (resumeText == null) {
 	                        return false;
 	                    }
-	                    double matchPercent = calculateMatchPercent(resumeText, requiredSkills, synonyms);
+	                    double matchPercent = calculateMatchPercent(resumeText, app.getJobPost(), synonyms);
 	                    logger.debug("ATS skill match: requiredSkills={} match={}%", Arrays.toString(requiredSkills), matchPercent);
 	                    return matchPercent > 0 && matchPercent >= atsThreshold;
 	                })
