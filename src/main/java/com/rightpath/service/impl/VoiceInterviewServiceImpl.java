@@ -333,7 +333,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
         // Start a new interview
         schedule.setAttemptStatus(AttemptStatus.IN_PROGRESS);
-        schedule.setStartedAt(LocalDateTime.now());
+        schedule.setStartedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         schedule.setTotalQuestionsAsked(0);
         // Reset alongside the turn count. A re-sit that kept the old counters
         // would open with its probe allowance already spent and its question
@@ -626,7 +626,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
                 if (completed) {
                     s.setAttemptStatus(AttemptStatus.COMPLETED);
-                    s.setEndedAt(LocalDateTime.now());
+                    s.setEndedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
                     // The ordinary ending, and the only one that was never
                     // recorded. A candidate ending it early, a proctoring
                     // violation and a timeout all stamped a reason; an
@@ -691,7 +691,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     private LocalDateTime endOfActivity(CandidateInterviewSchedule schedule) {
         LocalDateTime configuredLimit = expiryOf(schedule);
         // With no time limit, the end is the last activity, or now if nothing was said.
-        LocalDateTime limit = configuredLimit != null ? configuredLimit : LocalDateTime.now();
+        LocalDateTime limit = configuredLimit != null ? configuredLimit : LocalDateTime.now(java.time.ZoneOffset.UTC);
         try {
             List<VoiceConversationEntry> entries =
                     entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId());
@@ -714,7 +714,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             return null;
         }
         LocalDateTime startedAt = schedule.getStartedAt();
-        return startedAt == null ? LocalDateTime.now() : startedAt.plusMinutes(maxDurationMinutes);
+        return startedAt == null ? LocalDateTime.now(java.time.ZoneOffset.UTC) : startedAt.plusMinutes(maxDurationMinutes);
     }
 
     /**
@@ -1101,7 +1101,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         }
 
         schedule.setAttemptStatus(AttemptStatus.COMPLETED);
-        schedule.setEndedAt(LocalDateTime.now());
+        schedule.setEndedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         schedule.setCompletionReason(reason);
         scheduleRepo.save(schedule);
         advanceApplicationAfterInterview(schedule);
@@ -1150,7 +1150,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         if (overThreshold && terminateOnMaxWarnings) {
             schedule.setAttemptStatus(AttemptStatus.COMPLETED);
             schedule.setInterviewResult(InterviewResult.FAILED);
-            schedule.setEndedAt(LocalDateTime.now());
+            schedule.setEndedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             schedule.setCompletionReason(CompletionReason.PROCTORING_VIOLATION);
             scheduleRepo.save(schedule);
             advanceApplicationAfterInterview(schedule);
@@ -1192,8 +1192,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         // With a time limit set, that is the cutoff. With none, only an interview open for the abandonment period is
         // closed, and that is a clean-up of sessions nobody is in, not a clock on a real interview.
         LocalDateTime cutoff = maxDurationMinutes > 0
-                ? LocalDateTime.now().minusMinutes(maxDurationMinutes)
-                : LocalDateTime.now().minusHours(abandonedAfterHours);
+                ? LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(maxDurationMinutes)
+                : LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(abandonedAfterHours);
         List<CandidateInterviewSchedule> staleInterviews =
                 scheduleRepo.findByAttemptStatusAndStartedAtBefore(AttemptStatus.IN_PROGRESS, cutoff);
 

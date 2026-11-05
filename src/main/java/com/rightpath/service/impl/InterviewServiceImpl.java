@@ -730,7 +730,7 @@ public class InterviewServiceImpl implements InterviewService {
 			throw new IllegalStateException("This interview result has already been removed.");
 		}
 
-		schedule.setDeletedAt(LocalDateTime.now());
+		schedule.setDeletedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
 		schedule.setDeletedBy(actingUser());
 		schedule.setDeleteReason(trimmed);
 		CandidateInterviewSchedule saved = scheduleRepo.save(schedule);
