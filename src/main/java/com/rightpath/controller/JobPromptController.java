@@ -25,7 +25,9 @@ import com.rightpath.service.JobPromptService;
 import com.rightpath.util.EvaluationCategoryFormatter;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/prompts")
 @RequiredArgsConstructor
@@ -36,6 +38,19 @@ public class JobPromptController {
     private final EvaluationCategoryFormatter categoryFormatter;
     private final InterviewTemplateService templateService;
     private final com.rightpath.service.JobPromptCopyService copyService;
+    private final com.rightpath.service.DefaultPrompts defaultPrompts;
+
+    /**
+     * The built-in prompts, for the Manage AI Prompts screen.
+     *
+     * <p>What a job uses until it is given a prompt of its own, so the screen can show the text rather than an
+     * empty box, and offer to reset a job back to it.</p>
+     */
+    @GetMapping("/defaults")
+    @PreAuthorize("hasAuthority('JOB_POST_CREATE')")
+    public ResponseEntity<List<com.rightpath.service.DefaultPrompts.Entry>> getDefaultPrompts() {
+        return ResponseEntity.ok(defaultPrompts.all());
+    }
 
     /** Which jobs already have prompts, and of what kind: the list a new job picks one to reuse from. */
     @GetMapping("/jobs-with-prompts")
@@ -51,6 +66,7 @@ public class JobPromptController {
     @PostMapping("/copy")
     @PreAuthorize("hasAuthority('JOB_POST_CREATE')")
     public ResponseEntity<Map<String, Integer>> copyPrompts(@RequestBody Map<String, String> request) {
+        log.info("Copying prompts from job {} to job {}", request.get("fromJobPrefix"), request.get("toJobPrefix"));
         return ResponseEntity.ok(copyService.copy(request.get("fromJobPrefix"), request.get("toJobPrefix")));
     }
 
@@ -66,6 +82,7 @@ public class JobPromptController {
     public ResponseEntity<JobPrompt> savePrompt(
             @RequestBody JobPromptRequest request) {
 
+        log.info("Saving job prompt");
         JobPrompt savedPrompt = jobPromptService.saveJobPrompt(request);
         return ResponseEntity.ok(savedPrompt);
     }
@@ -128,6 +145,7 @@ public class JobPromptController {
     @PreAuthorize("hasAuthority('JOB_POST_CREATE')")
     public ResponseEntity<InterviewTemplate> saveInterviewTemplate(
             @RequestBody InterviewTemplateRequest request) {
+        log.info("Saving interview template for job {} round {}", request.getJobPrefix(), request.getRound());
         return ResponseEntity.ok(templateService.save(
                 request.getJobPrefix(),
                 request.getRound(),
@@ -145,6 +163,17 @@ public class JobPromptController {
 
         String jobPrefix = request.getJobPrefix();
         InterviewRound round = request.getRound();
+
+        // The page refuses to save unless the weights total 100; the server says the same, so a call that does not
+        // come from the page cannot store a list that no longer means "percent of the score".
+        double totalWeight = request.getCategories().stream()
+                .mapToDouble(EvaluationCategorySaveRequest.CategoryItem::getWeight).sum();
+        boolean negative = request.getCategories().stream().anyMatch(c -> c.getWeight() < 0);
+        if (negative || Math.abs(totalWeight - 100.0) > 0.01) {
+            log.warn("Evaluation categories for job {} rejected: weights total {}", jobPrefix, totalWeight);
+            throw new IllegalArgumentException("Category weights must be zero or more and total exactly 100; they total "
+                    + totalWeight + ".");
+        }
 
         // Scoped to the round being edited. Reading every row and deleting
         // whatever is not in this payload would wipe the other round's list
@@ -193,6 +222,8 @@ public class JobPromptController {
         }
 
         List<EvaluationCategory> saved = evaluationCategoryRepository.saveAll(toSave);
+        log.info("Evaluation categories saved for job {} round {}: {} saved, {} removed", jobPrefix, round,
+                saved.size(), toDelete.size());
         return ResponseEntity.ok(saved);
     }
 }

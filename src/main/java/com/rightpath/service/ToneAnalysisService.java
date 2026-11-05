@@ -3,8 +3,6 @@ package com.rightpath.service;
 import java.util.List;
 import java.util.Set;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import com.rightpath.dto.voice.VoiceAnswerRequest;
@@ -14,8 +12,6 @@ import lombok.Data;
 
 @Service
 public class ToneAnalysisService {
-
-    private static final Logger log = LoggerFactory.getLogger(ToneAnalysisService.class);
 
     private static final Set<String> FILLER_WORDS = Set.of(
             "um", "uh", "like", "you know", "basically", "actually",

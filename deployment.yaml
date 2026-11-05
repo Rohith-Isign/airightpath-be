@@ -16,12 +16,6 @@ spec:
       imagePullSecrets:
       - name: acr-secret
       hostAliases:
-       - ip: "10.224.250.250"
-         hostnames:
-         - "mysql-server"
-         - "db.rightpath.local"
-         - "rp-mysql-3.mysql.database.azure.com"
-         - "privatelink.mysql.database.azure.com"
        - ip: "4.187.178.140"
          hostnames:
          - "apis.rightpath.com"
@@ -40,9 +34,28 @@ spec:
         env:
         # MySQL Configuration
         - name: MYSQL_HOST
-          value: "10.224.250.250"
+          value: "rp-mysql-3.mysql.database.azure.com"
         - name: MYSQL_PORT
           value: "3306"          
+        # Cross-pod websocket relay: needed before replicas > 1 (see RedisBrokerRelay).
+        # - name: APP_WEBSOCKET_REDIS_RELAY_ENABLED
+        #   value: "true"
+        # - name: SPRING_DATA_REDIS_HOST
+        #   value: "<redis-host>"
+        # - name: SPRING_DATA_REDIS_PORT
+        #   value: "6379"
+        # The same Redis switch also shares interview state (answer de-duplication, audio chunk
+        # numbering) between pods; with it off that state is per pod (see SharedStateStore).
+        # MySQL read replica: read-only transactions are routed to it, everything else stays on the
+        # primary (see ReadReplicaDataSourceConfig). Off unless enabled.
+        # - name: APP_DATASOURCE_REPLICA_ENABLED
+        #   value: "true"
+        # - name: APP_DATASOURCE_REPLICA_JDBC_URL
+        #   value: "jdbc:mysql://<replica-host>:3306/Rightpath?useSSL=true"
+        # - name: APP_DATASOURCE_REPLICA_USERNAME
+        #   value: "<replica-user>"
+        # - name: APP_DATASOURCE_REPLICA_PASSWORD
+        #   valueFrom: { secretKeyRef: { name: <secret>, key: <key> } }
                  
       volumes:
       - name: backend-config-volume

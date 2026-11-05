@@ -1,7 +1,5 @@
 package com.rightpath.validator;
 
-import java.awt.RenderingHints.Key;
-import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;

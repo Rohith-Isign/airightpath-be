@@ -61,6 +61,43 @@ public class InterviewReviewTriage {
     private int minAnswers;
 
     /**
+     * The share of the scoring areas, by weight, that the questions asked must have touched before the interview is
+     * given a pass or a fail. Below it the result is left undecided for a person: a verdict on a candidate who was
+     * asked about half the syllabus is a verdict on the half.
+     */
+    @Value("${interview.review.min-coverage:0.6}")
+    private double minCoverage;
+
+    /**
+     * The share of the scoring areas (by weight) that at least one question was asked about, 0..1. A result from
+     * before questions were tied to areas carries no such record and counts as fully covered.
+     */
+    public double coverage(VoiceEvaluationResult result) {
+        if (result == null || result.getCategoryScores() == null || result.getCategoryScores().isEmpty()) {
+            return 1.0;
+        }
+        double total = 0;
+        double covered = 0;
+        for (VoiceEvaluationResult.CategoryScore category : result.getCategoryScores()) {
+            double weight = Math.max(category.getWeight(), 0);
+            total += weight;
+            List<Integer> asked = category.getQuestionNumbers();
+            if (asked == null || !asked.isEmpty()) {
+                covered += weight;
+            }
+        }
+        return total <= 0 ? 1.0 : covered / total;
+    }
+
+    /**
+     * Whether there is too little evidence to call the interview a pass or a fail: too few answers, or too much of the
+     * syllabus never asked about. The score and the notes are still shown; only the verdict is withheld.
+     */
+    public boolean insufficientEvidence(VoiceEvaluationResult result, List<VoiceConversationEntry> entries) {
+        return countAnswers(entries) < minAnswers || coverage(result) < minCoverage;
+    }
+
+    /**
      * Whether a review is needed, and why.
      *
      * <p>Reasons are collected rather than short-circuited. Two weak signals
@@ -81,6 +118,12 @@ public class InterviewReviewTriage {
             reasons.add("The candidate did not answer any questions, so there is nothing to score.");
         } else if (answers < minAnswers) {
             reasons.add("Only " + answers + " question(s) were answered — too little to judge on.");
+        }
+
+        if (result != null && coverage(result) < minCoverage) {
+            reasons.add(String.format(
+                    "Questions touched only %.0f%% of the scoring areas, so no pass or fail has been decided.",
+                    coverage(result) * 100));
         }
 
         if (result != null) {

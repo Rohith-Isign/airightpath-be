@@ -25,6 +25,24 @@ public class AssignmentReportDTO {
     /** Candidates whose assessment exists but whose email did not go out, and why. */
     private final List<Map<String, String>> notNotified = new ArrayList<>();
 
+    /** Candidates, with the reason, who already hold an open paper of the type and were not sent another. */
+    private final List<Map<String, String>> skipped = new ArrayList<>();
+
+    public void recordSkipped(String email, String reason) {
+        Map<String, String> entry = new LinkedHashMap<>();
+        entry.put("email", email);
+        entry.put("reason", reason);
+        skipped.add(entry);
+    }
+
+    public List<Map<String, String>> getSkipped() {
+        return List.copyOf(skipped);
+    }
+
+    public int getSkippedCount() {
+        return skipped.size();
+    }
+
     public void recordNotified(String email) {
         assigned.add(email);
         notified.add(email);
@@ -74,7 +92,9 @@ public class AssignmentReportDTO {
      */
     public String getMessage() {
         if (assigned.isEmpty()) {
-            return "No assessments were assigned.";
+            return skipped.isEmpty()
+                    ? "No assessments were assigned."
+                    : "Nothing was sent: every selected candidate already has this assessment assigned and not yet submitted.";
         }
         if (allNotified()) {
             return "Assessments assigned and exam links sent.";

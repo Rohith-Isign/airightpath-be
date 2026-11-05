@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Component;
 
 import com.rightpath.entity.InterviewRecordingUpload;
@@ -60,6 +61,7 @@ public class RecordingUploadSweeper {
     }
 
     @Scheduled(fixedDelay = 60 * 1000, initialDelay = 2 * 60 * 1000)
+    @SchedulerLock(name = "recordingUploadSweep", lockAtLeastFor = "PT30S", lockAtMostFor = "PT15M")
     public void sweep() {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         LocalDateTime cutoff = now.minusMinutes(QUIET_FOR_MINUTES);

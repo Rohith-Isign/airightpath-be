@@ -129,7 +129,7 @@ public class EvaluationCategoryFormatter {
             EvaluationCategory cat = categories.get(i);
             double weightDecimal = cat.getWeight() / 100.0;
             sb.append(String.format(
-                    "        {\"category\": \"%s\", \"score\": <0-10>, \"weight\": %.2f, \"feedback\": \"<specific feedback for %s>\"}",
+                    "        {\"category\": \"%s\", \"score\": <0-10>, \"weight\": %.2f, \"feedback\": \"<2-3 sentences on %s: what was right, where it fell short, how to improve>\", \"questionNumbers\": [<numbers of the questions this score is based on>]}",
                     cat.getCategoryName(), weightDecimal, cat.getCategoryName().toLowerCase()
             ));
             if (i < categories.size() - 1) sb.append(",");

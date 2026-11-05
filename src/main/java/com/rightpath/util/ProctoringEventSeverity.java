@@ -70,6 +70,8 @@ public final class ProctoringEventSeverity {
 			"mic_processing",
 			// The phone's own recording, reported by the phone.
 			"mobile_room_scan",
+			"mobile_extra_person",
+			"mobile_candidate_absent",
 			"mobile_recording_started",
 			"mobile_recording_not_started",
 			"mobile_recording_issue",

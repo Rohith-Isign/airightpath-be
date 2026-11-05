@@ -31,17 +31,19 @@ import com.rightpath.dto.ScreeningResponseDTO;
 import com.rightpath.dto.ScreeningResultDTO;
 import com.rightpath.entity.JobApplicationForCandidate;
 import com.rightpath.repository.JobApplicationForCandidateRepository;
-import com.rightpath.rbac.PermissionName;
 import com.rightpath.service.JobApplicationForCandidateService;
-import com.rightpath.service.impl.EmailServiceImpl;
 import com.rightpath.util.BusinessSchedule;
 
 @RestController
 @RequestMapping("/api/job-applications")
+@lombok.extern.slf4j.Slf4j
 public class JobApplicationForCandidateController {
 
     @Autowired
     private JobApplicationForCandidateService applicationForCandidateService;
+
+    @Autowired
+    private com.rightpath.util.AcknowledgeLinkSigner acknowledgeLinkSigner;
     
     @Autowired
     private JobApplicationForCandidateRepository applicationForCandidateRepository;
@@ -51,9 +53,6 @@ public class JobApplicationForCandidateController {
 
     @Autowired
     private SimpMessagingTemplate messagingTemplate;
-
-    @Autowired
-    private EmailServiceImpl emailService;
 
     /** Parses and validates scheduled slots against the business clock (IST). */
     @Autowired
@@ -82,7 +81,7 @@ public class JobApplicationForCandidateController {
                 )
             );
         } catch (Exception e) {
-            System.err.println("WebSocket notification failed: " + e.getMessage());
+            log.warn("WebSocket notification failed", e);
         }
     }
 
@@ -210,6 +209,20 @@ public class JobApplicationForCandidateController {
     }
 
     /**
+     * Admin: see what candidates would score, changing nothing. Same body as {@code /screen}. Nothing is saved and
+     * no stage moves, so it is safe for a candidate at any stage.
+     */
+    @PostMapping("/score-check")
+    @PreAuthorize("hasAuthority('JOB_APPLICATION_READ_ALL')")
+    public ResponseEntity<List<ScreeningResultDTO>> checkScores(@RequestBody ScreeningRequestDTO request) {
+        if (request.getJobPrefix() == null || request.getJobPrefix().isBlank()) {
+            throw new IllegalArgumentException("Job prefix is required.");
+        }
+        return ResponseEntity.ok(
+            applicationForCandidateService.previewScores(request.getJobPrefix(), request.getEmails()));
+    }
+
+    /**
      * Admin: Get all applicants for a job
      */
     @GetMapping("/applicants/{jobPostId}")
@@ -314,6 +327,7 @@ public class JobApplicationForCandidateController {
                 sendWebSocketNotification(email, jobPrefix, "SHORTLISTED", "Candidate shortlisted");
                 sent.add(email);
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 failed.add(Map.of("email", email, "reason", e.getMessage() == null ? "Unknown error" : e.getMessage()));
             }
         }
@@ -391,9 +405,11 @@ public class JobApplicationForCandidateController {
                 applicationForCandidateService.sendAcknowledgementMailAndUpdateStatus(jobPrefix, email, examSlot);
                 sendWebSocketNotification(email, jobPrefix, "CONFIRMATION_SENT", "Confirmation email sent to candidate");
             } catch (IllegalStateException e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
                 hasValidationError = true;
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
             }
         }
@@ -409,15 +425,48 @@ public class JobApplicationForCandidateController {
     /**
      * Candidate Acknowledges confirmation
      */
-    @GetMapping("/acknowledge")
-    @PreAuthorize("hasAuthority('JOB_APPLY')")
-    public ResponseEntity<Map<String, String>> acknowledgeMail(
+    @GetMapping(value = "/acknowledge", produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> acknowledgeMail(
         @RequestParam String jobPrefix,
-        @RequestParam String email) {
+        @RequestParam String email,
+        @RequestParam(required = false) String token) {
 
-        String result = applicationForCandidateService.acknowledgeCandidate(jobPrefix, email);
-        sendWebSocketNotification(email, jobPrefix, "ACKNOWLEDGED_BACK", "Candidate acknowledged the confirmation");
-        return ResponseEntity.ok(Map.of("status", "success", "message", result));
+        // Opened from the mail with no login: the signed token is the only proof the link is ours and is for this
+        // application. This used to sit behind a login, so every candidate who clicked it got a 403 page.
+        if (!acknowledgeLinkSigner.verify(jobPrefix, email, token)) {
+            log.warn("Acknowledgement link refused for {} / {}: missing or invalid token", jobPrefix, email);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(acknowledgePage(false,
+                    "This confirmation link is not valid. Please use the link in the latest email we sent you."));
+        }
+        try {
+            String result = applicationForCandidateService.acknowledgeCandidate(jobPrefix, email);
+            String lower = result == null ? "" : result.toLowerCase();
+            boolean confirmed = !lower.startsWith("cannot") && !lower.startsWith("acknowledgement not allowed");
+            if (confirmed) {
+                sendWebSocketNotification(email, jobPrefix, "ACKNOWLEDGED_BACK", "Candidate acknowledged the confirmation");
+            }
+            return ResponseEntity.ok(acknowledgePage(confirmed,
+                    confirmed ? "Thank you. Your test slot is confirmed. Check your email for the details." : result));
+        } catch (RuntimeException e) {
+            log.warn("Acknowledgement failed for {} / {}: {}", jobPrefix, email, e.getMessage());
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(acknowledgePage(false,
+                    "We could not find this application. Please reply to the email we sent you."));
+        }
+    }
+
+    /** A small page the candidate sees after clicking the link, in place of raw JSON or an error page. */
+    private static String acknowledgePage(boolean ok, String message) {
+        String colour = ok ? "#16a34a" : "#dc2626";
+        String title = ok ? "Slot confirmed" : "Could not confirm";
+        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" "
+                + "content=\"width=device-width,initial-scale=1\"><title>" + title + "</title></head>"
+                + "<body style=\"font-family:Arial,sans-serif;background:#f4f6f8;margin:0;display:flex;"
+                + "align-items:center;justify-content:center;min-height:100vh\"><div style=\"background:#fff;"
+                + "max-width:420px;padding:32px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.08);"
+                + "text-align:center\"><h2 style=\"color:" + colour + ";margin:0 0 12px\">" + title + "</h2>"
+                + "<p style=\"color:#374151;line-height:1.5;margin:0\">"
+                + org.springframework.web.util.HtmlUtils.htmlEscape(message == null ? "" : message)
+                + "</p></div></body></html>";
     }
 
     /**
@@ -435,9 +484,11 @@ public class JobApplicationForCandidateController {
                 applicationForCandidateService.sendReconfirmationMail(jobPrefix, email);
                 sendWebSocketNotification(email, jobPrefix, "RECONFIRMATION_SENT", "Reconfirmation mail sent with exam details");
             } catch (IllegalStateException e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
                 hasValidationError = true;
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
             }
         }
@@ -465,9 +516,11 @@ public class JobApplicationForCandidateController {
                 applicationForCandidateService.sendRejectionMail(jobPrefix, email);
                 sendWebSocketNotification(email, jobPrefix, "REJECTED", "Application rejected with notification sent");
             } catch (IllegalStateException e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
                 hasValidationError = true;
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
             }
         }
@@ -510,9 +563,11 @@ public class JobApplicationForCandidateController {
                 applicationForCandidateService.sendSuccessMail(jobPrefix, email);
                 sendWebSocketNotification(email, jobPrefix, "SELECTED", "Candidate selected successfully");
             } catch (IllegalStateException e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
                 hasValidationError = true;
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
             }
         }
@@ -540,9 +595,11 @@ public class JobApplicationForCandidateController {
                 applicationForCandidateService.sendFailureMail(jobPrefix, email);
                 sendWebSocketNotification(email, jobPrefix, "REJECTED", "Candidate rejected after evaluation");
             } catch (IllegalStateException e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
                 hasValidationError = true;
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 errors.add(email + ": " + e.getMessage());
             }
         }
@@ -586,6 +643,7 @@ public class JobApplicationForCandidateController {
                 sendWebSocketNotification(email, jobPrefix, "EXAM_SENT", "Exam link sent to candidate");
                 sent.add(email);
             } catch (Exception e) {
+                log.warn("Bulk candidate action failed for {} / {}: {}", jobPrefix, email, e.getMessage());
                 failed.add(Map.of("email", email, "reason", e.getMessage() == null ? "Unknown error" : e.getMessage()));
             }
         }

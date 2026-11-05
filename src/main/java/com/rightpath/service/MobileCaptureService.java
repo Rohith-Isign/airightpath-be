@@ -38,7 +38,11 @@ public class MobileCaptureService {
     private static final Logger log = LoggerFactory.getLogger(MobileCaptureService.class);
 
     private static final Set<String> KINDS = Set.of(InterviewMobileCapture.ROOM_PHOTO,
-            InterviewMobileCapture.MONITOR_FRAME);
+            InterviewMobileCapture.MONITOR_FRAME, InterviewMobileCapture.EXTRA_PERSON,
+            InterviewMobileCapture.NO_CANDIDATE);
+
+    /** How many photos of one alert kind an interview keeps: a room that stays wrong must not fill the store. */
+    private static final int MAX_PER_ALERT_KIND = 40;
 
     private static final Set<String> IMAGE_TYPES = Set.of("image/jpeg", "image/png", "image/webp");
 
@@ -106,6 +110,11 @@ public class MobileCaptureService {
         }
         if (photo.getSize() > maxFileSizeBytes) {
             throw new IllegalArgumentException("photo is larger than " + maxFileSizeBytes + " bytes");
+        }
+
+        if ((InterviewMobileCapture.EXTRA_PERSON.equals(normalisedKind) || InterviewMobileCapture.NO_CANDIDATE.equals(normalisedKind))
+                && captureRepository.countByInterviewScheduleIdAndKind(scheduleId, normalisedKind) >= MAX_PER_ALERT_KIND) {
+            throw new IllegalArgumentException("This interview already has the maximum number of " + normalisedKind + " photos");
         }
 
         long existing = captureRepository.countByInterviewScheduleId(scheduleId);

@@ -10,16 +10,24 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.rightpath.dto.ResumeDownload;
+import com.rightpath.entity.CandidateProfileResume;
 import com.rightpath.entity.JobApplicationForCandidate;
 import com.rightpath.exceptions.ResourceNotFoundException;
+import com.rightpath.repository.CandidateProfileResumeRepository;
 import com.rightpath.repository.JobApplicationForCandidateRepository;
 import com.rightpath.service.ResumeService;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Service
 public class ResumeServiceImpl implements ResumeService {
 
 	@Autowired
 	private JobApplicationForCandidateRepository applicationForCandidateRepository;
+
+	@Autowired
+	private CandidateProfileResumeRepository profileResumeRepository;
 
 	private final Tika tika = new Tika();
 
@@ -39,6 +47,7 @@ public class ResumeServiceImpl implements ResumeService {
 	    application.setContentType(file.getContentType());
 	    application.setResumeData(file.getBytes());
 	    applicationForCandidateRepository.save(application);
+	    log.info("Resume saved for {} (job {})", email, jobPrefix);
 	}
 
 
@@ -57,16 +66,26 @@ public class ResumeServiceImpl implements ResumeService {
 		// the orphaned standalone Resume table. Targets the most recent resume-bearing
 		// application (the one view-resume returns). Does not re-run ATS screening; the
 		// next screening pass will pick up the new resume.
-		JobApplicationForCandidate application = applicationForCandidateRepository
-				.findResumeBearingApplicationsByEmail(email).stream()
-				.findFirst()
-				.orElseThrow(() -> new ResourceNotFoundException(
-						"No application with a resume found for candidate: " + email));
+		// Kept on the profile first, so a candidate who has not applied anywhere can still save one. A resume used to
+		// exist only on an application, and the save failed with "no resume found" for anyone without one.
+		byte[] data = file.getBytes();
+		CandidateProfileResume profile = profileResumeRepository.findByEmailIgnoreCase(email)
+				.orElseGet(() -> CandidateProfileResume.builder().email(email).build());
+		profile.setFileName(file.getOriginalFilename());
+		profile.setContentType(file.getContentType());
+		profile.setData(data);
+		profile.setUpdatedAt(java.time.LocalDateTime.now());
+		profileResumeRepository.save(profile);
 
-		application.setResumeFileName(file.getOriginalFilename());
-		application.setContentType(file.getContentType());
-		application.setResumeData(file.getBytes());
-		applicationForCandidateRepository.save(application);
+		// And on the application the resume view serves, when there is one, so the two never disagree.
+		applicationForCandidateRepository.findResumeBearingApplicationsByEmail(email).stream().findFirst()
+				.ifPresent(application -> {
+					application.setResumeFileName(file.getOriginalFilename());
+					application.setContentType(file.getContentType());
+					application.setResumeData(data);
+					applicationForCandidateRepository.save(application);
+				});
+		log.info("Resume updated for {}", email);
 	}
 
 	/**
@@ -83,11 +102,40 @@ public class ResumeServiceImpl implements ResumeService {
 	 * @throws ResourceNotFoundException If no application carries a resume (HTTP 404).
 	 */
 	@Override
+	public ResumeDownload getResumeForDownload(String email, String jobPrefix) {
+		if (jobPrefix != null && !jobPrefix.isBlank()) {
+			// The file sent with that particular application, not whichever application is the newest.
+			JobApplicationForCandidate application = applicationForCandidateRepository
+					.findByJobPost_JobPrefixAndUser_Email(jobPrefix, email).orElse(null);
+			if (application != null && application.getResumeData() != null && application.getResumeData().length > 0) {
+				String fileName = application.getResumeFileName() != null && !application.getResumeFileName().isBlank()
+						? application.getResumeFileName()
+						: "resume";
+				String contentType = application.getContentType() != null && !application.getContentType().isBlank()
+						? application.getContentType()
+						: MediaType.APPLICATION_OCTET_STREAM_VALUE;
+				return new ResumeDownload(application.getResumeData(), fileName, contentType);
+			}
+		}
+		return getResumeForDownload(email);
+	}
+
+	@Override
 	public ResumeDownload getResumeForDownload(String email) {
 		JobApplicationForCandidate application = applicationForCandidateRepository
 				.findResumeBearingApplicationsByEmail(email).stream()
 				.findFirst()
-				.orElseThrow(() -> new ResourceNotFoundException("Resume not found for candidate: " + email));
+				.orElse(null);
+		if (application == null) {
+			// No application carries a resume: use the one saved on the profile.
+			CandidateProfileResume profile = profileResumeRepository.findByEmailIgnoreCase(email)
+					.filter(p -> p.getData() != null && p.getData().length > 0)
+					.orElseThrow(() -> new ResourceNotFoundException("Resume not found for candidate: " + email));
+			return new ResumeDownload(profile.getData(),
+					profile.getFileName() != null && !profile.getFileName().isBlank() ? profile.getFileName() : "resume",
+					profile.getContentType() != null && !profile.getContentType().isBlank()
+							? profile.getContentType() : MediaType.APPLICATION_OCTET_STREAM_VALUE);
+		}
 
 		String fileName = (application.getResumeFileName() != null && !application.getResumeFileName().isBlank())
 				? application.getResumeFileName()
@@ -103,6 +151,7 @@ public class ResumeServiceImpl implements ResumeService {
         try (ByteArrayInputStream inputStream = new ByteArrayInputStream(resumeData)) {
             return tika.parseToString(inputStream);
         } catch (Exception e) {
+            log.error("Error parsing resume data", e);
             throw new RuntimeException("Error parsing resume data", e);
         }
     }

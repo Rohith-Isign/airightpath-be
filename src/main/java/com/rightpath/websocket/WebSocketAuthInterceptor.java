@@ -13,8 +13,8 @@ import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.rightpath.config.AuthProperties;
 import com.rightpath.exceptions.InvalidAccessTokenException;
-import com.rightpath.service.MobilePairingService;
 import com.rightpath.service.impl.AccessTokenService;
 
 import io.jsonwebtoken.Claims;
@@ -40,61 +40,13 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
     public static final String MOBILE_TOKEN_ATTR = "mobileToken";
 
     private final AccessTokenService accessTokenService;
-    private final MobilePairingService pairingService;
+    private final AuthProperties authProperties;
 
-    public WebSocketAuthInterceptor(AccessTokenService accessTokenService, MobilePairingService pairingService) {
+    public WebSocketAuthInterceptor(AccessTokenService accessTokenService, AuthProperties authProperties) {
+        this.authProperties = authProperties;
         this.accessTokenService = accessTokenService;
-        this.pairingService = pairingService;
     }
 
-//    @Override
-//    public boolean beforeHandshake(
-//            ServerHttpRequest request,
-//            ServerHttpResponse response,
-//            WebSocketHandler wsHandler,
-//            Map<String, Object> attributes) {
-//
-//        // 1. Check for mobile pairing token (no JWT validation)
-//        String mobileToken = extractMobileToken(request);
-//        if (mobileToken != null && !mobileToken.isBlank()) {
-//            log.debug("Mobile WebSocket connection with token: {}", mobileToken);
-//            attributes.put(MOBILE_TOKEN_ATTR, mobileToken);
-//            return true; // allow handshake without JWT
-//        }
-//
-//        // 2. Otherwise, proceed with normal JWT authentication
-//        String token = extractToken(request);
-//
-//        if (token == null || token.isBlank()) {
-//            log.warn("WebSocket connection rejected: No token provided. URI={}", request.getURI());
-//            response.setStatusCode(HttpStatus.UNAUTHORIZED);
-//            return false;
-//        }
-//
-//        try {
-//            Claims claims = accessTokenService.validateAndGetClaims(token);
-//            String userEmail = claims.getSubject();
-//            String authorities = (String) claims.get("authorities");
-//
-//            // Store user info in session attributes for use by handlers
-//            attributes.put(USER_EMAIL_ATTR, userEmail);
-//            attributes.put(USER_AUTHORITIES_ATTR, authorities != null ? authorities : "");
-//            attributes.put(AUTHENTICATED_ATTR, true);
-//
-//            log.info("WebSocket connection authenticated for user: {}", userEmail);
-//            return true;
-//
-//        } catch (InvalidAccessTokenException e) {
-//            log.warn("WebSocket connection rejected: Invalid token. URI={}, reason={}",
-//                    request.getURI(), e.getMessage());
-//            response.setStatusCode(HttpStatus.UNAUTHORIZED);
-//            return false;
-//        } catch (Exception e) {
-//            log.error("WebSocket authentication error. URI={}", request.getURI(), e);
-//            response.setStatusCode(HttpStatus.INTERNAL_SERVER_ERROR);
-//            return false;
-//        }
-//    }
     
     @Override
     public boolean beforeHandshake(
@@ -107,20 +59,10 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
         String mobileToken = extractMobileToken(request);
         String token = extractToken(request);
 
+        // Always require a JWT. The phone used to be let in here on its pairing token for the live picture's signalling,
+        // and that picture is gone: the phone now talks to the server in plain requests only.
         if (token == null || token.isBlank()) {
-            // The candidate's phone holds no login: all it has is the token in the QR code. It used to be
-            // refused here, so the phone could never join the signalling socket and the room check
-            // could not tell the desktop it had passed. A phone is let in only on a pairing the
-            // signed-in candidate registered, still open and unexpired — and it is NOT marked
-            // authenticated, so the interview handlers, which need the candidate's email, still refuse it.
-            if (mobileToken != null && !mobileToken.isBlank() && pairingService.resolveOrNull(mobileToken) != null) {
-                attributes.put(MOBILE_TOKEN_ATTR, mobileToken);
-                attributes.put(AUTHENTICATED_ATTR, false);
-                log.info("WebSocket accepted for a paired phone (no login)");
-                return true;
-            }
-            log.warn("WebSocket connection rejected: no JWT and no open phone pairing. URI={}",
-                    request.getURI().getPath());
+            log.warn("WebSocket connection rejected: No JWT token provided. URI={}", request.getURI().getPath());
             response.setStatusCode(HttpStatus.UNAUTHORIZED);
             return false;
         }
@@ -194,30 +136,60 @@ public class WebSocketAuthInterceptor implements HandshakeInterceptor {
      * Priority: 1) Query parameter 'token', 2) Authorization header
      */
     private String extractToken(ServerHttpRequest request) {
-        // Try query parameter first (preferred for WebSocket)
-        String query = request.getURI().getQuery();
-        if (query != null) {
-            var params = UriComponentsBuilder.fromUriString("?" + query).build().getQueryParams();
-            String token = params.getFirst("token");
-            if (token != null && !token.isBlank()) {
-                return token;
-            }
+        // 1) The HttpOnly access cookie: the browser sends it on the handshake itself,
+        //    so the token never has to appear in a URL.
+        String cookieToken = extractCookieToken(request);
+        if (cookieToken != null) {
+            return cookieToken;
         }
 
-        // Try Authorization header
+        // 2) Authorization header, for non-browser clients.
         String authHeader = request.getHeaders().getFirst("Authorization");
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             return authHeader.substring(7);
         }
 
-        // For SockJS connections, try to get from servlet request
-        if (request instanceof ServletServerHttpRequest servletRequest) {
-            String token = servletRequest.getServletRequest().getParameter("token");
+        // 3) ?token= in the query string. URLs are logged by proxies and kept in
+        //    history, so this is refused once clients have moved to the cookie.
+        if (!authProperties.getWebsocket().isAllowQueryToken()) {
+            return null;
+        }
+        String query = request.getURI().getQuery();
+        if (query != null) {
+            var params = UriComponentsBuilder.fromUriString("?" + query).build().getQueryParams();
+            String token = params.getFirst("token");
             if (token != null && !token.isBlank()) {
+                log.warn("WebSocket authenticated with a query-string token; move this client to the access cookie");
                 return token;
             }
         }
+        if (request instanceof ServletServerHttpRequest servletRequest) {
+            String token = servletRequest.getServletRequest().getParameter("token");
+            if (token != null && !token.isBlank()) {
+                log.warn("WebSocket authenticated with a query-string token; move this client to the access cookie");
+                return token;
+            }
+        }
+        return null;
+    }
 
+    private String extractCookieToken(ServerHttpRequest request) {
+        if (!authProperties.getAccess().isCookieEnabled()) {
+            return null;
+        }
+        String name = authProperties.getAccess().getCookieName();
+        java.util.List<String> headers = request.getHeaders().get("Cookie");
+        if (headers == null) {
+            return null;
+        }
+        for (String header : headers) {
+            for (String part : header.split(";")) {
+                String pair = part.trim();
+                if (pair.startsWith(name + "=") && pair.length() > name.length() + 1) {
+                    return pair.substring(name.length() + 1);
+                }
+            }
+        }
         return null;
     }
 }

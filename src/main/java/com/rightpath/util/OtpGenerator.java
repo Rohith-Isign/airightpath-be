@@ -27,10 +27,7 @@ public class OtpGenerator {
 			otp.append(CHARACTERS.charAt(random.nextInt(CHARACTERS.length())));
 		}
 
-		// Log the generated OTP for debugging purposes
-		// Remove or mask this in production to avoid security risks
-		System.out.println("Generated OTP: " + otp.toString());
-
+		// The OTP value is a credential and must never be logged.
 		return otp.toString();
 	}
 

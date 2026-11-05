@@ -10,5 +10,7 @@ public interface InterviewMobileCaptureRepository extends JpaRepository<Intervie
 
 	List<InterviewMobileCapture> findByInterviewScheduleIdOrderByCapturedAtAscIdAsc(Long interviewScheduleId);
 
+	long countByInterviewScheduleIdAndKind(Long interviewScheduleId, String kind);
+
 	long countByInterviewScheduleId(Long interviewScheduleId);
 }

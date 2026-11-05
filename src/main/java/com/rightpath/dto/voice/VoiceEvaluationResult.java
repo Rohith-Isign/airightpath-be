@@ -42,6 +42,22 @@ public class VoiceEvaluationResult {
     /** Why, in words a reviewer can act on. Empty when no review is needed. */
     private List<String> reviewReasons;
 
+    /**
+     * The share of the scoring areas, by weight, that the questions actually asked about, 0.0 to 1.0. The overall
+     * score is built only from those; the rest are not assessed and do not count for or against the candidate.
+     */
+    private Double coverage;
+
+    /**
+     * The mean score over the assessed areas only, out of 10: how well the candidate did on what was actually tested.
+     * The overall score is lower than this whenever some areas were never reached, because an area not demonstrated
+     * adds nothing to it.
+     */
+    private Double assessedScore;
+
+    /** How much the score rests on: SUFFICIENT, PARTIAL (some areas never asked) or INSUFFICIENT (too little to judge). */
+    private String evidenceLevel;
+
     @Data
     @Builder
     @NoArgsConstructor
@@ -51,6 +67,21 @@ public class VoiceEvaluationResult {
         private double score;
         private double weight;
         private String feedback;
+
+        /**
+         * False when no question bore on this area: it was never asked about, so it is not assessed, shows as such and
+         * adds nothing to the overall score. Absent (true) on an evaluation graded before this was recorded.
+         */
+        @Builder.Default
+        private boolean assessed = true;
+
+        /**
+         * The interviewer's questions this score rests on, by the number each carries in the transcript the grader
+         * was shown ("Question 3"). The results page turns them into "asked, answered, skipped" for the area and
+         * lists them. Null on an evaluation graded before this was asked for; empty when the area was never asked
+         * about.
+         */
+        private List<Integer> questionNumbers;
     }
 
     @Data

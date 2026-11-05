@@ -86,6 +86,23 @@ public final class TranscriptionSanitizer {
 	private static final double COMPRESSION_RATIO_CEILING = 2.4;
 
 	/**
+	 * A looser pairing than {@link #NO_SPEECH_CEILING} with {@link #AVG_LOGPROB_FLOOR}.
+	 *
+	 * <p>The strict pair missed what a silent or noisy microphone actually produces: confident-looking
+	 * invented sentences that sit just short of both limits. Both signals still have to agree.</p>
+	 */
+	private static final double LIKELY_NO_SPEECH = 0.45;
+	private static final double LIKELY_POOR_DECODE = -0.8;
+
+	/**
+	 * A decode this poor is not speech worth keeping whatever else is said about it.
+	 *
+	 * <p>Whisper's own reference decoder treats -1 as the line below which it retries; this is well past it, so
+	 * accented or quiet speech, which sits around -0.5 to -1.0, is not caught.</p>
+	 */
+	private static final double GARBAGE_DECODE = -1.5;
+
+	/**
 	 * Strings that are never an answer to an interview question.
 	 *
 	 * <p>Dropped on a whole-segment match whatever the confidence says, because
@@ -111,7 +128,40 @@ public final class TranscriptionSanitizer {
 			"subtitles by the amaraorg community",
 			"subtitles by steamteamextra",
 			"transcription by castingwordscom",
-			"wwwmoojiorg");
+			"wwwmoojiorg",
+			// More of the same family, seen in a real interview's transcript over a silent microphone. None of
+			// these is something a candidate says in answer to an interview question.
+			"i love you",
+			"i love you all",
+			"i love you too",
+			"please like share and subscribe",
+			"like share and subscribe",
+			"like share comment and subscribe",
+			"please like share and comment on this video",
+			"if you like this video please subscribe",
+			"please subscribe to our channel for more such videos",
+			"please subscribe to my channel and i will see you in the next video",
+			"sleep well",
+			"shhh",
+			"peace",
+			"see you next time",
+			"see you soon",
+			// Seen appended to, or standing in for, an answer over a quiet microphone. Whole-segment matches only.
+			"thank you for joining us",
+			"thanks for joining us",
+			"thank you for joining",
+			"thanks for joining",
+			"thank you for watching this video",
+			"thank you for listening",
+			"thanks for listening",
+			"i will see you in the next video",
+			"see you in the next one",
+			"bye for now",
+			"music",
+			"applause",
+			"laughter",
+			"silence",
+			"blank audio");
 
 	/**
 	 * Generic sign-offs that are real speech about as often as they are not.
@@ -123,7 +173,7 @@ public final class TranscriptionSanitizer {
 	 */
 	private static final Set<String> WEAK_SIGN_OFFS = Set.of(
 			"thank you",
-			"thank you very much",
+			"thank you very much", "thank you so much", "thank you for your time",
 			"thanks",
 			"bye",
 			"bye bye",
@@ -180,8 +230,17 @@ public final class TranscriptionSanitizer {
 		List<double[]> spans = new ArrayList<>();
 		List<String> rejected = new ArrayList<>();
 
-		for (JsonNode segment : segments) {
+		for (int i = 0; i < segments.size(); i++) {
+			JsonNode segment = segments.get(i);
 			String reason = rejectionReason(segment);
+			// The first and last segments of a recording are where Whisper tacks on a stray sign-off after the
+			// speech has stopped, so they are held to a stricter standard than a segment in the middle.
+			if (reason == null && (i == 0 || i == segments.size() - 1)) {
+				reason = edgeSignOffReason(segment);
+				if (reason == null) {
+					reason = edgeLowConfidenceReason(segment);
+				}
+			}
 			String trimmed = segment.path("text").asText("").trim();
 			if (reason != null) {
 				rejected.add("\"" + trimmed + "\" — " + reason);
@@ -190,11 +249,30 @@ public final class TranscriptionSanitizer {
 			if (trimmed.isEmpty()) {
 				continue;
 			}
+			// A stock sign-off glued onto the end of real speech ("... Thank you for watching and please subscribe to
+			// my channel.") is taken out; the words before it stay.
+			trimmed = stripArtefactSentences(trimmed);
+			if (trimmed.isEmpty()) {
+				continue;
+			}
 			kept.add(trimmed);
 			spans.add(new double[] { segment.path("start").asDouble(0), segment.path("end").asDouble(0) });
 		}
 
-		return new Sanitized(String.join(" ", kept).trim(), spans, rejected);
+		String joined = String.join(" ", kept).trim();
+		// A loop can be spread across several segments, each of which looks ordinary on its own, so the joined
+		// text is judged as well. Nothing in it is speech, so no word timestamp is kept either: the one span that
+		// no real word falls inside makes isWithin() reject them all, where an empty list would keep them all.
+		if (isRepetitionLoop(joined)) {
+			rejected.add("\"" + joined + "\" — repetition loop across the recording");
+			return new Sanitized("", List.of(new double[] { -1, -1 }), rejected);
+		}
+		return new Sanitized(joined, spans, rejected);
+	}
+
+	/** The comparison form used to spot the same text arriving twice in a row. */
+	public static String comparable(String text) {
+		return normalise(text);
 	}
 
 	/** The kept text alone, for callers with no use for the rest. */
@@ -244,6 +322,14 @@ public final class TranscriptionSanitizer {
 			return "subtitle artefact";
 		}
 
+		if (isRepetitionLoop(segment.path("text").asText(""))) {
+			return "repetition loop (the same phrase over and over)";
+		}
+
+		if (isMostlyNonLatin(segment.path("text").asText(""))) {
+			return "not English (the interview is in English, and this is another script)";
+		}
+
 		double compressionRatio = segment.path("compression_ratio").asDouble(0);
 		if (compressionRatio > COMPRESSION_RATIO_CEILING) {
 			return "repetition loop (compression_ratio " + compressionRatio + ")";
@@ -258,6 +344,14 @@ public final class TranscriptionSanitizer {
 		double noSpeech = noSpeechNode.asDouble(0);
 		double avgLogprob = avgLogprobNode.asDouble(0);
 
+		if (avgLogprob < GARBAGE_DECODE) {
+			return "decode too poor to be speech (avg_logprob " + avgLogprob + ")";
+		}
+
+		if (noSpeech > LIKELY_NO_SPEECH && avgLogprob < LIKELY_POOR_DECODE) {
+			return "probably no speech (no_speech_prob " + noSpeech + ", avg_logprob " + avgLogprob + ")";
+		}
+
 		if (noSpeech > NO_SPEECH_CEILING && avgLogprob < AVG_LOGPROB_FLOOR) {
 			return "no speech detected (no_speech_prob " + noSpeech + ", avg_logprob " + avgLogprob + ")";
 		}
@@ -269,12 +363,205 @@ public final class TranscriptionSanitizer {
 		return null;
 	}
 
+	/**
+	 * Above this, a sign-off at the edge of a recording has some doubt about it.
+	 *
+	 * <p>A candidate really saying "thank you" at the end of an answer is decoded confidently (avg_logprob close
+	 * to zero, no_speech_prob near zero). The invented one, said over the tail of room tone, is not.</p>
+	 */
+	private static final double EDGE_SIGN_OFF_NO_SPEECH = 0.2;
+	private static final double EDGE_SIGN_OFF_POOR_DECODE = -0.5;
+
+	/**
+	 * Why a stock sign-off at the start or end of the recording is not the candidate, or null if it may be.
+	 *
+	 * <p>Only a whole segment of a stock phrase, and only with some doubt in the statistics. Words that share a
+	 * segment with real speech are never touched, and a segment with no statistics is kept.</p>
+	 */
+	private static String edgeSignOffReason(JsonNode segment) {
+		String normalised = normalise(segment.path("text").asText(""));
+		if (!WEAK_SIGN_OFFS.contains(normalised)) {
+			return null;
+		}
+		JsonNode noSpeechNode = segment.path("no_speech_prob");
+		JsonNode avgLogprobNode = segment.path("avg_logprob");
+		if (noSpeechNode.isMissingNode() || avgLogprobNode.isMissingNode()) {
+			return null;
+		}
+		double noSpeech = noSpeechNode.asDouble(0);
+		double avgLogprob = avgLogprobNode.asDouble(0);
+		if (noSpeech > EDGE_SIGN_OFF_NO_SPEECH || avgLogprob < EDGE_SIGN_OFF_POOR_DECODE) {
+			return "stray sign-off at the edge of the recording (no_speech_prob " + noSpeech
+					+ ", avg_logprob " + avgLogprob + ")";
+		}
+		return null;
+	}
+
+	/** At the edges of a recording, a segment with this much doubt on both counts is room noise, not speech. */
+	private static final double EDGE_NOISE_NO_SPEECH = 0.3;
+	private static final double EDGE_NOISE_POOR_DECODE = -0.7;
+
+	/**
+	 * Why the first or last segment, whatever it says, is not the candidate, or null if it may be.
+	 *
+	 * <p>The words Whisper invents over room noise gather at the start and end of a recording, where the sound is
+	 * either settling or trailing off. Real speech is decoded with confidence (no_speech_prob low, avg_logprob near
+	 * zero); both numbers being poor together is what an invented sentence looks like. Requires both, so a quiet or
+	 * accented but real segment, which is poor on at most one, is kept.</p>
+	 */
+	private static String edgeLowConfidenceReason(JsonNode segment) {
+		JsonNode noSpeechNode = segment.path("no_speech_prob");
+		JsonNode avgLogprobNode = segment.path("avg_logprob");
+		if (noSpeechNode.isMissingNode() || avgLogprobNode.isMissingNode()) {
+			return null;
+		}
+		double noSpeech = noSpeechNode.asDouble(0);
+		double avgLogprob = avgLogprobNode.asDouble(0);
+		if (noSpeech > EDGE_NOISE_NO_SPEECH && avgLogprob < EDGE_NOISE_POOR_DECODE) {
+			return "low-confidence segment at the edge of the recording (no_speech_prob " + noSpeech
+					+ ", avg_logprob " + avgLogprob + ")";
+		}
+		return null;
+	}
+
 	private static String cleanWithoutSegments(String text) {
 		String normalised = normalise(text);
-		if (normalised.isEmpty() || SUBTITLE_ARTEFACTS.contains(normalised)) {
+		if (normalised.isEmpty() || SUBTITLE_ARTEFACTS.contains(normalised) || isRepetitionLoop(text)
+				|| isMostlyNonLatin(text)) {
 			return "";
 		}
 		return text.trim();
+	}
+
+	/** Phrases no candidate says in an interview; a sentence holding one is a video sign-off Whisper made up. */
+	private static final List<String> SIGN_OFF_MARKERS = List.of("thank you for watching", "thanks for watching",
+			"subscribe to my channel", "please subscribe", "like and subscribe");
+
+	/** Sentences that are only a subtitle sign-off, wherever they sit in a segment. */
+	private static String stripArtefactSentences(String text) {
+		String[] sentences = text.split("(?<=[.!?])\s+");
+		if (sentences.length < 2) {
+			return text;
+		}
+		StringBuilder out = new StringBuilder();
+		for (String sentence : sentences) {
+			String normalised = normalise(sentence);
+			if (SUBTITLE_ARTEFACTS.contains(normalised) || SIGN_OFF_MARKERS.stream().anyMatch(normalised::contains)) {
+				continue;
+			}
+			if (out.length() > 0) {
+				out.append(' ');
+			}
+			out.append(sentence);
+		}
+		return out.toString().trim();
+	}
+
+	// ── Not English ─────────────────────────────────────────────────────
+
+	/** Share of letters outside the Latin alphabet above which a segment is not English. */
+	private static final double NON_LATIN_SHARE = 0.5;
+
+	/**
+	 * Whether most of the letters are in another script: Cyrillic, Arabic, Devanagari, CJK and so on.
+	 *
+	 * <p>The language is already fixed to English in the request, but on room noise Whisper still emits text in
+	 * other scripts, which is never a candidate answering an English interview. Latin-alphabet words in another
+	 * language cannot be told apart this way and are left alone; a code answer or an unusual name inside a
+	 * sentence in English is a few letters, nowhere near half.</p>
+	 */
+	static boolean isMostlyNonLatin(String text) {
+		if (text == null) {
+			return false;
+		}
+		int letters = 0;
+		int nonLatin = 0;
+		for (int i = 0; i < text.length();) {
+			int codePoint = text.codePointAt(i);
+			i += Character.charCount(codePoint);
+			if (!Character.isLetter(codePoint)) {
+				continue;
+			}
+			letters++;
+			if (Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.LATIN) {
+				nonLatin++;
+			}
+		}
+		return letters > 0 && nonLatin >= letters * NON_LATIN_SHARE;
+	}
+
+	// ── Repetition loops ────────────────────────────────────────────────
+
+	/** Fewer words than this cannot be told from someone emphasising a point. */
+	private static final int LOOP_MIN_WORDS = 8;
+
+	/** Longest phrase looked for. The loop in the field was nine words. */
+	private static final int LOOP_MAX_PHRASE = 12;
+
+	/** Share of the words that must sit inside repeats before the text is called a loop. */
+	private static final double LOOP_COVERAGE = 0.5;
+
+	/**
+	 * Whether the text is one phrase repeated over and over, which Whisper does on low-level noise.
+	 *
+	 * <p>It is the other thing it makes up besides stock sign-offs: left to run, it loops a sentence ("I'm going
+	 * to go to the gym and then...") for the length of the recording. The per-segment statistics do not catch it
+	 * when the loop is spread over several segments, so this reads the words themselves. Nobody repeats a phrase of
+	 * two to twelve words three or more times in a row for most of an answer.</p>
+	 */
+	static boolean isRepetitionLoop(String text) {
+		String normalised = normalise(text);
+		if (normalised.isEmpty()) {
+			return false;
+		}
+		String[] words = normalised.split(" ");
+		if (words.length < LOOP_MIN_WORDS) {
+			return false;
+		}
+
+		boolean[] covered = new boolean[words.length];
+		for (int length = 1; length <= LOOP_MAX_PHRASE; length++) {
+			// A single word repeated is easier to say on purpose ("no, no, no"), so it takes more of them.
+			int minRepeats = length == 1 ? 6 : 3;
+			int i = 0;
+			while (i + length <= words.length) {
+				int repeats = 1;
+				while (matchesAt(words, i, i + repeats * length, length)) {
+					repeats++;
+				}
+				if (repeats >= minRepeats) {
+					for (int w = i; w < i + repeats * length; w++) {
+						covered[w] = true;
+					}
+					i += repeats * length;
+				} else {
+					i++;
+				}
+			}
+		}
+		int coveredCount = 0;
+		for (boolean c : covered) {
+			if (c) {
+				coveredCount++;
+			}
+		}
+		if (coveredCount >= words.length * LOOP_COVERAGE) {
+			return true;
+		}
+		return false;
+	}
+
+	/** Whether the {@code length} words at {@code from} are the same as the ones at {@code start}. */
+	private static boolean matchesAt(String[] words, int start, int from, int length) {
+		if (from + length > words.length) {
+			return false;
+		}
+		for (int k = 0; k < length; k++) {
+			if (!words[start + k].equals(words[from + k])) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/** Lowercased, stripped of punctuation and collapsed, for comparison only. */

@@ -64,18 +64,18 @@ public class WhatsAppService {
 
         String formattedNumber = formatIndianMobileNumber(toNumber);
         if (formattedNumber == null) {
-            System.err.println("❌ Invalid mobile number: " + toNumber);
+            log.warn("Invalid mobile number; WhatsApp message not sent");
             return;
         }
 
         String messageBody = generateMessageBody(messageType, params);
         if (messageBody == null) {
-            System.err.println("❌ Invalid parameters for message type: " + messageType);
+            log.warn("Invalid parameters for message type: {}", messageType);
             return;
         }
 
-        System.out.println("📲 TRY WhatsApp to: whatsapp:" + formattedNumber);
-        System.out.println("📝 BODY: " + messageBody);
+        // The body is not logged: for OTP messages it contains the code.
+        log.debug("Sending WhatsApp {} message", messageType);
 
         try {
             Message message = Message.creator(
@@ -84,10 +84,9 @@ public class WhatsAppService {
                     messageBody
             ).create();
 
-            System.out.println("✅ SENT SID=" + message.getSid() + " Status=" + message.getStatus());
+            log.info("WhatsApp message sent: sid={} status={}", message.getSid(), message.getStatus());
         } catch (Exception e) {
-            System.err.println("❌ ERROR " + e.getMessage());
-            e.printStackTrace();
+            log.error("Failed to send WhatsApp {} message", messageType, e);
         }
     }
 

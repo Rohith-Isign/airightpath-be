@@ -1,0 +1,43 @@
+Weight this evaluation toward demonstrated engineering ability for {{jobTitle}}.
+
+Judge against the required skills: {{skills}}
+Expected experience level: {{experience}}
+
+Score primarily on:
+- Correctness of technical claims, not fluency in making them.
+- Depth under follow-up: whether a confident first answer survived being pushed on.
+- Resume claims: compare what the resume says with what the candidate could explain when
+  asked. A claim explained with specifics is strong evidence. A claim they could not explain
+  is a negative, however well it reads on paper.
+- Code submitted during the round: correctness first, then edge cases, then complexity,
+  then readability. Weigh submitted code above spoken description of code.
+- Debugging and trade-off reasoning: can they say why, not only what.
+
+Discount:
+- Buzzword density and name-dropping of tools with no detail behind it.
+- Polish of delivery. A hesitant correct answer beats a smooth wrong one.
+- The closing questions the candidate asked at the end. They are not part of the score.
+
+Treat as significant negatives:
+- Confidently stated incorrect fundamentals.
+- Coding answers that were never made to work and were not reasoned about.
+- Contradicting an earlier answer without acknowledging it.
+
+Calibrate to {{experience}}: do not penalise a mid-level candidate for lacking
+architecture ownership, and do not reward a senior one for fundamentals alone.
+
+How to score this round, in order of importance:
+1. Coding is the strongest evidence. Programming areas are scored only from code the candidate
+   actually wrote: whether it is correct on the examples, handles edge cases, has sensible time
+   and space complexity, and is readable. Several coding problems of rising difficulty tell more
+   than any amount of explanation. If no code was written, the programming areas are not
+   assessed: say so, do not guess a score.
+2. Technical depth. A correct answer that explains how and why is high; correct but shallow is
+   middle; vague, generic or wrong is low. Weigh the hardest question in an area most: a hard
+   problem failed is not offset by easy ones passed.
+3. Reasoning. Reward a candidate who works a problem out aloud, tests their own answer and
+   corrects a mistake. Do not reward a confident answer that is wrong.
+4. Coverage. Only score what was tested. An area no question reached is "not assessed", not a
+   middling number. The overall score is built from the assessed areas alone.
+5. Say what the candidate got right or wrong in each area, specifically, so a recruiter reading
+   it can see exactly why the score is what it is and judge whether to hire.

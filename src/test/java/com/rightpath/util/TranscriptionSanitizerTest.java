@@ -97,6 +97,42 @@ class TranscriptionSanitizerTest {
 		assertEquals("", TranscriptionSanitizer.clean(response));
 	}
 
+	/** The "Thank you." Whisper tacks on after the speech has stopped, with only a little doubt in its numbers. */
+	@Test
+	void aStraySignOffAfterRealSpeechIsDropped() {
+		JsonNode response = response(
+				speech("I have worked on Java backend services for three years."),
+				segment("Thank you.", 0.25, -0.4, 1.0, 5, 6));
+
+		assertEquals("I have worked on Java backend services for three years.",
+				TranscriptionSanitizer.clean(response));
+	}
+
+	@Test
+	void aSignOffAloneIsNotAnAnswerOverARoomTone() {
+		assertEquals("", TranscriptionSanitizer.clean(response(segment("Thank you.", 0.3, -0.3, 1.0, 0, 2))));
+	}
+
+	@Test
+	void aConfidentThankYouAfterAnAnswerIsKept() {
+		JsonNode response = response(
+				speech("That is how I would design it."),
+				segment("Thank you.", 0.02, -0.15, 1.0, 5, 6));
+
+		assertEquals("That is how I would design it. Thank you.", TranscriptionSanitizer.clean(response));
+	}
+
+	@Test
+	void aSignOffInTheMiddleOfAnAnswerIsLeftAlone() {
+		JsonNode response = response(
+				speech("First part of the answer."),
+				segment("Thank you.", 0.25, -0.4, 1.0, 5, 6),
+				segment("Second part of the answer.", 0.02, -0.3, 1.4, 6, 9));
+
+		assertEquals("First part of the answer. Thank you. Second part of the answer.",
+				TranscriptionSanitizer.clean(response));
+	}
+
 	// ── What must be kept ─────────────────────────────────────────────
 
 	@Test
@@ -221,5 +257,116 @@ class TranscriptionSanitizerTest {
 		assertEquals(1, sanitized.rejected().size());
 		assertTrue(sanitized.rejected().get(0).contains("subtitle artefact"),
 				"expected a stated reason, got: " + sanitized.rejected().get(0));
+	}
+
+	@Test
+	void sentencesWhisperInventsOverARoomWithNoSpeechAreDropped() {
+		JsonNode node = response(
+				segment("I love you.", 0.2, -0.4, 1.0, 0, 3),
+				segment("Please like, share and comment on this video.", 0.3, -0.5, 1.3, 3, 6),
+				segment("Sleep well.", 0.25, -0.45, 1.2, 6, 9));
+
+		assertEquals("", TranscriptionSanitizer.sanitize(node).text());
+	}
+
+	@Test
+	void aSegmentThatIsProbablyNotSpeechIsDroppedOnTheLooserPair() {
+		// Short of the strict pair (0.6 and -1.0), past the looser one (0.45 and -0.8).
+		JsonNode node = response(segment("What is this", 0.5, -0.9, 1.2, 0, 3));
+
+		assertTrue(TranscriptionSanitizer.sanitize(node).text().isEmpty());
+	}
+
+	@Test
+	void aDecodeThatPoorIsDroppedWhateverTheNoSpeechEstimate() {
+		JsonNode node = response(segment("The communication in the software", 0.05, -1.7, 1.3, 0, 3));
+
+		assertTrue(TranscriptionSanitizer.sanitize(node).text().isEmpty());
+	}
+
+	@Test
+	void accentedSpeechAroundMinusOneIsStillKept() {
+		JsonNode node = response(segment("I designed the service with a message queue", 0.05, -1.0, 1.3, 0, 4));
+
+		assertEquals("I designed the service with a message queue", TranscriptionSanitizer.sanitize(node).text());
+	}
+
+	@Test
+	void aPhraseLoopedAcrossTheWholeRecordingIsDropped() throws Exception {
+		String loop = "I'm going to go to the gym and then ".repeat(12);
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech(loop) + "]}");
+
+		TranscriptionSanitizer.Sanitized result = TranscriptionSanitizer.sanitize(json);
+
+		assertEquals("", result.text());
+	}
+
+	@Test
+	void aLoopSplitOverSeveralOrdinaryLookingSegmentsIsDropped() throws Exception {
+		String half = "I'm going to go to the gym and then ".repeat(2);
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech(half) + "," + speech(half) + "," + speech(half)
+				+ "]}");
+
+		TranscriptionSanitizer.Sanitized result = TranscriptionSanitizer.sanitize(json);
+
+		assertEquals("", result.text());
+		assertFalse(TranscriptionSanitizer.isWithin(result.keptSpans(), 1, 2));
+	}
+
+	@Test
+	void aLoopWithNoSegmentStatisticsIsDropped() throws Exception {
+		String loop = "I'm going to go to the gym and then ".repeat(10);
+		JsonNode json = MAPPER.readTree("{\"text\": \"" + loop + "\"}");
+
+		assertEquals("", TranscriptionSanitizer.sanitize(json).text());
+	}
+
+	@Test
+	void aRealAnswerThatRepeatsAPhraseOnceOrTwiceIsKept() throws Exception {
+		String answer = "I would use a hash map here because lookups are constant time, and again, a hash map keeps "
+				+ "the code simple, so a hash map is what I would reach for first.";
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech(answer) + "]}");
+
+		assertEquals(answer, TranscriptionSanitizer.sanitize(json).text());
+	}
+
+	@Test
+	void textInAnotherScriptIsDropped() throws Exception {
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech("\u0421\u043f\u0430\u0441\u0438\u0431\u043e \u0437\u0430 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440") + "]}");
+
+		assertEquals("", TranscriptionSanitizer.sanitize(json).text());
+	}
+
+	@Test
+	void anEnglishAnswerWithACodeSymbolOrAnAccentedNameIsKept() throws Exception {
+		String answer = "I would ask Jos\u00e9 to review the \u03bb expression in the stream pipeline first.";
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech(answer) + "]}");
+
+		assertEquals(answer, TranscriptionSanitizer.sanitize(json).text());
+	}
+
+	@Test
+	void aSignOffGluedOntoRealSpeechIsStrippedAndTheSpeechKept() throws Exception {
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + speech(
+				"I would use a hash map here. Thank you for watching and please subscribe to my channel.") + "]}");
+
+		assertEquals("I would use a hash map here.", TranscriptionSanitizer.sanitize(json).text());
+	}
+
+	@Test
+	void aLowConfidenceSentenceAtTheStartIsDroppedButTheSpeechAfterItIsKept() throws Exception {
+		String invented = segment("This is all I have for you this year.", 0.42, -0.9, 1.4, 0, 3);
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + invented + ","
+				+ segment("My name is Rupa and I work with Spring Boot.", 0.01, -0.25, 1.4, 3, 8) + "]}");
+
+		assertEquals("My name is Rupa and I work with Spring Boot.", TranscriptionSanitizer.sanitize(json).text());
+	}
+
+	@Test
+	void aQuietButRealEdgeSegmentIsKept() throws Exception {
+		// Poor on one count only: an accent or a soft voice, not an invented sentence.
+		JsonNode json = MAPPER.readTree("{\"segments\": [" + segment("I mostly use React.", 0.05, -0.8, 1.4, 0, 3) + "]}");
+
+		assertEquals("I mostly use React.", TranscriptionSanitizer.sanitize(json).text());
 	}
 }

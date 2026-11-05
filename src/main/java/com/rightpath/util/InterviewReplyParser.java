@@ -52,6 +52,16 @@ public class InterviewReplyParser {
     private static final Pattern CODING_TAG = Pattern.compile(
             "\\[\\s*CODING\\s*\\]", Pattern.CASE_INSENSITIVE);
 
+    /** A question the model tagged as something other than code. */
+    private static final Pattern OTHER_TYPE_TAG = Pattern.compile(
+            "\\[\\s*(THEORY|NON-TECH)\\s*\\]", Pattern.CASE_INSENSITIVE);
+
+    /** An instruction to write or implement code: a verb, then within a short span what is to be written. */
+    private static final Pattern ASKS_FOR_CODE = Pattern.compile(
+            "\\b(write|implement|code up|create|develop)\\b[^.?!\\n]{0,60}"
+                    + "\\b(function|program|method|class|script|query|algorithm|snippet|code)\\b",
+            Pattern.CASE_INSENSITIVE);
+
     private final InterviewConductPolicy conductPolicy;
 
     public InterviewReplyParser(InterviewConductPolicy conductPolicy) {
@@ -107,7 +117,14 @@ public class InterviewReplyParser {
     private String promoteCodingTag(String text) {
         Matcher coding = CODING_TAG.matcher(text);
         if (!coding.find()) {
-            return tidy(text);
+            // The editor follows the model's tag. A model that forgets it while plainly asking for code ("Write a
+            // function that...") left the candidate with nowhere to write, so that one clear shape is recognised;
+            // anything the model tagged as another type, and every spoken question, is left alone.
+            String tidy = tidy(text);
+            if (!OTHER_TYPE_TAG.matcher(tidy).find() && ASKS_FOR_CODE.matcher(tidy).find()) {
+                return (InterviewConductPolicy.CODING_TAG + " " + tidy).trim();
+            }
+            return tidy;
         }
         String withoutTag = text.substring(0, coding.start()) + text.substring(coding.end());
         return (InterviewConductPolicy.CODING_TAG + " " + tidy(withoutTag)).trim();

@@ -44,6 +44,14 @@ public interface InterviewService {
 	/** Store one piece of a recording that is being sent in pieces. */
 	void uploadRecordingPart(Long interviewScheduleId, String blobName, String uploadId, int part, byte[] data);
 
+	/**
+	 * A URL the browser sends one piece of a recording to directly, bypassing this server.
+	 *
+	 * @param size the exact size in bytes of the piece the browser will send; storage rejects any other length
+	 * @return the URL, valid for a few minutes
+	 */
+	String presignRecordingPart(Long interviewScheduleId, String blobName, String uploadId, int part, long size);
+
 	/** Join the pieces, and add the finished recording to the interview's list. */
 	String completeRecordingUpload(Long interviewScheduleId, String kind, String blobName, String uploadId);
 
@@ -164,5 +172,12 @@ public interface InterviewService {
 	            LocalDateTime assignedAt, LocalDateTime deadlineTime, boolean sendEmail,
 	            LocalDate questionsFromDate, LocalDate questionsToDate,
 	            com.rightpath.enums.InterviewRound round);
+
+	    /**
+	     * Moves the window of a booked interview the candidate has not started.
+	     * Once it has been started, the window it ran under is part of the record.
+	     */
+	    CandidateInterviewSchedule rescheduleInterview(Long id, LocalDateTime assignedAt, LocalDateTime deadlineTime,
+	            boolean notify);
 
 }

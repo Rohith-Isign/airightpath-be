@@ -31,3 +31,11 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Local scratch / Eclipse workspace ###
+temp/
+.metadata/
+
+### Application logs ###
+logs/
+*.log

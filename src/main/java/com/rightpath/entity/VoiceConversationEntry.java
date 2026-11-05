@@ -111,6 +111,6 @@ public class VoiceConversationEntry {
     private Boolean injectionSuspected = Boolean.FALSE;
 
     @Builder.Default
-    private LocalDateTime timestamp = LocalDateTime.now();
+    private LocalDateTime timestamp = LocalDateTime.now(java.time.ZoneOffset.UTC);
 
 }

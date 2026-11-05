@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -16,6 +17,7 @@ import org.springframework.mail.MailException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.InternalAuthenticationServiceException;
+import org.springframework.security.authentication.LockedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -185,6 +187,20 @@ public class GlobalExceptionHandler {
     // 401 / 403 - Authentication & authorization
     // ---------------------------------------------------------------------
 
+    /** A code was asked for again too soon. */
+    @ExceptionHandler(com.rightpath.exceptions.OtpRateLimitException.class)
+    public ResponseEntity<ApiError> handleOtpRateLimit(com.rightpath.exceptions.OtpRateLimitException ex,
+            HttpServletRequest req) {
+        return build(HttpStatus.TOO_MANY_REQUESTS, ErrorCodes.OTP_RATE_LIMITED, ex.getMessage(), req, null);
+    }
+
+    /** Too many wrong passwords: the account is locked for a while. */
+    @ExceptionHandler(LockedException.class)
+    public ResponseEntity<ApiError> handleLocked(LockedException ex, HttpServletRequest req) {
+        logger.warn("Login refused, account locked: {}", req.getRequestURI());
+        return build(HttpStatus.LOCKED, ErrorCodes.AUTH_ACCOUNT_LOCKED, ex.getMessage(), req, null);
+    }
+
     /** Wrong password (or bad principal). Kept generic to avoid user enumeration. */
     @ExceptionHandler(BadCredentialsException.class)
     public ResponseEntity<ApiError> handleBadCreds(BadCredentialsException ex, HttpServletRequest req) {
@@ -339,6 +355,15 @@ public class GlobalExceptionHandler {
         logger.warn("Data integrity violation at {}: {}", req.getRequestURI(), ex.getMostSpecificCause().getMessage());
         return build(HttpStatus.CONFLICT, ErrorCodes.CONFLICT,
                 "The request conflicts with existing data.", req, null);
+    }
+
+    /** Another request (often on another pod) changed the same row first; the caller should reload and retry. */
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ApiError> handleOptimisticLock(ObjectOptimisticLockingFailureException ex,
+            HttpServletRequest req) {
+        logger.warn("Optimistic lock conflict at {}: {}", req.getRequestURI(), ex.getMessage());
+        return build(HttpStatus.CONFLICT, ErrorCodes.CONFLICT,
+                "This record was changed by someone else. Please reload and try again.", req, null);
     }
 
     // ---------------------------------------------------------------------

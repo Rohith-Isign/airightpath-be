@@ -44,7 +44,18 @@ public class InterviewServiceImpl implements InterviewService {
 	@Value("${aws.s3.prefix.interview:interview}")
 	private String interviewPrefix;
 
+	/** How long a presigned piece URL stays valid. Short: the browser asks for one just before it sends the piece. */
+	@Value("${recording.part-url-ttl-minutes:15}")
+	private long partUrlTtlMinutes;
+
+	/** Largest single piece the browser may send straight to storage. Storage's own limit is 5 GB. */
+	@Value("${recording.part-max-bytes:268435456}")
+	private long partMaxBytes;
+
 	/** Every recording upload in flight, so an abandoned one can be finished by the server. */
+	@Autowired
+	private com.rightpath.util.BusinessSchedule businessSchedule;
+
 	@Autowired
 	private com.rightpath.service.RecordingUploadCoordinator recordingUploads;
 	
@@ -76,15 +87,6 @@ public class InterviewServiceImpl implements InterviewService {
 		this.emailAsyncService = emailAsyncService;
 	}
 
-//	@Override
-//	public StartInterviewResponse start(String jobPrefix, String email, String resumeSummary) {
-//
-//		String systemPrompt = jobPromptService.buildStartPrompt(jobPrefix, resumeSummary);
-//
-//		String firstQuestion = openAiService.ask(systemPrompt);
-//
-//		return new StartInterviewResponse(systemPrompt, firstQuestion);
-//	}
 	@Override
 	public StartInterviewResponse start(String jobPrefix, String email, String resumeSummary) {
 	    // fetch schedule
@@ -93,6 +95,7 @@ public class InterviewServiceImpl implements InterviewService {
 	            .orElseThrow(() -> new ResourceNotFoundException("Interview not assigned"));
 
 	    Long interviewScheduleId = schedule.getId();
+	    log.info("Starting interview: schedule={}, jobPrefix={}", interviewScheduleId, jobPrefix);
 
 	    // load questions (now returns List<InterviewQuestionInfo>)
 	    List<InterviewQuestionInfo> questions = interviewQuestionsService.loadAndPrepareQuestions(jobPrefix);
@@ -107,7 +110,7 @@ public class InterviewServiceImpl implements InterviewService {
 	    session.setQuestions(questions);
 	    session.setCurrentQuestionIndex(0);
 	    session.setResumeSummary(resumeSummary);
-	    System.out.println("Saving session with " + questions.size() + " questions");
+	    log.debug("Saving session with {} questions", questions.size());
 	    saveSession(interviewScheduleId, session);
 
 	    String firstQuestion = questions.get(0).getText();   // text of the first question
@@ -147,26 +150,6 @@ public class InterviewServiceImpl implements InterviewService {
 	        }
 	    }
 	}
-//	@Override
-//	public String answer(Long interviewScheduleId, String conversationHistory, boolean finalAnswer, String jobPrefix) {
-//
-//		if (conversationHistory == null || conversationHistory.isBlank()) {
-//			throw new IllegalArgumentException("Conversation history cannot be null or empty");
-//		}
-//
-//		if (finalAnswer) {
-//			if (jobPrefix == null || jobPrefix.isBlank()) {
-//				throw new IllegalArgumentException("jobPrefix cannot be null or empty");
-//			}
-//			String summary = generateFinalSummary(conversationHistory, jobPrefix);
-//
-//			markCompleted(interviewScheduleId, AttemptStatus.COMPLETED, InterviewResult.PENDING, summary);
-//
-//			return summary;
-//		}
-//
-//		return openAiService.ask(conversationHistory);
-//	}
 	
 	@Override
 	@Deprecated
@@ -192,12 +175,10 @@ public class InterviewServiceImpl implements InterviewService {
 
 	    InterviewSession session = getSession(interviewScheduleId);
 	    List<InterviewQuestionInfo> questions = session.getQuestions();
-	    System.out.println("Total questions: " + questions.size());
-	    System.out.println("Session has " + session.getQuestions().size() + " questions");
 	    int currentIndex = session.getCurrentQuestionIndex();
-	    System.out.println("Current index: " + currentIndex);
+	    log.debug("Interview {} question {}/{}", interviewScheduleId, currentIndex, questions.size());
 	    boolean retryAlreadyUsed = session.getRetryUsed().getOrDefault(currentIndex, false);
-	    System.out.println("Retry already used for index " + currentIndex + ": " + retryAlreadyUsed);
+	    log.debug("Retry already used for index {}: {}", currentIndex, retryAlreadyUsed);
 
 	    // Build the full answer (with code if any)
 	    String answerWithCode = answerText;
@@ -209,6 +190,7 @@ public class InterviewServiceImpl implements InterviewService {
 	    // We'll store after the retry decision
 
 	    if (finalAnswer) {
+	        log.info("Final answer received for interview {}; generating summary", interviewScheduleId);
 	        session.appendQAPair(questions.get(currentIndex).getText(), answerWithCode);
 	        String fullHistory = session.getQaHistoryAsString();
 	        return generateFinalSummary(fullHistory, jobPrefix);
@@ -247,6 +229,7 @@ public class InterviewServiceImpl implements InterviewService {
 			if (!retryAlreadyUsed && isLanguageWarning) {
 			// First non-English attempt: give a retry
 			session.getRetryUsed().put(currentIndex, true);
+			log.warn("Non-English answer on interview {} question {}; granting one retry", interviewScheduleId, currentIndex);
 			// Do NOT store the answer, do NOT advance index
 			return "RETRY: " + aiFeedback + "\n\nPlease answer the same question again.\n\nQuestion: " + questions.get(currentIndex).getText();
 			}
@@ -257,31 +240,18 @@ public class InterviewServiceImpl implements InterviewService {
 			session.setCurrentQuestionIndex(nextIndex);
 
 	    if (nextIndex >= questions.size()) {
+	        log.info("All {} questions answered for interview {}; generating summary", questions.size(), interviewScheduleId);
 	        String fullHistory = session.getQaHistoryAsString();
 	        return generateFinalSummary(fullHistory, jobPrefix);
 	    }
 
 	    InterviewQuestionInfo nextQuestion = questions.get(nextIndex);
-	    System.out.println("AI Feedback: " + aiFeedback);
-	    String returnValue = "FEEDBACK: " + aiFeedback + "\n\nNEXT QUESTION: " + nextQuestion.getText();
-	    System.out.println("Returning: " + returnValue);
+	    log.debug("AI feedback generated for interview {}", interviewScheduleId);
+	    log.debug("Returning feedback and next question for interview {}", interviewScheduleId);
 	    return "FEEDBACK: " + aiFeedback + "\n\nNEXT QUESTION: " + nextQuestion.getText();
 	}
 	
-//	private String generateFinalSummary(String conversationHistory, String jobPrefix) {
-//
-//		String summaryPrompt = jobPromptService.buildSummaryPrompt(jobPrefix, conversationHistory);
-//
-//		summaryPrompt = summaryPrompt
-//				+ "\n\nProvide all the questions and answers in order, followed by a final summary. "
-//				+ "Do not include the system prompt in your response.";
-//
-//		return openAiService.ask(summaryPrompt);
-//	}
 
-//	private String generateFinalSummary(String conversationHistory, String jobPrefix) {
-//	    return "HISTORY:\n" + conversationHistory;  
-//	}
 	
 	private String generateFinalSummary(String conversationHistory, String jobPrefix) {
 	    String summaryPrompt = 
@@ -314,7 +284,9 @@ public class InterviewServiceImpl implements InterviewService {
 	            .questionsToDate(questionsToDate != null ? questionsToDate.atTime(23, 59, 59) : null)
 	            .build();
 
-	    return scheduleRepo.save(schedule);
+	    CandidateInterviewSchedule saved = scheduleRepo.save(schedule);
+	    log.info("Interview assigned: schedule={}, jobPrefix={}, email={}", saved.getId(), jobPrefix, email);
+	    return saved;
 	}
 
 	
@@ -330,9 +302,23 @@ public class InterviewServiceImpl implements InterviewService {
 		}
 	}
 
+	/** A window has to close after it opens. */
+	private static void requireWindow(LocalDateTime opens, LocalDateTime closes) {
+		if (opens != null && closes != null && !closes.isAfter(opens)) {
+			throw new IllegalArgumentException("The interview end time must be after its start time");
+		}
+	}
+
 	@Override
 	public List<CandidateInterviewSchedule> getActiveInterviewsByEmail(String email) {
-		return scheduleRepo.findActiveInterviewsByEmail(email);
+		// An interview whose deadline has passed is not one the candidate can still sit: starting it is refused
+		// with "The time allowed for this interview has passed". It used to stay on their list all the same,
+		// marked Not Attempted with a Start button that could only fail. Compared the way the start check does.
+		// In the business zone, where the deadline was written; the server's own clock can be hours away.
+		LocalDateTime now = businessSchedule.now();
+		return scheduleRepo.findActiveInterviewsByEmail(email).stream()
+				.filter(schedule -> schedule.getDeadlineTime() == null || !schedule.getDeadlineTime().isBefore(now))
+				.toList();
 	}
 
 	@Override
@@ -354,13 +340,32 @@ public class InterviewServiceImpl implements InterviewService {
 	        throw new IllegalArgumentException("emails must be provided");
 	    }
 	    requireDeadline(deadlineTime);
+	    requireWindow(assignedAt, deadlineTime);
 
 	    List<CandidateInterviewSchedule> schedules = new ArrayList<>();
 	    // Kept so the invitation can address the candidate by name and quote the
 	    // role, instead of the bare job prefix they never see anywhere else.
 	    Map<String, JobApplicationForCandidate> applicationsByEmail = new HashMap<>();
 
+	    com.rightpath.enums.InterviewRound bookedRound = com.rightpath.enums.InterviewRound.orDefault(round);
+	    LocalDateTime nowInBusinessZone = businessSchedule.now();
+	    List<CandidateInterviewSchedule> existing = scheduleRepo.findAllByJobPrefix(jobPrefix);
+
 	    for (String email : emails) {
+	        // A round the candidate was already sent, and has neither started nor missed, is not booked again:
+	        // that would send a second invitation for the same interview. Once it is done (or its window has
+	        // closed) a further attempt can be booked.
+	        boolean alreadyOpen = existing.stream()
+	                .filter(x -> !x.isDeleted() && email.equalsIgnoreCase(x.getEmail()))
+	                .filter(x -> x.getEffectiveRound() == bookedRound)
+	                .anyMatch(x -> x.getAttemptStatus() != AttemptStatus.COMPLETED
+	                        && (x.getDeadlineTime() == null || x.getDeadlineTime().isAfter(nowInBusinessZone)));
+	        if (alreadyOpen) {
+	            log.info("Skipping {} on {}: {} interview already assigned and still open", email, jobPrefix,
+	                    bookedRound);
+	            continue;
+	        }
+
 	        JobApplicationForCandidate application = jobAppRepo
 	                .findByJobPost_JobPrefixAndUser_Email(jobPrefix, email)
 	                .orElseThrow(() -> new ResourceNotFoundException("Application not found for " + email));
@@ -404,6 +409,8 @@ public class InterviewServiceImpl implements InterviewService {
 	    }
 
 	    schedules = scheduleRepo.saveAll(schedules);
+	    log.info("Bulk interview assignment: {} schedules created for jobPrefix={}, emailNotification={}",
+	            schedules.size(), jobPrefix, sendEmail);
 
 	    if (sendEmail) {
 	        for (CandidateInterviewSchedule s : schedules) {
@@ -436,6 +443,57 @@ public class InterviewServiceImpl implements InterviewService {
 
 	@Transactional
 	@Override
+	public CandidateInterviewSchedule rescheduleInterview(Long id, LocalDateTime assignedAt,
+			LocalDateTime deadlineTime, boolean notify) {
+		CandidateInterviewSchedule schedule = scheduleRepo.findById(id)
+				.orElseThrow(() -> new ResourceNotFoundException("Interview not found"));
+
+		if (schedule.getAttemptStatus() != AttemptStatus.NOT_ATTEMPTED || schedule.getStartedAt() != null) {
+			throw new IllegalStateException(
+					"This interview has already been started, so its time window can no longer be changed.");
+		}
+		requireDeadline(deadlineTime);
+		if (assignedAt == null) {
+			throw new IllegalArgumentException("The interview start time is required");
+		}
+		requireWindow(assignedAt, deadlineTime);
+		if (!deadlineTime.isAfter(businessSchedule.now())) {
+			throw new IllegalArgumentException("The new end time has already passed");
+		}
+
+		schedule.setAssignedAt(assignedAt);
+		schedule.setDeadlineTime(deadlineTime);
+		scheduleRepo.save(schedule);
+		log.info("Rescheduled interview {} for {} to {} - {}", id, schedule.getEmail(), assignedAt, deadlineTime);
+
+		if (notify) {
+			Map<String, Object> emailParams = new HashMap<>();
+			emailParams.put("recipientEmail", schedule.getEmail());
+			emailParams.put("jobPrefix", schedule.getJobPrefix());
+			emailParams.put("startTime", assignedAt);
+			emailParams.put("endTime", deadlineTime);
+			jobAppRepo.findByJobPost_JobPrefixAndUser_Email(schedule.getJobPrefix(), schedule.getEmail())
+					.ifPresent(application -> {
+						emailParams.put("firstName", application.getFirstName());
+						emailParams.put("lastName", application.getLastName());
+						emailParams.put("mobileNumber", application.getMobileNumber());
+						if (application.getJobPost() != null) {
+							emailParams.put("jobTitle", application.getJobPost().getJobTitle());
+						}
+					});
+			// Best effort: the window has moved either way.
+			try {
+				emailAsyncService.sendTemplatedEmail(EmailType.INTERVIEW_SCHEDULE, emailParams);
+			} catch (Exception e) {
+				log.warn("Rescheduled interview {} but could not email {}: {}", id, schedule.getEmail(),
+						e.getMessage());
+			}
+		}
+		return schedule;
+	}
+
+	@Transactional
+	@Override
 	public void markCompleted(Long interviewScheduleId, AttemptStatus attemptStatus, InterviewResult interviewResult,
 			String summaryRef) {
 		CandidateInterviewSchedule schedule = scheduleRepo.findById(interviewScheduleId)
@@ -446,6 +504,7 @@ public class InterviewServiceImpl implements InterviewService {
 		schedule.setSummaryReferences(summaryRef);
 
 		scheduleRepo.save(schedule);
+		log.info("Interview {} marked {} with result {}", interviewScheduleId, attemptStatus, interviewResult);
 
 		// If interview completed, update the job application status
 		if (attemptStatus == AttemptStatus.COMPLETED) {
@@ -578,6 +637,24 @@ public class InterviewServiceImpl implements InterviewService {
 	}
 
 	@Override
+	public String presignRecordingPart(Long interviewScheduleId, String blobName, String uploadId, int part,
+			long size) {
+		requireOwnBlob(interviewScheduleId, blobName);
+		if (part < 1 || part > 10_000) {
+			throw new IllegalArgumentException("Part number out of range");
+		}
+		if (size < 1 || size > partMaxBytes) {
+			throw new IllegalArgumentException("Part size must be between 1 and " + partMaxBytes + " bytes");
+		}
+		// Refused with 410 once the server has finished this upload, as for a piece sent through the application.
+		recordingUploads.requireOpen(uploadId);
+		// The bytes never reach this server, so asking for the URL is the sign that the upload is alive.
+		recordingUploads.touched(uploadId);
+		return storageService.presignUploadPart(interviewPrefix, blobName, uploadId, part, size,
+				java.time.Duration.ofMinutes(partUrlTtlMinutes));
+	}
+
+	@Override
 	public String completeRecordingUpload(Long interviewScheduleId, String kind, String blobName, String uploadId) {
 		requireOwnBlob(interviewScheduleId, blobName);
 		// Joined exactly once, however many times and by whoever asks — the
@@ -653,7 +730,7 @@ public class InterviewServiceImpl implements InterviewService {
 			throw new IllegalStateException("This interview result has already been removed.");
 		}
 
-		schedule.setDeletedAt(LocalDateTime.now());
+		schedule.setDeletedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
 		schedule.setDeletedBy(actingUser());
 		schedule.setDeleteReason(trimmed);
 		CandidateInterviewSchedule saved = scheduleRepo.save(schedule);
@@ -724,10 +801,6 @@ public class InterviewServiceImpl implements InterviewService {
 	    return session;
 	}
 	
-//	@Override
-//	public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId) {
-//	    return prepareQuestionsAndCreateSession(jobPrefix, email, scheduleId, null, null);
-//	}
 
 	@Override
 	public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId) {
@@ -749,6 +822,7 @@ public class InterviewServiceImpl implements InterviewService {
 	    
 	    // Check if questions are loaded
 	    if (questions == null || questions.isEmpty()) {
+	        log.warn("No questions found for schedule {} (jobPrefix={}, from={}, to={})", scheduleId, jobPrefix, fromDate, toDate);
 	        throw new ResourceNotFoundException("No questions found for jobPrefix: " + jobPrefix + 
 	                                   " with date range from " + fromDate + " to " + toDate);
 	    }
@@ -764,23 +838,10 @@ public class InterviewServiceImpl implements InterviewService {
 	    session.setCurrentQuestionIndex(0);
 	    session.setResumeSummary(null);
 	    saveSession(scheduleId, session);
-	    
+	    log.info("Interview session created: schedule={}, jobPrefix={}, questions={}", scheduleId, jobPrefix, questions.size());
+
 	    String firstQuestion = questions.get(0).getText();
 	  
 	    return firstQuestion;
 	}
-
-	// DELETE THIS METHOD - it's not needed and returns null
-	// @Override
-	// public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId, Long fromDate, Long toDate) {
-//	     return null;
-	// }
-
-//	@Override
-//	public String prepareQuestionsAndCreateSession(String jobPrefix, String email, Long scheduleId, Long fromDate,
-//			Long toDate) {
-//		// TODO Auto-generated method stub
-//		return null;
-//	}
-	
 }

@@ -1,10 +1,9 @@
 package com.rightpath.controller;
 
+import java.time.Duration;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,6 +20,7 @@ import com.rightpath.repository.CandidateInterviewScheduleRepository;
 import com.rightpath.repository.ProctoringEventRepository;
 import com.rightpath.service.AudioTranscriptionService;
 import com.rightpath.service.VoiceInterviewService;
+import com.rightpath.service.state.SharedStateStore;
 import com.rightpath.util.ProctoringEventSeverity;
 import com.rightpath.websocket.WebSocketAuthInterceptor;
 
@@ -30,6 +30,8 @@ public class VoiceInterviewWebSocketController {
     private static final Logger log = LoggerFactory.getLogger(VoiceInterviewWebSocketController.class);
 
     private static final int MAX_AUDIO_CHUNK_BYTES = 200 * 1024; // 200KB
+    private static final Duration ANSWER_DEDUP_WINDOW = Duration.ofSeconds(60);
+    private static final Duration CHUNK_COUNTER_TTL = Duration.ofHours(6);
 
     private final VoiceInterviewService voiceInterviewService;
     private final AudioTranscriptionService audioTranscriptionService;
@@ -37,38 +39,21 @@ public class VoiceInterviewWebSocketController {
     private final CandidateInterviewScheduleRepository scheduleRepo;
     private final ProctoringEventRepository proctoringEventRepository;
 
-    private final ConcurrentHashMap<Long, AtomicInteger> chunkCounters = new ConcurrentHashMap<>();
-
-    // Deduplication: key = scheduleId + transcript hash, value = timestamp
-    private final ConcurrentHashMap<String, Long> recentAnswers = new ConcurrentHashMap<>();
+    private final SharedStateStore sharedState;
 
     public VoiceInterviewWebSocketController(
             VoiceInterviewService voiceInterviewService,
             AudioTranscriptionService audioTranscriptionService,
             SimpMessagingTemplate messagingTemplate,
             CandidateInterviewScheduleRepository scheduleRepo,
-            ProctoringEventRepository proctoringEventRepository) {
+            ProctoringEventRepository proctoringEventRepository,
+            SharedStateStore sharedState) {
         this.voiceInterviewService = voiceInterviewService;
         this.audioTranscriptionService = audioTranscriptionService;
         this.messagingTemplate = messagingTemplate;
         this.scheduleRepo = scheduleRepo;
         this.proctoringEventRepository = proctoringEventRepository;
-
-        // Cleanup expired dedup entries every 5 minutes
-        Thread cleanupThread = new Thread(() -> {
-            while (!Thread.currentThread().isInterrupted()) {
-                try {
-                    Thread.sleep(300_000); // 5 minutes
-                    long cutoff = System.currentTimeMillis() - 60_000;
-                    recentAnswers.entrySet().removeIf(e -> e.getValue() < cutoff);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-        }, "dedup-cleanup");
-        cleanupThread.setDaemon(true);
-        cleanupThread.start();
+        this.sharedState = sharedState;
     }
 
     /**
@@ -108,7 +93,7 @@ public class VoiceInterviewWebSocketController {
     }
 
     /**
-     * Receive audio chunk from client for real-time transcription.
+     * Receive audio chunk from client for transcription.
      * Audio is sent as base64-encoded JSON since SockJS only supports text frames.
      */
     @MessageMapping("/interview/{scheduleId}/audio-chunk")
@@ -124,7 +109,7 @@ public class VoiceInterviewWebSocketController {
 
         byte[] audioData = Base64.getDecoder().decode(base64Audio);
 
-        // Item 2: Audio chunk size limit (200KB)
+        // Audio chunk size limit (200KB)
         if (audioData.length > MAX_AUDIO_CHUNK_BYTES) {
             log.warn("Audio chunk too large for schedule {}: {} bytes (max {})",
                     scheduleId, audioData.length, MAX_AUDIO_CHUNK_BYTES);
@@ -135,8 +120,7 @@ public class VoiceInterviewWebSocketController {
         log.info("Received audio chunk for schedule {}: {} bytes (base64 len={})",
                 scheduleId, audioData.length, base64Audio.length());
 
-        AtomicInteger counter = chunkCounters.computeIfAbsent(scheduleId, k -> new AtomicInteger(0));
-        int chunkIndex = counter.incrementAndGet();
+        int chunkIndex = (int) sharedState.increment("chunk-counter:" + scheduleId, CHUNK_COUNTER_TTL);
 
         audioTranscriptionService.transcribeAsync(scheduleId, audioData, chunkIndex);
     }
@@ -154,16 +138,14 @@ public class VoiceInterviewWebSocketController {
                 scheduleId,
                 request.getTranscript() != null ? request.getTranscript().length() : 0);
 
-        // Item 5: Message deduplication — skip dedup check for skipped questions
+        // Message deduplication — skip dedup check for skipped questions
         // (empty transcript would hash-collide across consecutive skips)
         if (!request.isSkipped() && request.getTranscript() != null) {
             String dedupKey = scheduleId + ":" + request.getTranscript().hashCode();
-            Long lastSeen = recentAnswers.get(dedupKey);
-            if (lastSeen != null && System.currentTimeMillis() - lastSeen < 60_000) {
+            if (!sharedState.setIfAbsent("answer-dedup:" + dedupKey, "1", ANSWER_DEDUP_WINDOW)) {
                 log.warn("Duplicate answer detected for schedule {}, ignoring", scheduleId);
                 return;
             }
-            recentAnswers.put(dedupKey, System.currentTimeMillis());
         }
 
         try {
@@ -206,7 +188,7 @@ public class VoiceInterviewWebSocketController {
             log.info("Proctoring record for schedule {}: {} - {}", scheduleId, eventType, details);
         }
 
-        // Item 15: Save proctoring event to database. Saved whatever its
+        // Save proctoring event to database. Saved whatever its
         // severity — the recording audit is only useful because it is kept.
         try {
             ProctoringEvent event = ProctoringEvent.builder()

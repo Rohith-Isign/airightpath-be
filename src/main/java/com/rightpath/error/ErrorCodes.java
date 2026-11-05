@@ -15,6 +15,9 @@ public final class ErrorCodes {
     public static final String AUTH_INVALID_REFRESH = "AUTH_INVALID_REFRESH";
     public static final String AUTH_REFRESH_REUSE_DETECTED = "AUTH_REFRESH_REUSE_DETECTED";
     public static final String AUTH_FORBIDDEN = "AUTH_FORBIDDEN";
+    public static final String AUTH_ACCOUNT_LOCKED = "AUTH_ACCOUNT_LOCKED";
+    public static final String OTP_RATE_LIMITED = "OTP_RATE_LIMITED";
+    public static final String RATE_LIMITED = "RATE_LIMITED";
     public static final String INTERNAL_ERROR = "INTERNAL_ERROR";
 
     // Generic request-level

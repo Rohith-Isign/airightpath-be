@@ -27,7 +27,6 @@ import com.rightpath.service.InterviewQuestionsService;
 import com.rightpath.service.OpenAiService;
 import com.rightpath.service.StorageService;
 
-
 @Service
 @lombok.extern.slf4j.Slf4j
 public class InterviewQuestionsServiceImpl implements InterviewQuestionsService {
@@ -71,10 +70,10 @@ public class InterviewQuestionsServiceImpl implements InterviewQuestionsService 
 
             repository.save(entity);
 
-            System.out.println("✅ Interview file uploaded & saved: " + key);
+            log.info("Interview file uploaded and saved: {}", key);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Failed to upload interview questions for job prefix {}", jobPrefix, e);
             throw new RuntimeException("❌ Failed to upload interview questions");
         }
     }
@@ -255,7 +254,6 @@ public class InterviewQuestionsServiceImpl implements InterviewQuestionsService 
         	    "Tell me about yourself", "INTRO", "INTRODUCTION", "INTRODUCTION", null);
         selected.add(0, intro);
 
-//        log.info("Successfully selected {} questions (7 technical, 2 coding, 2 snippet) with category variety.", selected.size());
         return selected;
     }
 

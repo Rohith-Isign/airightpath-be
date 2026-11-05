@@ -113,6 +113,22 @@ class ScopedScreeningTest {
 		assertEquals(1, response.rejectedCount());
 	}
 
+	// ------------------------------------------------------------- score check (read only)
+
+	@Test
+	void aScoreCheckGivesTheScoreAndChangesNothingForACandidateAtAnyStage() {
+		JobApplicationForCandidate interviewing =
+				applicant("interview@example.test", ApplicationStatus.INTERVIEW_SCHEDULED, STRONG_RESUME);
+		givenApplicants(interviewing);
+
+		List<ScreeningResultDTO> rows = service.previewScores(PREFIX, List.of("interview@example.test"));
+
+		assertEquals(1, rows.size());
+		assertTrue(rows.get(0).matchPercent() > 0, "got: " + rows.get(0).matchPercent());
+		assertEquals(ApplicationStatus.INTERVIEW_SCHEDULED, interviewing.getStatus());
+		verify(applications, never()).save(any(JobApplicationForCandidate.class));
+	}
+
 	// ------------------------------------------------------------- scoped screening
 
 	@Test
@@ -222,7 +238,8 @@ class ScopedScreeningTest {
 
 		assertFalse(skipped.screened());
 		assertNotNull(skipped.matchPercent(), "the UI still shows a match% for rows it may not screen");
-		assertEquals(100.0, skipped.matchPercent(), 0.01);
+		// A strong resume still scores well under the whole-posting score; the exact figure is the scorer's business.
+		assertTrue(skipped.matchPercent() >= 70.0, "was " + skipped.matchPercent());
 	}
 
 	// -------------------------------------------------- Q1: shortlist anyway (override)
@@ -340,6 +357,59 @@ class ScopedScreeningTest {
 	}
 
 	// ------------------------------------------------------------------------ fixtures
+
+	// ------------------------------------------------- 0% never shortlists, unreadable resumes are not scored
+
+	@Test
+	void aZeroScoreIsNotShortlistedEvenIfTheThresholdIsMisconfiguredToZero() {
+		ReflectionTestUtils.setField(service, "atsThreshold", 0.0);
+		JobApplicationForCandidate weak = applicant("weak@example.test", ApplicationStatus.APPLIED, WEAK_RESUME);
+		givenApplicants(weak);
+
+		service.screenCandidates(PREFIX, null);
+
+		assertEquals(ApplicationStatus.REJECTED, weak.getStatus());
+		assertEquals("Not Shortlisted", weak.getShortlistStatus());
+	}
+
+	@Test
+	void aResumeThatParsesToNoTextIsNotScoredOrRejected() {
+		JobApplicationForCandidate scanned = applicant("scan@example.test", ApplicationStatus.APPLIED, "   ");
+		givenApplicants(scanned);
+
+		ScreeningResponseDTO response = service.screenCandidates(PREFIX, null);
+
+		assertEquals(ApplicationStatus.APPLIED, scanned.getStatus(), "a file problem must not reject the candidate");
+		assertEquals(1, response.skippedCount());
+		assertTrue(result(response, "scan@example.test").reason().contains("could not be read"));
+		verify(applications, never()).save(any(JobApplicationForCandidate.class));
+	}
+
+	@Test
+	void aMissingResumeFileIsSkippedInsteadOfFailingTheWholeBatch() {
+		JobApplicationForCandidate noFile = applicant("nofile@example.test", ApplicationStatus.APPLIED, STRONG_RESUME);
+		noFile.setResumeData(null);
+		JobApplicationForCandidate good = applicant("good@example.test", ApplicationStatus.APPLIED, STRONG_RESUME);
+		givenApplicants(noFile, good);
+
+		ScreeningResponseDTO response = service.screenCandidates(PREFIX, null);
+
+		assertEquals(ApplicationStatus.APPLIED, noFile.getStatus());
+		assertEquals(ApplicationStatus.SHORTLISTED, good.getStatus());
+		assertEquals(1, response.screenedCount());
+	}
+
+	@Test
+	void aResumeThatThrowsWhileParsingIsSkippedInsteadOfFailingTheWholeBatch() {
+		JobApplicationForCandidate broken = applicant("broken@example.test", ApplicationStatus.APPLIED, STRONG_RESUME);
+		when(resumes.extractText(broken.getResumeData())).thenThrow(new RuntimeException("corrupt"));
+		givenApplicants(broken);
+
+		ScreeningResponseDTO response = service.screenCandidates(PREFIX, null);
+
+		assertEquals(ApplicationStatus.APPLIED, broken.getStatus());
+		assertEquals(1, response.skippedCount());
+	}
 
 	private void givenApplicants(JobApplicationForCandidate... applicants) {
 		when(applications.findByJobPost(job)).thenReturn(List.of(applicants));

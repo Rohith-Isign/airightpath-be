@@ -44,6 +44,13 @@ class StatusTransitionValidatorTest {
 		});
 	}
 
+	/** An acknowledged candidate can be sent the exam directly, as a shortlisted one can. */
+	@Test
+	void anAcknowledgedCandidateCanBeSentTheExamDirectly() {
+		assertDoesNotThrow(
+				() -> StatusTransitionValidator.validate(ApplicationStatus.ACKNOWLEDGED, ApplicationStatus.EXAM_SENT));
+	}
+
 	/** Reaching RECONFIRMED early would let a candidate sit an exam unacknowledged. */
 	@Test
 	void reconfirmationStaysReachableOnlyFromAckBack() {

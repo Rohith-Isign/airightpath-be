@@ -79,6 +79,17 @@ public interface StorageService {
 	void uploadMultipartPart(String containerName, String fileName, String uploadId, int partNumber, byte[] data);
 
 	/**
+	 * A time-limited URL the browser can PUT one piece to directly, so the bytes never pass through this server.
+	 *
+	 * <p>The piece's exact size is signed into the URL: storage refuses a body of any other length, which is
+	 * what lets the size the caller declared be trusted for quotas. Pieces other than the last must be at
+	 * least 5 MB. The finished object is joined by {@link #completeMultipartUpload}, which asks storage for
+	 * the pieces it holds, so no ETag needs to travel back through the application.</p>
+	 */
+	String presignUploadPart(String containerName, String fileName, String uploadId, int partNumber,
+			long contentLength, java.time.Duration ttl);
+
+	/**
 	 * Join the pieces into the finished object.
 	 *
 	 * @return the reference to store, in the same form {@link #uploadFile} returns

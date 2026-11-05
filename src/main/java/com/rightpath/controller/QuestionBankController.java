@@ -16,12 +16,15 @@ import com.rightpath.dto.QuestionBankItemDTO;
 import com.rightpath.dto.QuestionBankSyncStatus;
 import com.rightpath.service.QuestionBankService;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * The question bank, for admins.
  *
  * <p>Gated on the permission to assign assessments: the questions include answer keys and
  * test-case outputs, so this is not something a candidate-level permission may read.</p>
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/question-bank")
 @PreAuthorize("hasAuthority('ASSESSMENT_ASSIGN')")
@@ -47,6 +50,7 @@ public class QuestionBankController {
 	/** Read the papers already in storage into the bank. Runs in the background. */
 	@PostMapping("/sync")
 	public ResponseEntity<QuestionBankSyncStatus> sync(Authentication authentication) {
+		log.info("Question bank sync started by {}", authentication.getName());
 		return ResponseEntity.ok(questionBankService.startSync(authentication.getName()));
 	}
 

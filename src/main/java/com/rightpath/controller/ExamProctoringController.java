@@ -21,6 +21,8 @@ import com.rightpath.dto.ProctoringCaptureDto;
 import com.rightpath.dto.ProctoringCaptureImage;
 import com.rightpath.service.ExamProctoringService;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * Pre-exam proctoring captures, taken on the instructions screen before the exam
  * clock starts.
@@ -29,6 +31,7 @@ import com.rightpath.service.ExamProctoringService;
  * candidate may only file a capture against their own attempt, and only a user
  * with {@code ASSESSMENT_READ} can look at what was captured.</p>
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/exam-proctoring")
 public class ExamProctoringController {
@@ -58,6 +61,7 @@ public class ExamProctoringController {
             @RequestPart("photo") MultipartFile photo,
             Authentication authentication) {
 
+        log.info("Identity photo upload for assessment {} by {}", assessmentId, authentication.getName());
         ProctoringCaptureDto stored = examProctoringService.saveIdentityPhoto(assessmentId, candidateEmail, capturedAt,
                 photo, authentication.getName());
 
@@ -84,19 +88,14 @@ public class ExamProctoringController {
             @RequestPart("frames") List<MultipartFile> frames,
             Authentication authentication) {
 
+        log.info("Room scan upload ({} frames) for assessment {} by {}", frames.size(), assessmentId,
+                authentication.getName());
         List<ProctoringCaptureDto> stored = examProctoringService.saveRoomScan(assessmentId, candidateEmail, capturedAt,
                 frames, authentication.getName());
 
         return ResponseEntity.ok(ApiResponse.ok(stored));
     }
 
-    /**
-     * Everything captured for one assessment attempt, for review next to the
-     * assessment result.
-     *
-     * @param assessmentId the assessment attempt
-     * @return ordered captures; an empty list when nothing was captured
-     */
     /**
      * Stores the identity photo taken before an interview.
      *
@@ -113,6 +112,7 @@ public class ExamProctoringController {
             @RequestPart("photo") MultipartFile photo,
             Authentication authentication) {
 
+        log.info("Identity photo upload for interview {} by {}", scheduleId, authentication.getName());
         ProctoringCaptureDto stored = examProctoringService.saveInterviewIdentityPhoto(scheduleId, candidateEmail,
                 capturedAt, photo, authentication.getName());
 
@@ -128,6 +128,8 @@ public class ExamProctoringController {
             @RequestPart("frames") List<MultipartFile> frames,
             Authentication authentication) {
 
+        log.info("Room scan upload ({} frames) for interview {} by {}", frames.size(), scheduleId,
+                authentication.getName());
         List<ProctoringCaptureDto> stored = examProctoringService.saveInterviewRoomScan(scheduleId, candidateEmail,
                 capturedAt, frames, authentication.getName());
 
@@ -141,6 +143,13 @@ public class ExamProctoringController {
         return ResponseEntity.ok(ApiResponse.ok(examProctoringService.getInterviewCaptures(scheduleId)));
     }
 
+    /**
+     * Everything captured for one assessment attempt, for review next to the
+     * assessment result.
+     *
+     * @param assessmentId the assessment attempt
+     * @return ordered captures; an empty list when nothing was captured
+     */
     @GetMapping("/assessments/{assessmentId}/captures")
     @PreAuthorize("hasAuthority('ASSESSMENT_READ')")
     public ResponseEntity<ApiResponse<List<ProctoringCaptureDto>>> getCapturesForAssessment(

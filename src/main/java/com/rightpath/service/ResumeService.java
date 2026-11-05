@@ -58,6 +58,15 @@ public interface ResumeService {
     ResumeDownload getResumeForDownload(String email);
 
     /**
+     * The resume the candidate sent with their application to one job, falling back to
+     * {@link #getResumeForDownload(String)} when that application carries none.
+     *
+     * @param email     the candidate's email
+     * @param jobPrefix the job the application was made to; blank means no particular job
+     */
+    ResumeDownload getResumeForDownload(String email, String jobPrefix);
+
+    /**
      * Extracts plain text content from a resume's binary data.
      *
      * @param resumeData The binary resume content.

@@ -98,6 +98,13 @@ public class Users {
 	private LocalDateTime createdAt;
 	private LocalDateTime updatedAt;
 
+	/** Consecutive wrong passwords since the last good login or lock. Changed only by atomic UPDATEs. */
+	@Column(nullable = false, columnDefinition = "int default 0")
+	private int failedLoginAttempts;
+
+	/** Logins are refused until this moment; null when the account is not locked. */
+	private LocalDateTime lockedUntil;
+
 	@PrePersist
 	protected void onCreate() {
 		this.createdAt = LocalDateTime.now();

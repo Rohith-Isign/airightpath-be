@@ -14,6 +14,7 @@ import com.rightpath.dto.AtsResultDto;
 import com.rightpath.service.ATSService;
 
 @Service
+@lombok.extern.slf4j.Slf4j
 public class ATSServiceImpl implements ATSService {
 
     // Apache Tika for extracting text from uploaded documents
@@ -110,14 +111,13 @@ public class ATSServiceImpl implements ATSService {
         double experienceMatch = calculateExperienceMatch(resumeText, jobDescription);
         double educationMatch = calculateEducationMatch(resumeText, jobDescription);
 
-        System.out.printf("TF-IDF Score: %.2f%%\n", tfidfScore);
-        System.out.printf("Skill Match: %.2f%%\n", skillMatch);
-        System.out.printf("Experience Match: %.2f%%\n", experienceMatch);
-        System.out.printf("Education Match: %.2f%%\n", educationMatch);
+        log.debug("ATS breakdown: tfidf={}% skill={}% experience={}% education={}%",
+                String.format("%.2f", tfidfScore), String.format("%.2f", skillMatch),
+                String.format("%.2f", experienceMatch), String.format("%.2f", educationMatch));
 
         // Weighted score calculation
         double totalScore = clamp(0.2 * tfidfScore + 0.4 * skillMatch + 0.2 * experienceMatch + 0.2 * educationMatch);
-        System.out.printf("Total ATS Score: %.2f%%\n", totalScore);
+        log.info("Total ATS score: {}%", String.format("%.2f", totalScore));
         return totalScore;
     }
 
@@ -228,7 +228,7 @@ public class ATSServiceImpl implements ATSService {
                 int years = Integer.parseInt(matcher.group(1));
                 maxYears = Math.max(maxYears, years);
             } catch (NumberFormatException e) {
-                System.err.println("Invalid year format: " + matcher.group(1));
+                log.warn("Invalid year format in experience text: {}", matcher.group(1));
             }
         }
 
@@ -239,8 +239,7 @@ public class ATSServiceImpl implements ATSService {
         int resumeExp = extractYearsOfExperience(resume);
         int jobExp = extractYearsOfExperience(jobDesc);
 
-        System.out.printf("Extracted Resume Experience: %d years\n", resumeExp);
-        System.out.printf("Required Job Experience: %d years\n", jobExp);
+        log.debug("Experience years: resume={} required={}", resumeExp, jobExp);
 
         if (resumeExp == 0 && jobExp == 0) return 100.0;
         if (resumeExp == 0 && jobExp > 0) return 0.0;
@@ -321,9 +320,9 @@ public class ATSServiceImpl implements ATSService {
     public void evaluateScoreAndNotify(String toEmail, String fullName, double atsScore) {
         if (atsScore >= 70) {
             sendShortlistNotification(toEmail, fullName);
-            System.out.printf("✅ Candidate '%s' shortlisted. Email sent to %s\n", fullName, toEmail);
+            log.info("Candidate '{}' shortlisted; notification sent", fullName);
         } else {
-            System.out.printf("❌ Candidate '%s' did not meet the threshold. ATS Score: %.2f%%\n", fullName, atsScore);
+            log.info("Candidate '{}' did not meet the threshold; ATS score: {}%", fullName, String.format("%.2f", atsScore));
         }
     }
 
@@ -333,6 +332,6 @@ public class ATSServiceImpl implements ATSService {
      */
     public void sendShortlistNotification(String toEmail, String fullName) {
         // TODO: Replace with actual email service logic.
-        System.out.printf("📧 Sending shortlist notification to %s for candidate %s\n", toEmail, fullName);
+        log.info("Sending shortlist notification for candidate '{}'", fullName);
     }
 }

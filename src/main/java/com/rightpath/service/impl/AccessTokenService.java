@@ -20,7 +20,9 @@ import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @Service
 public class AccessTokenService {
 
@@ -57,6 +59,7 @@ public class AccessTokenService {
                 .signWith(getKey(), SignatureAlgorithm.HS512)
                 .compact();
 
+        log.debug("Issued access token for {}", userDetails.getUsername());
         return new IssuedAccessToken(jwt, exp.getEpochSecond() - now.getEpochSecond());
     }
 
@@ -91,6 +94,7 @@ public class AccessTokenService {
 
             return claims;
         } catch (JwtException | IllegalArgumentException e) {
+            log.warn("Access token rejected: {}", e.getClass().getSimpleName());
             throw new InvalidAccessTokenException("Invalid access token", e);
         }
     }
@@ -103,6 +107,7 @@ public class AccessTokenService {
         String configured = props.getJwt().getSecret();
         String secret = (configured != null && !configured.isBlank()) ? configured : legacySecret;
         if (secret == null || secret.isBlank()) {
+            log.error("JWT secret is not configured");
             throw new IllegalStateException("JWT secret not configured");
         }
         return Keys.hmacShaKeyFor(secret.getBytes());

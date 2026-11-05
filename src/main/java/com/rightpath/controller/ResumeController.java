@@ -15,6 +15,9 @@ import org.springframework.web.multipart.MultipartFile;
 import com.rightpath.dto.ResumeDownload;
 import com.rightpath.service.ResumeService;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @RestController
 @RequestMapping("/api")
 public class ResumeController {
@@ -42,6 +45,7 @@ public class ResumeController {
 
         String email = authentication.getName();
 
+        log.info("Resume upload by {} for job {}", email, jobPrefix);
         resumeService.saveResume(file, email, jobPrefix);
 
         return ResponseEntity.ok("Resume uploaded successfully.");
@@ -61,8 +65,13 @@ public class ResumeController {
     @PreAuthorize("hasAuthority('RESUME_UPDATE')")
     public ResponseEntity<Map<String, String>> updateResume(
             @RequestParam("file") MultipartFile file,
-            @RequestParam("email") String email) throws Exception {
+            @RequestParam(value = "email", required = false) String ignoredEmail,
+            Authentication authentication) throws Exception {
         Map<String, String> response = new HashMap<>();
+        // The signed-in candidate's own address, never the one in the request: it was taken from the form, so any
+        // candidate could replace another's resume by sending their email.
+        String email = authentication.getName();
+        log.info("Resume update for {}", email);
         resumeService.updateResume(file, email);
         response.put("message", "Resume updated successfully.");
         return ResponseEntity.ok(response);
@@ -79,12 +88,15 @@ public class ResumeController {
      */
     @GetMapping("/view-resume/{email}")
     @PreAuthorize("hasAuthority('RESUME_VIEW')")
-    public ResponseEntity<byte[]> viewResume(@PathVariable String email) {
+    public ResponseEntity<byte[]> viewResume(@PathVariable String email,
+            @RequestParam(value = "jobPrefix", required = false) String jobPrefix) {
         // Serves the resume the candidate submitted with their application
         // (JobApplicationForCandidate.resumeData) — the same source the ATS engine
         // scores. A genuinely missing resume throws ResourceNotFoundException, which
         // the global handler maps to 404 (not the old misleading 400).
-        ResumeDownload resume = resumeService.getResumeForDownload(email);
+        log.info("Resume download requested for {}", email);
+        // With a job, the resume sent with that application; without one, the candidate's latest.
+        ResumeDownload resume = resumeService.getResumeForDownload(email, jobPrefix);
 
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(resume.contentType()))

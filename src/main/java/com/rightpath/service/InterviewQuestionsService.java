@@ -2,7 +2,6 @@ package com.rightpath.service;
 
 import java.util.List;
 
-import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.rightpath.dto.InterviewQuestionInfo;

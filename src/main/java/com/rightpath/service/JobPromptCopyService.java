@@ -19,6 +19,8 @@ import com.rightpath.repository.EvaluationCategoryRepository;
 import com.rightpath.repository.JobPostRepository;
 import com.rightpath.repository.JobPromptRepository;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * Reuses one job's AI set-up for another.
  *
@@ -26,6 +28,7 @@ import com.rightpath.repository.JobPromptRepository;
  * the old one's, so a recruiter opening a fresh job found nothing and had to retype what already existed. This
  * copies it across in one step, so assigning an assessment or an interview to the new job needs no rewriting.</p>
  */
+@Slf4j
 @Service
 public class JobPromptCopyService {
 
@@ -73,6 +76,7 @@ public class JobPromptCopyService {
 
         List<JobPrompt> prompts = promptRepository.findAllByJobPrefix(fromJobPrefix);
         if (prompts.isEmpty()) {
+            log.warn("Copy refused: job {} has no prompts", fromJobPrefix);
             throw new ResourceNotFoundException("The job " + fromJobPrefix + " has no prompts to reuse");
         }
         for (JobPrompt prompt : prompts) {
@@ -118,6 +122,9 @@ public class JobPromptCopyService {
                     template.getMaxQuestions(), template.getBaselineDifficulty(), template.isAdaptiveDifficulty());
             copiedTemplates++;
         }
+
+        log.info("Copied job set-up from {} to {}: {} prompts, {} categories, {} interview settings", fromJobPrefix,
+                toJobPrefix, prompts.size(), copiedCategories, copiedTemplates);
 
         Map<String, Integer> counts = new LinkedHashMap<>();
         counts.put("prompts", prompts.size());

@@ -117,6 +117,11 @@ public class EmailServiceImpl implements EmailService {
     @Value("${app.mail.candidate-portal-url:https://www.airightpath.com}")
     private String portalUrl = "https://www.airightpath.com";
 
+    /** The candidate's interviews page: where "Start my test" / "Start my interview" go. */
+    private String interviewsUrl() {
+        return portalUrl.replaceAll("/+$", "") + "/candidate/interviews";
+    }
+
     /** On-site test address, shown on every slot mail so all three agree. */
     @Value("${app.mail.test-venue:ISIGN TECH PRIVATE LIMITED, 1st floor, Plot No: 2-87/3, Mn Rd, beside Reliance Trends, Sreeramaaramam, Narsingi, Hyderabad, Telangana 500089}")
     private String testVenue = "ISIGN TECH PRIVATE LIMITED, 1st floor, Plot No: 2-87/3, Mn Rd, beside Reliance Trends, Sreeramaaramam, Narsingi, Hyderabad, Telangana 500089";
@@ -524,7 +529,7 @@ public class EmailServiceImpl implements EmailService {
                                     row("Test window closes",
                                             businessSchedule.formatForTemplate(params.get("endTime"))),
                                     row("Attempts allowed", "1"))
-                            + button(ACCENT_INFO, portalUrl, "Start my test")
+                            + button(ACCENT_INFO, interviewsUrl(), "Start my test")
                             + sectionTitle("Before you begin")
                             + bullets(ACCENT_INFO,
                                     "Use a laptop or desktop with an up-to-date Chrome browser.",
@@ -586,7 +591,7 @@ public class EmailServiceImpl implements EmailService {
                                             businessSchedule.formatForTemplate(params.get("startTime"))),
                                     row("Complete before",
                                             businessSchedule.formatForTemplate(params.get("endTime"))))
-                            + button(ACCENT_INFO, portalUrl, "Start my interview")
+                            + button(ACCENT_INFO, interviewsUrl(), "Start my interview")
                             + sectionTitle("Before you join")
                             + bullets(ACCENT_INFO,
                                     "Use a laptop or desktop with a working camera and microphone.",
@@ -744,7 +749,7 @@ public class EmailServiceImpl implements EmailService {
      * reminder cannot disagree about how one slot reads.
      */
     private String scheduleRow(Object slot) {
-        return fill(PANEL_ROW, "label", esc("Date & Time"), "value", businessSchedule.formatForTemplate(slot));
+        return fill(PANEL_ROW, "label", esc("Exam Date & Time"), "value", businessSchedule.formatForTemplate(slot));
     }
 
     private String steps(String accent, String... items) {

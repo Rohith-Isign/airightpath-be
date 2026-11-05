@@ -74,6 +74,9 @@ class InterviewWarningsDoNotEndTheInterviewTest {
 				mock(UsersRepository.class));
 
 		ReflectionTestUtils.setField(service, "maxWarnings", MAX_WARNINGS);
+		// A finished interview moves the candidate's application on; this test is about warnings, not that.
+		ReflectionTestUtils.setField(service, "jobAppRepo",
+				mock(com.rightpath.repository.JobApplicationForCandidateRepository.class));
 		ReflectionTestUtils.setField(service, "terminateOnMaxWarnings", false);
 
 		when(scheduleRepo.save(any(CandidateInterviewSchedule.class)))

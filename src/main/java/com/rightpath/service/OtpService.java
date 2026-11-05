@@ -4,9 +4,11 @@ import java.time.LocalDateTime;
 import java.util.Optional;
 
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import com.rightpath.config.AuthProperties;
 import com.rightpath.entity.Otp;
 import com.rightpath.entity.Users;
 import com.rightpath.repository.OtpRepository;
@@ -14,19 +16,23 @@ import com.rightpath.repository.UsersRepository;
 import com.rightpath.util.OtpGenerator;
 
 @Service
+@lombok.extern.slf4j.Slf4j
 public class OtpService {
     private final OtpRepository otpRepository;
     private final UsersRepository usersRepository;
     private final EmailService emailService;
     private final WhatsAppService whatsAppService;
     private final BCryptPasswordEncoder passwordEncoder;
+    private final AuthProperties props;
 
     public OtpService(
         OtpRepository otpRepository,
         UsersRepository usersRepository,
         EmailService emailService,
-        WhatsAppService whatsAppService
+        WhatsAppService whatsAppService,
+        AuthProperties props
     ) {
+        this.props = props;
         this.otpRepository = otpRepository;
         this.usersRepository = usersRepository;
         this.emailService = emailService;
@@ -43,6 +49,16 @@ public class OtpService {
      * @throws Exception if sending OTP fails
      */
     public void generateAndSendOtp(String email, String mobile) throws Exception {
+        // A code's issue time is its expiry minus its lifetime, so the last request needs no column of its own.
+        Optional<Otp> previous = email != null ? otpRepository.findByEmail(email)
+                : mobile != null ? otpRepository.findByMobile(mobile) : Optional.empty();
+        if (previous.isPresent() && previous.get().getExpirationTime() != null
+                && previous.get().getExpirationTime().minusMinutes(5)
+                        .plusSeconds(props.getOtp().getResendCooldownSeconds()).isAfter(LocalDateTime.now())) {
+            throw new com.rightpath.exceptions.OtpRateLimitException(
+                    "A code was sent a moment ago. Please wait before requesting another.");
+        }
+
         String otp = OtpGenerator.generateOtp();
         LocalDateTime expiry = LocalDateTime.now().plusMinutes(5);
 
@@ -51,16 +67,19 @@ public class OtpService {
         otpEntity.setExpirationTime(expiry);
 
         if (email != null) {
+            // Replaces any earlier code: one live OTP per contact, with a fresh attempt budget.
+            otpRepository.deleteAllByEmail(email);
             otpEntity.setEmail(email);
             otpRepository.save(otpEntity);
             emailService.sendOtpEmail(email, otp);
-            System.out.println("OTP sent via Email to: " + email);
+            log.info("OTP sent via email");
         } else if (mobile != null) {
+            otpRepository.deleteAllByMobile(mobile);
             otpEntity.setMobile(mobile);
             otpRepository.save(otpEntity);
             // Updated to use universal WhatsApp message method
             whatsAppService.sendWhatsAppMessage(mobile, WhatsAppService.MessageType.OTP, otp);
-            System.out.println("OTP sent via WhatsApp to: " + mobile);
+            log.info("OTP sent via WhatsApp");
         } else {
             throw new IllegalArgumentException("Email or mobile must be provided for OTP.");
         }
@@ -85,24 +104,41 @@ public class OtpService {
             }
 
             if (otpOptional.isEmpty()) {
-                System.out.println("OTP not found for given contact.");
+                log.warn("OTP validation failed: no OTP found for contact");
                 return false;
             }
 
             Otp otpEntity = otpOptional.get();
 
             if (otpEntity.getExpirationTime().isBefore(LocalDateTime.now())) {
-                System.out.println("OTP has expired.");
+                log.warn("OTP validation failed: OTP expired");
                 return false;
             }
 
-            boolean isValid = otpEntity.getOtp().equals(inputOtp);
-            System.out.println("OTP validation result: " + isValid);
+            if (otpEntity.getAttempts() >= props.getOtp().getMaxAttempts()) {
+                // Out of guesses: the code is dead, a new one has to be requested.
+                otpRepository.deleteById(otpEntity.getId());
+                log.warn("OTP attempts exhausted; code discarded");
+                return false;
+            }
+
+            boolean isValid = inputOtp != null && java.security.MessageDigest.isEqual(
+                    otpEntity.getOtp().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    inputOtp.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            if (isValid) {
+                otpRepository.markVerified(otpEntity.getId());
+            } else {
+                otpRepository.incrementAttempts(otpEntity.getId());
+                if (otpEntity.getAttempts() + 1 >= props.getOtp().getMaxAttempts()) {
+                    otpRepository.deleteById(otpEntity.getId());
+                    log.warn("OTP attempts exhausted; code discarded");
+                }
+            }
+            log.debug("OTP validation result: {}", isValid);
             return isValid;
 
         } catch (Exception e) {
-            System.err.println("Error during OTP validation: " + e.getMessage());
-            e.printStackTrace();
+            log.error("Error during OTP validation", e);
             return false;
         }
     }
@@ -111,14 +147,14 @@ public class OtpService {
      * Removes expired OTPs from the database every 5 minutes.
      */
     @Scheduled(fixedRate = 300000) // Every 5 minutes
+    @SchedulerLock(name = "removeExpiredOtps", lockAtLeastFor = "PT2M", lockAtMostFor = "PT10M")
     public void removeExpiredOtps() {
         try {
-            System.out.println("Scheduled cleanup: removing expired OTPs...");
+            log.debug("Scheduled cleanup: removing expired OTPs");
             int deletedCount = otpRepository.deleteAllByExpirationTimeBefore(LocalDateTime.now());
-            System.out.println("Expired OTPs removed: " + deletedCount);
+            log.info("Expired OTPs removed: {}", deletedCount);
         } catch (Exception e) {
-            System.err.println("Error during expired OTP cleanup: " + e.getMessage());
-            e.printStackTrace();
+            log.error("Error during expired OTP cleanup", e);
         }
     }
 
@@ -133,6 +169,16 @@ public class OtpService {
      */
     public boolean validateOtpAndUpdatePassword(String email, String mobile, String newPassword) {
         try {
+            // The code must have been entered correctly first. This used to change the
+            // password for anyone who knew an email address, without checking an OTP at all.
+            Optional<Otp> verifiedOtp = email != null ? otpRepository.findByEmail(email)
+                    : mobile != null ? otpRepository.findByMobile(mobile) : Optional.empty();
+            if (verifiedOtp.isEmpty() || !verifiedOtp.get().isVerified()
+                    || verifiedOtp.get().getExpirationTime().isBefore(LocalDateTime.now())) {
+                log.warn("Password update refused: no verified, unexpired OTP");
+                return false;
+            }
+
             Optional<Users> userOptional;
 
             if (email != null) {
@@ -142,28 +188,29 @@ public class OtpService {
             }
 
             if (userOptional.isEmpty()) {
-                System.out.println("User not found for password update.");
+                log.warn("User not found for password update");
                 return false;
             }
 
             Users user = userOptional.get();
             user.setPassword(passwordEncoder.encode(newPassword));
             usersRepository.save(user);
+            // Single use.
+            otpRepository.deleteById(verifiedOtp.get().getId());
 
             if (email != null) {
                 emailService.updatedPasswordConfirmation(email, "Password Updated", "Your password has been updated.");
-                System.out.println("Password update confirmation sent via email.");
+                log.info("Password update confirmation sent via email");
             } else {
                 // Updated to use universal WhatsApp message method
                 whatsAppService.sendWhatsAppMessage(mobile, WhatsAppService.MessageType.PASSWORD_UPDATE);
-                System.out.println("Password update confirmation sent via WhatsApp.");
+                log.info("Password update confirmation sent via WhatsApp");
             }
 
             return true;
 
         } catch (Exception e) {
-            System.err.println("Error during password update: " + e.getMessage());
-            e.printStackTrace();
+            log.error("Error during password update", e);
             return false;
         }
     }

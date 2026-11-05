@@ -35,6 +35,16 @@ public class Assessment {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+	/**
+	 * Optimistic lock. Two pods updating the same row from copies they both loaded
+	 * used to silently overwrite each other; now the second write fails with a 409
+	 * instead. Defaults to 0 in the column so rows that predate it load cleanly
+	 * when {@code ddl-auto=update} adds it.
+	 */
+	@jakarta.persistence.Version
+	@jakarta.persistence.Column(nullable = false, columnDefinition = "bigint default 0")
+	private long version;
+
     @Enumerated(EnumType.STRING)
     private AssessmentType assessmentType;
     @Column(name = "uploaded_by")

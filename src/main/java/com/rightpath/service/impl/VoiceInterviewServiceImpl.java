@@ -14,15 +14,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionCallbackWithoutResult;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.rightpath.dto.EffectiveInterviewTemplate;
 import com.rightpath.dto.voice.ParsedInterviewReply;
-import com.rightpath.dto.voice.PerformanceSnapshot;
 import com.rightpath.dto.voice.ResumeResponse;
 import com.rightpath.dto.voice.VoiceAnswerRequest;
 import com.rightpath.dto.voice.VoiceEvaluationResult;
@@ -35,6 +33,7 @@ import com.rightpath.enums.CompletionReason;
 import com.rightpath.enums.ConversationRole;
 import com.rightpath.enums.TurnKind;
 import com.rightpath.util.CodingAnswerFormatter;
+import com.rightpath.util.BusinessSchedule;
 import com.rightpath.util.InterviewReplyParser;
 import com.rightpath.util.PromptInjectionGuard;
 import com.rightpath.enums.InterviewResult;
@@ -56,12 +55,8 @@ import com.rightpath.service.VoiceInterviewService;
 @Service
 public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 	
-	@Autowired
-	private InterviewService interviewService;
-
     private static final Logger log = LoggerFactory.getLogger(VoiceInterviewServiceImpl.class);
 
-    private static final String INTERVIEW_COMPLETE_MARKER = "[INTERVIEW_COMPLETE]";
     private static final java.util.regex.Pattern QUESTION_TYPE_TAG_PATTERN =
             java.util.regex.Pattern.compile("\\[(CODING|THEORY|NON-TECH)]\\s*", java.util.regex.Pattern.CASE_INSENSITIVE);
 
@@ -90,6 +85,13 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     private final TransactionTemplate transactionTemplate;
     private final InterviewConductPolicy conductPolicy;
     private final InterviewReplyParser replyParser;
+
+    /** The zone interview slots are written in; see {@link BusinessSchedule}. */
+    @Autowired
+    private BusinessSchedule businessSchedule;
+
+    @Autowired
+    private com.rightpath.repository.JobApplicationForCandidateRepository jobAppRepo;
     private final InterviewTopicCoverage topicCoverage;
     private final PromptInjectionGuard injectionGuard;
     private final InterviewTemplateService templateService;
@@ -117,8 +119,19 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     @Value("${interview.terminate-on-max-warnings:false}")
     private boolean terminateOnMaxWarnings;
 
-    @Value("${interview.max-duration-minutes:60}")
+    /**
+     * The longest an interview may run, in minutes. 0 (the default) means no limit: an interview ends when the
+     * interviewer has covered what it needs to, or when the candidate ends it, never because a clock ran out.
+     */
+    @Value("${interview.max-duration-minutes:0}")
     private int maxDurationMinutes;
+
+    /**
+     * How long an interview left open with nobody in it is kept before it is closed on the candidate's behalf. Only
+     * for interviews that were abandoned (a closed tab, a dead connection); it is far longer than any real interview.
+     */
+    @Value("${interview.abandoned-after-hours:12}")
+    private int abandonedAfterHours;
 
     public VoiceInterviewServiceImpl(
             CandidateInterviewScheduleRepository scheduleRepo,
@@ -181,7 +194,6 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         "Interview schedule not found for " + jobPrefix + " / " + email));
     }
 
-
     /**
      * The greeting that opens every interview.
      *
@@ -221,6 +233,28 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     }
 
     /**
+     * Whether an interview may be started at this moment.
+     *
+     * <p>The window's start and end are wall-clock times the recruiter picked, in the business time zone, and
+     * {@code now} has to be read in that same zone. They were compared with the server's own clock instead, so
+     * on a server running in UTC a slot booked for 11:23 in India stayed "not opened yet" for another five and a
+     * half hours, and a deadline ran the same distance late.</p>
+     */
+    static void requireWithinWindow(CandidateInterviewSchedule schedule, LocalDateTime now) {
+        // An interview assigned before the deadline was mandatory has none, and is open until it is sat.
+        if (schedule.getDeadlineTime() != null && schedule.getDeadlineTime().isBefore(now)) {
+            throw new IllegalStateException(
+                    "The time allowed for this interview has passed. Ask the recruiter to schedule it again.");
+        }
+        // The window opens at the start time the recruiter chose. A minute of grace for clock differences.
+        if (schedule.getAssignedAt() != null && schedule.getAssignedAt().isAfter(now.plusMinutes(1))) {
+            throw new IllegalStateException("This interview has not opened yet. It opens on "
+                    + schedule.getAssignedAt().format(java.time.format.DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm a"))
+                    + ".");
+        }
+    }
+
+    /**
      * Greeting followed by the first question, with any type tag kept in front.
      *
      * <p>The tag has to lead the message: the frontend opens the code editor
@@ -228,6 +262,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * candidate reads rather than a signal the client acts on.</p>
      */
     private String mergeWelcomeWithQuestion(String welcome, String question) {
+        // The server's welcome is the only greeting. If the model greeted too, take that off so it is not said twice.
+        question = com.rightpath.util.GreetingStripper.strip(question);
         java.util.regex.Matcher tag = QUESTION_TYPE_TAG_PATTERN.matcher(question);
         if (tag.find()) {
             String marker = tag.group().trim();
@@ -245,67 +281,6 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         return QUESTION_TYPE_TAG_PATTERN.matcher(text).replaceAll("").trim();
     }
 
-//    @Override
-//    @Transactional
-//    public VoiceStartResponse startVoiceInterview(String jobPrefix, String email) {
-//        CandidateInterviewSchedule schedule = scheduleRepo.findFirstByJobPrefixAndEmailOrderByAssignedAtDesc(jobPrefix, email)
-//                .orElseThrow(() -> new RuntimeException("Interview schedule not found for " + jobPrefix + " / " + email));
-//
-//        // Item 4: If already IN_PROGRESS, return existing state instead of creating new
-//        if (schedule.getAttemptStatus() == AttemptStatus.IN_PROGRESS) {
-//            log.info("Resuming existing voice interview for schedule {} ({})", schedule.getId(), email);
-//            List<VoiceConversationEntry> entries = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId());
-//            String lastQuestion = entries.stream()
-//                    .filter(e -> e.getRole() == ConversationRole.INTERVIEWER)
-//                    .reduce((first, second) -> second)
-//                    .map(VoiceConversationEntry::getContent)
-//                    .orElse("Welcome back. Let's continue the interview.");
-//
-//            String lastQuestionAudio = textToSpeechService.generateTTSBase64(lastQuestion);
-//
-//            return VoiceStartResponse.builder()
-//                    .scheduleId(schedule.getId())
-//                    .firstQuestion(lastQuestion)
-//                    .interviewerName(schedule.getInterviewerName())
-//                    .firstQuestionAudio(lastQuestionAudio)
-//                    .build();
-//        }
-//
-//        schedule.setAttemptStatus(AttemptStatus.IN_PROGRESS);
-//        schedule.setStartedAt(LocalDateTime.now());
-//        schedule.setTotalQuestionsAsked(0);
-//        schedule = scheduleRepo.save(schedule);
-//
-//        // Generate first question using DB system prompt
-//        String firstQuestionPrompt = contextService.buildFirstQuestionPrompt();
-//        List<Map<String, String>> messages = contextService.buildContextMessages(schedule, firstQuestionPrompt);
-//        String firstQuestion = openAiStreamingService.chatCompletion(messages);
-//
-//        // Strip question type tags for TTS and DB (frontend detects tags from raw text)
-//        String firstQuestionClean = stripQuestionTypeTags(firstQuestion);
-//
-//        // Save interviewer's first question (clean, without tags)
-//        VoiceConversationEntry entry = VoiceConversationEntry.builder()
-//                .interviewSchedule(schedule)
-//                .role(ConversationRole.INTERVIEWER)
-//                .content(firstQuestionClean)
-//                .build();
-//        entryRepository.save(entry);
-//        schedule.incrementQuestionsAsked();
-//        scheduleRepo.save(schedule);
-//
-//        // Generate TTS for first question (clean, without tags)
-//        String firstQuestionAudio = textToSpeechService.generateTTSBase64(firstQuestionClean);
-//
-//        log.info("Started voice interview for schedule {} ({})", schedule.getId(), email);
-//
-//        return VoiceStartResponse.builder()
-//                .scheduleId(schedule.getId())
-//                .firstQuestion(firstQuestion)
-//                .interviewerName(schedule.getInterviewerName())
-//                .firstQuestionAudio(firstQuestionAudio)
-//                .build();
-//    }
     
     @Override
     @Transactional
@@ -348,25 +323,17 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     // to restart the browser's countdown from the full
                     // duration, so reloading was a way to buy another hour.
                     .expiresAt(expiryOf(schedule))
+                    .startedAt(schedule.getStartedAt())
                     .build();
         }
 
-        // A new interview needs the date and time it was assigned with, and the window
-        // that gives. An interview booked with none, before it was mandatory, would
-        // otherwise start with no schedule to measure it against, and one whose
-        // deadline has passed would start as though it had not.
-        if (schedule.getDeadlineTime() == null) {
-            throw new IllegalStateException(
-                    "This interview has no date and time set. Ask the recruiter to assign it again.");
-        }
-        if (schedule.getDeadlineTime().isBefore(LocalDateTime.now())) {
-            throw new IllegalStateException(
-                    "The time allowed for this interview has passed. Ask the recruiter to schedule it again.");
-        }
+        // One assigned with no deadline (before it was mandatory) is open until it is sat; the window check below
+        // only applies the end time where there is one.
+        requireWithinWindow(schedule, businessSchedule.now());
 
         // Start a new interview
         schedule.setAttemptStatus(AttemptStatus.IN_PROGRESS);
-        schedule.setStartedAt(LocalDateTime.now());
+        schedule.setStartedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         schedule.setTotalQuestionsAsked(0);
         // Reset alongside the turn count. A re-sit that kept the old counters
         // would open with its probe allowance already spent and its question
@@ -412,8 +379,6 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         String firstQuestionRaw = mergeWelcomeWithQuestion(buildWelcome(schedule), parsedFirst.spokenText());
         String firstQuestionClean = stripQuestionTypeTags(firstQuestionRaw);
 
-
-
         // Save interviewer's first question (clean) to the voice conversation table
         VoiceConversationEntry entry = VoiceConversationEntry.builder()
                 .interviewSchedule(schedule)
@@ -445,6 +410,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 // so the clock on the candidate's screen and the one that
                 // actually ends the interview cannot disagree.
                 .expiresAt(expiryOf(schedule))
+                .startedAt(schedule.getStartedAt())
                 .build();
     }
 
@@ -475,173 +441,6 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 .orElse(ResumeResponse.builder().hasActiveSession(false).build());
     }
 
-//    @Override
-//    public void processVoiceAnswer(Long scheduleId, VoiceAnswerRequest request) {
-//        try {
-//            boolean skipped = request.isSkipped();
-//
-//            // ── Phase 1: Short TX (~50ms) — Validate + Save candidate answer ──
-//            CandidateInterviewSchedule schedule = transactionTemplate.execute(status -> {
-//                CandidateInterviewSchedule s = scheduleRepo.findById(scheduleId)
-//                        .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
-//
-//                if (s.getAttemptStatus() != AttemptStatus.IN_PROGRESS) {
-//                    throw new RuntimeException("Interview is not active");
-//                }
-//
-//                if (skipped) {
-//                    // Save skipped entry — no tone analysis needed
-//                    VoiceConversationEntry candidateEntry = VoiceConversationEntry.builder()
-//                            .interviewSchedule(s)
-//                            .role(ConversationRole.CANDIDATE)
-//                            .content("[NO RESPONSE - SKIPPED]")
-//                            .build();
-//                    entryRepository.save(candidateEntry);
-//                } else {
-//                    // Analyze tone metrics
-//                    double speechDuration = (request.getWordTimestamps() != null && !request.getWordTimestamps().isEmpty())
-//                            ? request.getWordTimestamps().get(request.getWordTimestamps().size() - 1).getEnd()
-//                            : 0;
-//                    ToneAnalysisService.ToneMetrics toneMetrics = toneAnalysisService.analyze(
-//                            request.getTranscript(), request.getWordTimestamps(), speechDuration);
-//
-//                    // Build content — append code block if code was submitted
-//                    String answerContent = request.getTranscript();
-//                    if (request.getCodeContent() != null && !request.getCodeContent().isBlank()) {
-//                        answerContent += "\n\n[CODE (" + (request.getCodeLanguage() != null ? request.getCodeLanguage() : "text") + ")]\n" + request.getCodeContent();
-//                    }
-//
-//                    // Save candidate answer
-//                    VoiceConversationEntry candidateEntry = VoiceConversationEntry.builder()
-//                            .interviewSchedule(s)
-//                            .role(ConversationRole.CANDIDATE)
-//                            .content(answerContent)
-//                            .wordCount(toneMetrics.getWordCount())
-//                            .wordsPerMinute(toneMetrics.getWordsPerMinute())
-//                            .fillerWordCount(toneMetrics.getFillerWordCount())
-//                            .confidenceScore(toneMetrics.getConfidenceScore())
-//                            .speechDurationSeconds(toneMetrics.getSpeechDurationSeconds())
-//                            .codeContent(request.getCodeContent())
-//                            .codeLanguage(request.getCodeLanguage())
-//                            .build();
-//                    entryRepository.save(candidateEntry);
-//                }
-//
-//                return s;
-//            });
-//
-//            // Send filler only for real answers (skips don't need "let me think...")
-//            if (!skipped) {
-//                String filler = FILLERS.get(random.nextInt(FILLERS.size()));
-//                sendFiller(scheduleId, filler);
-//            }
-//
-//            // ── Phase 2: No TX — OpenAI calls (3-30s) ──
-//
-//            // Update running summary (synchronous OpenAI call)
-//            String summary = contextService.updateRunningSummary(schedule);
-//            if (summary != null) {
-//                // Short TX to persist the summary
-//                transactionTemplate.execute(new TransactionCallbackWithoutResult() {
-//                    @Override
-//                    protected void doInTransactionWithoutResult(TransactionStatus status) {
-//                        CandidateInterviewSchedule fresh = scheduleRepo.findById(scheduleId)
-//                                .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
-//                        fresh.setRunningSummary(summary);
-//                        scheduleRepo.save(fresh);
-//                    }
-//                });
-//                // Update local reference for context building
-//                schedule.setRunningSummary(summary);
-//            }
-//
-//            // Compute performance snapshot before building prompt (guidance is injected by contextService)
-//            PerformanceSnapshot performanceSnapshot = performanceAnalyzer.analyze(schedule);
-//
-//            // Build prompt — AI decides what to ask next (or end the interview)
-//            String userMessage = contextService.buildNextQuestionPrompt(schedule, request.getTranscript(), skipped,
-//                    request.getCodeContent(), request.getCodeLanguage());
-//            List<Map<String, String>> messages = contextService.buildContextMessages(schedule, userMessage);
-//
-//            // Stream GPT response
-//            openAiStreamingService.streamChatCompletion(messages,
-//                    // onToken
-//                    token -> {
-//                        Map<String, Object> tokenMsg = new HashMap<>();
-//                        tokenMsg.put("token", token);
-//                        tokenMsg.put("done", false);
-//                        messagingTemplate.convertAndSend(
-//                                "/topic/interview/" + scheduleId + "/ai-token",
-//                                tokenMsg
-//                        );
-//                    },
-//                    // onComplete
-//                    completeText -> {
-//                        try {
-//                            // Check if AI decided to end the interview
-//                            boolean isComplete = completeText.contains(INTERVIEW_COMPLETE_MARKER);
-//                            String cleanedText = completeText.replace(INTERVIEW_COMPLETE_MARKER, "").trim();
-//
-//                            // Send fullText WITH tags to frontend (frontend detects [CODING] etc.)
-//                            Map<String, Object> doneMsg = new HashMap<>();
-//                            doneMsg.put("token", "");
-//                            doneMsg.put("done", true);
-//                            doneMsg.put("fullText", cleanedText);
-//                            messagingTemplate.convertAndSend(
-//                                    "/topic/interview/" + scheduleId + "/ai-token",
-//                                    doneMsg
-//                            );
-//
-//                            // Strip question type tags for DB and TTS
-//                            String textForStorage = stripQuestionTypeTags(cleanedText);
-//
-//                            // ── Phase 3: Short TX (~50ms) — Save interviewer response ──
-//                            transactionTemplate.execute(new TransactionCallbackWithoutResult() {
-//                                @Override
-//                                protected void doInTransactionWithoutResult(TransactionStatus status) {
-//                                    CandidateInterviewSchedule fresh = scheduleRepo.findById(scheduleId)
-//                                            .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
-//
-//                                    VoiceConversationEntry entry = VoiceConversationEntry.builder()
-//                                            .interviewSchedule(fresh)
-//                                            .role(ConversationRole.INTERVIEWER)
-//                                            .content(textForStorage)
-//                                            .build();
-//                                    entryRepository.save(entry);
-//                                    fresh.incrementQuestionsAsked();
-//
-//                                    if (isComplete) {
-//                                        fresh.setAttemptStatus(AttemptStatus.COMPLETED);
-//                                        fresh.setEndedAt(LocalDateTime.now());
-//                                        fresh.setCompletionReason(
-//                                                performanceSnapshot.isEarlyTerminationSuggested()
-//                                                        ? CompletionReason.EARLY_TERMINATION_POOR_PERFORMANCE
-//                                                        : CompletionReason.NATURAL_COMPLETION);
-//                                    }
-//                                    scheduleRepo.save(fresh);
-//                                }
-//                            });
-//
-//                            // Send response-complete and TTS (no TX needed)
-//                            CandidateInterviewSchedule updated = scheduleRepo.findById(scheduleId)
-//                                    .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
-//                            sendResponseComplete(scheduleId, updated, isComplete);
-//                            textToSpeechService.generateAndStreamTTS(scheduleId, textForStorage);
-//
-//                            if (isComplete) {
-//                                evaluationService.triggerEvaluationAsync(scheduleId);
-//                            }
-//                        } catch (Exception e) {
-//                            log.error("Error in onComplete callback for schedule {}: {}", scheduleId, e.getMessage(), e);
-//                            sendResponseCompleteError(scheduleId);
-//                        }
-//                    }
-//            );
-//        } catch (Exception e) {
-//            log.error("Error processing voice answer for schedule {}: {}", scheduleId, e.getMessage(), e);
-//            sendResponseCompleteError(scheduleId);
-//        }
-//    }
 	
     @Override
     public void processVoiceAnswer(Long scheduleId, VoiceAnswerRequest request) {
@@ -720,12 +519,37 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // spoken answer, and any code with its output, exactly as stored.
             // The reply reacts to that answer and asks what comes next, so the
             // interview follows the candidate rather than a fixed list.
+            EffectiveInterviewTemplate template = templateService.resolve(current);
+
+            // Where the closing sequence stands, decided here rather than left to the model. The sequence is a
+            // closing question, the candidate's reply, then a final thank-you. The model used to be trusted to follow
+            // it from the prompt alone, and it would answer the candidate's question and then carry on with another
+            // interview question, or the server would end the interview on the question ceiling in the middle of one.
+            boolean closingAsked = closingQuestionAlreadyAsked(scheduleId);
+            // The candidate may ask up to three things at the close. While they are still asking, and under the
+            // limit, the interviewer answers and invites the next one; the final thank-you comes when they have
+            // none left, or on the third.
+            boolean moreQuestionsWelcome = closingAsked && !skipped
+                    && looksLikeAQuestion(request.getTranscript())
+                    && candidateRepliesToClosing(scheduleId) < MAX_CLOSING_QUESTIONS;
+            if (moreQuestionsWelcome) {
+                closingAsked = false;
+            }
+            int turnsLeft = template.maxQuestions() - current.getTotalQuestionsAsked();
+
             String turnPrompt = contextService.buildNextQuestionPrompt(
                     current,
                     skipped ? "" : request.getTranscript(),
                     skipped,
                     request.getCodeContent(),
                     request.getCodeLanguage());
+            if (moreQuestionsWelcome) {
+                turnPrompt += "\n\n" + CLOSING_ANSWER_DIRECTIVE;
+            } else if (closingAsked) {
+                turnPrompt += "\n\n" + FINAL_REPLY_DIRECTIVE;
+            } else if (turnsLeft == 1) {
+                turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
+            }
             String reply = openAiStreamingService.chatCompletion(
                     contextService.buildContextMessages(current, turnPrompt));
 
@@ -738,12 +562,18 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
             ParsedInterviewReply parsed = replyParser.parse(reply);
 
+            // A coding question has to come with its examples. The prompt asks for two, but the model leaves them
+            // off some problems, and the candidate is then left guessing the input and output they must handle.
+            if (isCodingQuestion(parsed) && !hasExamples(parsed.spokenText())) {
+                parsed = askForExamples(current, parsed, turnPrompt);
+            }
+
             // Closes when the model says it is done, or when the budget is
             // spent. The ceiling is enforced here rather than trusted to the
             // prompt: an interview that never ends is worse than one cut short.
-            EffectiveInterviewTemplate template = templateService.resolve(current);
             boolean ceilingHit = conductPolicy.hasReachedCeiling(template, current.getTotalQuestionsAsked());
-            boolean finished = parsed.closing() || ceilingHit;
+            // The candidate has answered the closing question, so this reply is the last one whatever the model says.
+            boolean finished = !moreQuestionsWelcome && (parsed.closing() || ceilingHit || closingAsked);
 
             // A close is held back while material topics are still unasked and
             // there is budget to ask them. The model decides it has seen enough
@@ -753,7 +583,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // the ceiling is in sight: running out of questions mid-syllabus is
             // a configuration problem, and holding the candidate longer does not
             // fix it.
-            if (parsed.closing() && !ceilingHit) {
+            if (parsed.closing() && !ceilingHit && !closingAsked && !moreQuestionsWelcome) {
                 int remaining = template.maxQuestions() - current.getTotalQuestionsAsked();
                 if (!topicCoverage.mayCloseOnCoverage(current, remaining)) {
                     ParsedInterviewReply redirected = askForOutstandingTopic(current);
@@ -762,6 +592,13 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         finished = false;
                     }
                 }
+            }
+
+            // The interview is about to end, and the candidate's last words from the interviewer must be a goodbye. A
+            // forced end (question ceiling) or a reply that closed while still asking something would otherwise show
+            // the candidate the "interview finished" screen under an unanswered question.
+            if (finished && (!parsed.closing() || parsed.spokenText().contains("?"))) {
+                parsed = askForFarewell(current, parsed);
             }
 
             String spoken = parsed.spokenText();
@@ -789,7 +626,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
                 if (completed) {
                     s.setAttemptStatus(AttemptStatus.COMPLETED);
-                    s.setEndedAt(LocalDateTime.now());
+                    s.setEndedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
                     // The ordinary ending, and the only one that was never
                     // recorded. A candidate ending it early, a proctoring
                     // violation and a timeout all stamped a reason; an
@@ -797,6 +634,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     // commonest outcome of all reached the reviewer's screen
                     // as "how this interview ended was not recorded".
                     s.setCompletionReason(CompletionReason.NATURAL_COMPLETION);
+                    advanceApplicationAfterInterview(s);
                 } else {
                     // Every turn spends from the ceiling, probes included —
                     // otherwise an interview could be stretched indefinitely by
@@ -810,7 +648,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 return null;
             });
 
-            sendResponseComplete(scheduleId, spoken, finished);
+            sendResponseComplete(scheduleId, spoken, finished, parsed.closing() ? "ai_closed" : "question_limit");
 
             if (!isCodeExplanation(spoken)) {
                 textToSpeechService.generateAndStreamTTS(scheduleId, stripQuestionTypeTags(spoken));
@@ -851,7 +689,9 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * interview. The limit is still the ceiling: nothing can have gone on past it.</p>
      */
     private LocalDateTime endOfActivity(CandidateInterviewSchedule schedule) {
-        LocalDateTime limit = expiryOf(schedule);
+        LocalDateTime configuredLimit = expiryOf(schedule);
+        // With no time limit, the end is the last activity, or now if nothing was said.
+        LocalDateTime limit = configuredLimit != null ? configuredLimit : LocalDateTime.now(java.time.ZoneOffset.UTC);
         try {
             List<VoiceConversationEntry> entries =
                     entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId());
@@ -869,8 +709,12 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     }
 
     private LocalDateTime expiryOf(CandidateInterviewSchedule schedule) {
+        // No limit configured: there is no moment the interview runs out.
+        if (maxDurationMinutes <= 0) {
+            return null;
+        }
         LocalDateTime startedAt = schedule.getStartedAt();
-        return startedAt == null ? LocalDateTime.now() : startedAt.plusMinutes(maxDurationMinutes);
+        return startedAt == null ? LocalDateTime.now(java.time.ZoneOffset.UTC) : startedAt.plusMinutes(maxDurationMinutes);
     }
 
     /**
@@ -1028,6 +872,175 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * little early is a far better outcome than one stuck in a loop refusing to
      * end.</p>
      */
+    private static final String CLOSING_QUESTION_DIRECTIVE =
+            "This is the last turn before the interview closes. Do NOT ask another interview question. Briefly "
+                    + "acknowledge the answer, then ask only the closing question: whether the candidate has any "
+                    + "questions for us about the role or the process. Do not end the interview in this reply and "
+                    + "do not include " + "[INTERVIEW_COMPLETE].";
+
+    /** How many questions the candidate may put to us once the closing question has been asked. */
+    private static final int MAX_CLOSING_QUESTIONS = 3;
+
+    private static final String CLOSING_ANSWER_DIRECTIVE =
+            "The candidate has asked a question in reply to your closing question. Answer it in a sentence or two "
+                    + "in general terms (no salary, offers or how the interview went). Then ask whether they have any "
+                    + "other questions for us. Do NOT ask an interview question, do NOT start a new topic, do not "
+                    + "end the interview in this reply and do not include [INTERVIEW_COMPLETE].";
+
+    private static final String FINAL_REPLY_DIRECTIVE =
+            "The candidate has replied to your closing question, so this is your FINAL reply. If they asked "
+                    + "something, answer it in a sentence or two in general terms (no salary, offers or how the "
+                    + "interview went). Then thank them, say the team will be in touch and wish them well. Do NOT "
+                    + "ask any question and do NOT start a new topic, including teamwork or behavioural questions. "
+                    + "End with [INTERVIEW_COMPLETE].";
+
+    private static final String FALLBACK_FAREWELL =
+            "Thank you for your time today. The team will be in touch. Take care.";
+
+    /**
+     * Whether the interviewer's last turn was the closing question, so the candidate's answer in hand is to it.
+     * The last interviewer entry is the one the candidate has just answered.
+     */
+    private boolean closingQuestionAlreadyAsked(Long scheduleId) {
+        java.util.List<VoiceConversationEntry> entries =
+                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId);
+        for (int i = entries.size() - 1; i >= 0; i--) {
+            VoiceConversationEntry entry = entries.get(i);
+            if (entry.getRole() != ConversationRole.INTERVIEWER) {
+                continue;
+            }
+            return isClosingQuestion(entry.getContent());
+        }
+        return false;
+    }
+
+    /** The closing question in any of its wordings, including "any other questions for us?" after an answer. */
+    private static boolean isClosingQuestion(String content) {
+        String text = content == null ? "" : content.toLowerCase();
+        return text.contains("any questions for us") || text.contains("any questions about the role")
+                || text.contains("any other questions") || text.contains("any more questions")
+                // Other wordings the model reaches for. Left out, a closing question the matcher did not recognise
+                // read as "not asked", so the next reply was treated as an ordinary answer and the interview was
+                // closed after a single feedback question instead of letting the candidate ask their questions.
+                || text.contains("questions for me") || text.contains("any questions on the role")
+                || text.contains("anything you would like to ask") || text.contains("anything you'd like to ask")
+                || text.contains("anything else you would like to know") || text.contains("anything else you'd like to know")
+                || text.contains("any feedback or questions") || text.contains("any questions or feedback")
+                || text.contains("any questions you would like to ask") || text.contains("any questions you'd like to ask");
+    }
+
+    /** How many times the candidate has replied since the closing question was first asked, the current reply included. */
+    private int candidateRepliesToClosing(Long scheduleId) {
+        java.util.List<VoiceConversationEntry> entries =
+                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId);
+        int firstClosing = -1;
+        for (int i = 0; i < entries.size(); i++) {
+            if (entries.get(i).getRole() == ConversationRole.INTERVIEWER && isClosingQuestion(entries.get(i).getContent())) {
+                firstClosing = i;
+                break;
+            }
+        }
+        if (firstClosing < 0) {
+            return 0;
+        }
+        int replies = 0;
+        for (int i = firstClosing + 1; i < entries.size(); i++) {
+            if (entries.get(i).getRole() == ConversationRole.CANDIDATE) {
+                replies++;
+            }
+        }
+        return replies;
+    }
+
+    /**
+     * Whether what the candidate said is a question, as opposed to "no, that's all". Judged on a question mark or an
+     * opening question word, because the transcript is plain text with no other cue.
+     */
+    private static boolean looksLikeAQuestion(String transcript) {
+        if (transcript == null) {
+            return false;
+        }
+        String text = transcript.trim().toLowerCase();
+        if (text.isEmpty()) {
+            return false;
+        }
+        if (text.contains("?")) {
+            return true;
+        }
+        return text.matches("^(what|when|where|which|who|why|how|can|could|will|would|is|are|do|does|did|may)\\b.*");
+    }
+
+    private static final java.util.regex.Pattern CODING_OPENING =
+            java.util.regex.Pattern.compile("^\\s*\\[\\s*CODING\\s*\\]", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** Whether the reply asks the candidate to write code (it opens with the coding tag). */
+    private static boolean isCodingQuestion(ParsedInterviewReply reply) {
+        return reply != null && !reply.closing() && reply.spokenText() != null
+                && CODING_OPENING.matcher(reply.spokenText()).find();
+    }
+
+    /** Whether a coding question shows at least one example, or states an input and an output. */
+    static boolean hasExamples(String text) {
+        String lower = text == null ? "" : text.toLowerCase();
+        return lower.contains("example") || lower.contains("sample")
+                || (lower.contains("input") && lower.contains("output"));
+    }
+
+    /**
+     * Asks once for the same coding question again, with two examples. If the second try is no better the original
+     * stands: a coding question without examples is better than a stalled interview.
+     */
+    private ParsedInterviewReply askForExamples(CandidateInterviewSchedule schedule, ParsedInterviewReply original,
+            String turnPrompt) {
+        try {
+            String reply = openAiStreamingService.chatCompletion(contextService.buildContextMessages(schedule,
+                    turnPrompt + "\n\n" + CODING_EXAMPLES_DIRECTIVE));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply retry = replyParser.parse(reply);
+                if (isCodingQuestion(retry) && hasExamples(retry.spokenText())) {
+                    Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
+                    String topic = retry.topic() != null ? retry.topic() : original.topic();
+                    return new ParsedInterviewReply(retry.spokenText(), score, retry.turnKind(), topic, false);
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not get examples for the coding question of interview {}", schedule.getId(), e);
+        }
+        return original;
+    }
+
+    private static final String CODING_EXAMPLES_DIRECTIVE =
+            "Your reply asked a coding question without examples. Send the SAME coding question again, starting "
+                    + "with [CODING], and after the problem statement add exactly two examples, each written as "
+                    + "\"Example 1: Input: ... Output: ...\" and \"Example 2: Input: ... Output: ...\". Do not change "
+                    + "the problem, do not add a solution and do not ask anything else.";
+
+    /**
+     * A goodbye to end on, when the reply in hand is not one. Asks the model once; if that is no better, a fixed
+     * thank-you is used, because an interview that ends must end on a thank-you and not on a question.
+     * The original reply's score and topic are kept so the answer is still rated.
+     */
+    private ParsedInterviewReply askForFarewell(CandidateInterviewSchedule schedule, ParsedInterviewReply original) {
+        String text = FALLBACK_FAREWELL;
+        Integer score = original.answerScore();
+        try {
+            String reply = openAiStreamingService.chatCompletion(
+                    contextService.buildContextMessages(schedule, FINAL_REPLY_DIRECTIVE));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply parsed = replyParser.parse(reply);
+                if (parsed.closing() && !parsed.spokenText().isBlank() && !parsed.spokenText().contains("?")) {
+                    text = parsed.spokenText();
+                    if (score == null) {
+                        score = parsed.answerScore();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not get a farewell for interview {}", schedule.getId(), e);
+        }
+        return new ParsedInterviewReply(text, score, original.turnKind(), original.topic(), true);
+    }
+
     private ParsedInterviewReply askForOutstandingTopic(CandidateInterviewSchedule schedule) {
         java.util.List<String> outstanding = topicCoverage.outstanding(schedule);
         if (outstanding.isEmpty()) {
@@ -1059,6 +1072,24 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         endVoiceInterview(scheduleId, CompletionReason.CANDIDATE_ENDED);
     }
 
+    /**
+     * Moves the candidate's application on once an interview has finished, so the pipeline stage follows what has
+     * happened instead of staying at "Interview Scheduled" for good. Only an application still at that stage moves:
+     * a later round, or a candidate already selected or rejected, keeps the stage they are at.
+     */
+    private void advanceApplicationAfterInterview(CandidateInterviewSchedule schedule) {
+        jobAppRepo.findByJobPost_JobPrefixAndUser_Email(schedule.getJobPrefix(), schedule.getEmail())
+                .ifPresent(application -> {
+                    if (application.getStatus() == com.rightpath.enums.ApplicationStatus.INTERVIEW_SCHEDULED) {
+                        application.setStatus(com.rightpath.enums.ApplicationStatus.INTERVIEW_COMPLETED);
+                        application.setInterview("Completed");
+                        jobAppRepo.save(application);
+                        log.info("Application of {} on {} moved to INTERVIEW_COMPLETED", schedule.getEmail(),
+                                schedule.getJobPrefix());
+                    }
+                });
+    }
+
     @Override
     @Transactional
     public void endVoiceInterview(Long scheduleId, CompletionReason reason) {
@@ -1070,9 +1101,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         }
 
         schedule.setAttemptStatus(AttemptStatus.COMPLETED);
-        schedule.setEndedAt(LocalDateTime.now());
+        schedule.setEndedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
         schedule.setCompletionReason(reason);
         scheduleRepo.save(schedule);
+        advanceApplicationAfterInterview(schedule);
 
         // Fire-and-forget async evaluation generation, once this has committed.
         // Started from inside the transaction it could read the schedule before
@@ -1118,9 +1150,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         if (overThreshold && terminateOnMaxWarnings) {
             schedule.setAttemptStatus(AttemptStatus.COMPLETED);
             schedule.setInterviewResult(InterviewResult.FAILED);
-            schedule.setEndedAt(LocalDateTime.now());
+            schedule.setEndedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
             schedule.setCompletionReason(CompletionReason.PROCTORING_VIOLATION);
             scheduleRepo.save(schedule);
+            advanceApplicationAfterInterview(schedule);
             log.warn("Schedule {} terminated due to excessive warnings", scheduleId);
             return true;
         }
@@ -1153,9 +1186,14 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * Runs every 5 minutes to find and auto-complete stale IN_PROGRESS interviews.
      */
     @Scheduled(fixedRate = 300000)
+    @SchedulerLock(name = "enforceInterviewTimeouts", lockAtLeastFor = "PT2M", lockAtMostFor = "PT10M")
     @Transactional
     public void enforceInterviewTimeouts() {
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(maxDurationMinutes);
+        // With a time limit set, that is the cutoff. With none, only an interview open for the abandonment period is
+        // closed, and that is a clean-up of sessions nobody is in, not a clock on a real interview.
+        LocalDateTime cutoff = maxDurationMinutes > 0
+                ? LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(maxDurationMinutes)
+                : LocalDateTime.now(java.time.ZoneOffset.UTC).minusHours(abandonedAfterHours);
         List<CandidateInterviewSchedule> staleInterviews =
                 scheduleRepo.findByAttemptStatusAndStartedAtBefore(AttemptStatus.IN_PROGRESS, cutoff);
 
@@ -1176,6 +1214,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             schedule.setEndedAt(endOfActivity(schedule));
             schedule.setCompletionReason(CompletionReason.TIMEOUT);
             scheduleRepo.save(schedule);
+            advanceApplicationAfterInterview(schedule);
 
             // Try to generate evaluation
             try {
@@ -1192,45 +1231,20 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         }
     }
 
-    private void saveInterviewerResponse(CandidateInterviewSchedule schedule, String response) {
-        VoiceConversationEntry entry = VoiceConversationEntry.builder()
-                .interviewSchedule(schedule)
-                .role(ConversationRole.INTERVIEWER)
-                .content(response)
-                .build();
-        entryRepository.save(entry);
-        schedule.incrementQuestionsAsked();
-        scheduleRepo.save(schedule);
-    }
-
     private void sendFiller(Long scheduleId, String filler) {
         Map<String, Object> msg = new HashMap<>();
         msg.put("text", filler);
         msg.put("type", "filler");
         messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/filler", msg);
     }
-//
-//    private void sendResponseComplete(Long scheduleId, CandidateInterviewSchedule schedule, boolean isComplete) {
-//        sendResponseComplete(scheduleId, schedule, isComplete, false);
-//    }
-//
-//    private void sendResponseComplete(Long scheduleId, CandidateInterviewSchedule schedule, boolean isComplete, boolean terminated) {
-//        Map<String, Object> msg = new HashMap<>();
-//        msg.put("questionsAsked", schedule.getTotalQuestionsAsked());
-//        msg.put("isComplete", isComplete);
-//        msg.put("terminated", terminated);
-//        messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/response-complete", msg);
-//    }
-//
-//    private void sendResponseCompleteError(Long scheduleId) {
-//        Map<String, Object> msg = new HashMap<>();
-//        msg.put("questionsAsked", -1);
-//        msg.put("isComplete", false);
-//        msg.put("error", true);
-//        messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/response-complete", msg);
-//    }
     
  // Send response using a String (fetches schedule from DB)
+    private void sendResponseComplete(Long scheduleId, String response, boolean isComplete, String endReason) {
+        CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
+                .orElseThrow(() -> new ResourceNotFoundException("Schedule not found: " + scheduleId));
+        sendResponseComplete(scheduleId, schedule, response, isComplete, endReason);
+    }
+
     private void sendResponseComplete(Long scheduleId, String response, boolean isComplete) {
         CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
                 .orElseThrow(() -> new ResourceNotFoundException("Schedule not found: " + scheduleId));
@@ -1239,7 +1253,14 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
     // Send response using an existing schedule object (avoids extra DB query)
     private void sendResponseComplete(Long scheduleId, CandidateInterviewSchedule schedule, String response, boolean isComplete) {
+        sendResponseComplete(scheduleId, schedule, response, isComplete, null);
+    }
+
+    private void sendResponseComplete(Long scheduleId, CandidateInterviewSchedule schedule, String response, boolean isComplete, String endReason) {
         Map<String, Object> message = new HashMap<>();
+        if (endReason != null && isComplete) {
+            message.put("reason", endReason);
+        }
         message.put("response", response);
         message.put("questionsAsked", schedule.getTotalQuestionsAsked());
         message.put("isComplete", isComplete);

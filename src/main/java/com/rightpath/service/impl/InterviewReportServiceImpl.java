@@ -10,6 +10,9 @@ import com.rightpath.service.InterviewReportService;
 import com.rightpath.service.StorageService;
 import com.rightpath.util.InMemoryMultipartFile;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Service
 public class InterviewReportServiceImpl implements InterviewReportService {
 
@@ -29,7 +32,9 @@ public class InterviewReportServiceImpl implements InterviewReportService {
 
 		MultipartFile file = new InMemoryMultipartFile("transcript", sessionId + ".txt", "text/plain", bytes);
 
-		return storageService.uploadFile(containerName, sessionId + ".txt", file);
+		String url = storageService.uploadFile(containerName, sessionId + ".txt", file);
+		log.info("Interview transcript uploaded for session {}", sessionId);
+		return url;
 	}
 
 }

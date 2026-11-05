@@ -162,10 +162,12 @@ class InterviewConductPolicyTest {
     }
 
     @Test
-    void technicalQuestionsStartRightAfterTheIntroduction() {
+    void theRoundsOwnQuestionsStartRightAfterTheIntroduction() {
         String rules = policy.asSystemMessage(after(1), TEMPLATE);
 
-        assertTrue(rules.contains("Move on to technical questions"));
+        // Not "technical questions": the rule is shared with the behavioural round, which has none.
+        assertTrue(rules.contains("Move on to the questions this round covers"));
+        assertFalse(rules.contains("technical questions"));
         assertFalse(rules.contains("introduce themselves"),
                 "asking for an introduction twice wastes a question from the budget");
     }
@@ -223,5 +225,28 @@ class InterviewConductPolicyTest {
     @Test
     void strippingHandlesAMissingReply() {
         assertEquals("", policy.stripCompletionMarker(null));
+    }
+
+    // ── the last reply ────────────────────────────────────────────────
+
+    @Test
+    void theReplyThatReachesTheCeilingIsToldToCloseWithoutAQuestion() {
+        String rules = policy.asSystemMessage(after(MAX), TEMPLATE);
+
+        assertTrue(rules.contains("FINAL reply"), rules);
+        assertTrue(rules.contains("Do NOT ask a question"), rules);
+        assertTrue(rules.contains(InterviewConductPolicy.COMPLETION_MARKER), rules);
+    }
+
+    @Test
+    void anEarlierReplyIsNotToldItIsTheLast() {
+        assertFalse(policy.asSystemMessage(after(MAX - 1), TEMPLATE).contains("FINAL reply"));
+    }
+
+    @Test
+    void theModelIsToldNotToLetACandidateNarrowTheInterview() {
+        String rules = policy.asSystemMessage(after(3), TEMPLATE);
+
+        assertTrue(rules.contains("questioned only on certain topics"), rules);
     }
 }

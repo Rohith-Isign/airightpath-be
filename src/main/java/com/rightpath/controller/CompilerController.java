@@ -16,7 +16,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rightpath.dto.CodeErrorInfo;
 import com.rightpath.dto.CodeSubmissionRequestDTO;
 import com.rightpath.dto.CodeSubmissionResponseDTO;
@@ -24,7 +23,6 @@ import com.rightpath.dto.TestCaseDTO;
 import com.rightpath.entity.CodeSubmission;
 import com.rightpath.entity.TestResultEntity;
 import com.rightpath.enums.ExecutionStatus;
-import com.rightpath.rbac.PermissionName;
 import com.rightpath.repository.CodeSubmissionRepository;
 import com.rightpath.service.impl.CompilerServiceDiffL;
 
@@ -56,8 +54,6 @@ public class CompilerController {
 
 	@Autowired
 	private CodeSubmissionRepository codeSubmissionRepository;
-
-	private final ObjectMapper objectMapper = new ObjectMapper();
 
 	/**
 	 * Executes submitted code with optional test cases or custom input.
@@ -99,6 +95,8 @@ public class CompilerController {
 	@PostMapping("/saveUnattemptedSubmissions")
 	@PreAuthorize("hasAuthority('COMPILER_RUN')")
 	public ResponseEntity<?> saveUnattemptedSubmissions(@RequestBody List<CodeSubmissionRequestDTO> unattemptedDtos) {
+		log.info("Saving up to {} unattempted submissions", unattemptedDtos.size());
+		int saved = 0;
 		for (CodeSubmissionRequestDTO dto : unattemptedDtos) {
 			boolean exists = codeSubmissionRepository.findTopByUserEmailAndJobPrefixAndQuestionIdOrderByIdDesc(
 					dto.getUserEmail(), dto.getJobPrefix(), dto.getQuestionId()).isPresent();
@@ -123,7 +121,9 @@ public class CompilerController {
 			entity.setTestResults(List.of());
 
 			codeSubmissionRepository.save(entity);
+			saved++;
 		}
+		log.info("Saved {} unattempted submissions", saved);
 
 		return ResponseEntity.ok("Unattempted submissions saved successfully (existing skipped).");
 	}
@@ -148,23 +148,6 @@ public class CompilerController {
 
 		return ResponseEntity.ok(response);
 	}
-
-	/**
-	 * Retrieves all submissions for a user.
-	 * 
-	 * @param userEmail User's email address
-	 * @return List of all user submissions
-	 */
-//    @GetMapping("/results/{userEmail}")
-//    public ResponseEntity<List<CodeSubmissionResponseDTO>> getResultsByUserEmail(@PathVariable String userEmail) {
-//        log.info("Fetching all submissions for user: {}", userEmail);
-//        List<CodeSubmission> submissions = compilerService.getSubmissionsByUserEmail(userEmail);
-//        
-//        List<CodeSubmissionResponseDTO> response = mapSubmissionsToDTOs(submissions);
-//        log.debug("Found {} total submissions", response.size());
-//        
-//        return ResponseEntity.ok(response);
-//    }
 
 	@GetMapping("/results")
 	@PreAuthorize("hasAuthority('COMPILER_RESULTS_READ')")

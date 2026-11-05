@@ -3,6 +3,7 @@ package com.rightpath.controller;
 import java.util.Map;
 import java.util.Set;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -16,6 +17,8 @@ import com.rightpath.entity.InterviewMobilePairing;
 import com.rightpath.service.InterviewService;
 import com.rightpath.service.MobilePairingService;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * The paired phone sending its own recording, filed against the interview its
  * pairing token was registered for.
@@ -26,13 +29,18 @@ import com.rightpath.service.MobilePairingService;
  * from there, so the recording exists whether or not the live picture ever
  * reached the interview screen.</p>
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/mobile")
 public class MobileRecordingController {
 
 	/** What the phone may put on the interview's record. Anything else is refused. */
 	private static final Set<String> PHONE_EVENTS = Set.of("mobile_recording_started", "mobile_recording_not_started",
-			"mobile_recording_issue");
+			"mobile_recording_issue", "mobile_exited", "mobile_reconnected");
+
+	/** Largest piece accepted through this server; bigger ones must go straight to storage. */
+	@Value("${recording.legacy-part-max-bytes:33554432}")
+	private long legacyPartMaxBytes;
 
 	private final MobilePairingService pairingService;
 	private final InterviewService interviewService;
@@ -45,6 +53,8 @@ public class MobileRecordingController {
 	/** Whether this phone may still join: open, closed (the interview began without one) or unknown. */
 	@org.springframework.web.bind.annotation.GetMapping("/pairing-status")
 	public ResponseEntity<Map<String, String>> pairingStatus(@RequestParam String token) {
+		// The phone asks this every few seconds while its page is open, so it doubles as the sign that it is there.
+		pairingService.touchSeen(token);
 		return ResponseEntity.ok(Map.of("state", pairingService.state(token)));
 	}
 
@@ -52,12 +62,30 @@ public class MobileRecordingController {
 	public ResponseEntity<Map<String, String>> begin(@RequestParam String token,
 			@RequestParam(required = false) String type) {
 		InterviewMobilePairing pairing = pairingService.resolve(token);
+		log.info("Mobile recording upload started for interview {}", pairing.getInterviewScheduleId());
 		return ResponseEntity.ok(interviewService.beginRecordingUpload(pairing.getInterviewScheduleId(), "mobile", type));
 	}
 
+	// The way a phone should send a recording: ask for a URL per piece and PUT the bytes straight to storage.
+	// The size it declares is signed into the URL and counted against the pairing's upload allowance here,
+	// since the bytes themselves no longer pass through this server.
+	@PostMapping("/recording-upload/part-url")
+	public ResponseEntity<Map<String, Object>> partUrl(@RequestParam String token, @RequestParam String uploadId,
+			@RequestParam String blobName, @RequestParam int part, @RequestParam long size) {
+		InterviewMobilePairing pairing = pairingService.resolve(token);
+		String url = interviewService.presignRecordingPart(pairing.getInterviewScheduleId(), blobName, uploadId, part,
+				size);
+		pairingService.accept(pairing, size);
+		return ResponseEntity.ok(Map.of("url", url, "method", "PUT"));
+	}
+
+	// Kept for phones that predate part-url. Bounded: a piece larger than recording.legacy-part-max-bytes is
+	// refused before any of it is read.
 	@PostMapping(value = "/recording-upload/part", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
 	public ResponseEntity<Void> part(@RequestParam String token, @RequestParam String uploadId,
-			@RequestParam String blobName, @RequestParam int part, @RequestBody byte[] data) {
+			@RequestParam String blobName, @RequestParam int part, jakarta.servlet.http.HttpServletRequest request)
+			throws java.io.IOException {
+		byte[] data = com.rightpath.util.BoundedBody.read(request, legacyPartMaxBytes);
 		InterviewMobilePairing pairing = pairingService.resolve(token);
 		pairingService.accept(pairing, data.length);
 		interviewService.uploadRecordingPart(pairing.getInterviewScheduleId(), blobName, uploadId, part, data);
@@ -67,6 +95,7 @@ public class MobileRecordingController {
 	@PostMapping("/recording-upload/complete")
 	public String complete(@RequestParam String token, @RequestParam String uploadId, @RequestParam String blobName) {
 		InterviewMobilePairing pairing = pairingService.resolve(token);
+		log.info("Mobile recording upload completing for interview {}", pairing.getInterviewScheduleId());
 		return interviewService.completeRecordingUpload(pairing.getInterviewScheduleId(), "mobile", blobName, uploadId);
 	}
 
@@ -76,10 +105,18 @@ public class MobileRecordingController {
 			@RequestParam(required = false) String details) {
 		InterviewMobilePairing pairing = pairingService.resolve(token);
 		if (!PHONE_EVENTS.contains(type)) {
+			log.warn("Unknown phone event '{}' for interview {}", type, pairing.getInterviewScheduleId());
 			throw new IllegalArgumentException("Unknown phone event: " + type);
 		}
 		String text = details == null ? "" : details.trim();
+		log.info("Phone event {} for interview {}", type, pairing.getInterviewScheduleId());
 		pairingService.recordEvent(pairing, type, text.length() > 500 ? text.substring(0, 500) : text);
+		if ("mobile_exited".equals(type)) {
+			// A deliberate exit: the computer's page should say so now, not after the check-ins have been quiet a minute.
+			pairingService.markLeft(pairing);
+		} else if ("mobile_reconnected".equals(type)) {
+			pairingService.touchSeen(token);
+		}
 		return ResponseEntity.ok().build();
 	}
 
@@ -100,6 +137,11 @@ public class MobileRecordingController {
 		details.append(')');
 		if (!request.isSuccess() && request.getFailureReason() != null && !request.getFailureReason().isBlank()) {
 			details.append(": ").append(request.getFailureReason().trim());
+		}
+		if (request.isSuccess()) {
+			log.info("Mobile recording saved for interview {}", pairing.getInterviewScheduleId());
+		} else {
+			log.warn("Mobile recording not saved for interview {}", pairing.getInterviewScheduleId());
 		}
 		pairingService.recordEvent(pairing, request.isSuccess() ? "recording_uploaded" : "recording_upload_failed",
 				details.toString());

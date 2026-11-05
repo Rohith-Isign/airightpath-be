@@ -210,6 +210,28 @@ public class S3StorageService implements StorageService {
     }
 
     @Override
+    public String presignUploadPart(String prefix, String fileName, String uploadId, int partNumber,
+            long contentLength, java.time.Duration ttl) {
+        validateInputs(prefix, fileName);
+        if (contentLength <= 0) {
+            throw new IllegalArgumentException("A part must not be empty");
+        }
+        String key = prefix + "/" + fileName;
+        var uploadPart = UploadPartRequest.builder()
+                .bucket(bucketName)
+                .key(key)
+                .uploadId(uploadId)
+                .partNumber(partNumber)
+                .contentLength(contentLength)
+                .build();
+        var presignRequest = software.amazon.awssdk.services.s3.presigner.model.UploadPartPresignRequest.builder()
+                .signatureDuration(ttl)
+                .uploadPartRequest(uploadPart)
+                .build();
+        return presigner.presignUploadPart(presignRequest).url().toString();
+    }
+
+    @Override
     public String completeMultipartUpload(String prefix, String fileName, String uploadId) {
         validateInputs(prefix, fileName);
         String key = prefix + "/" + fileName;

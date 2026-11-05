@@ -31,6 +31,7 @@ class InterviewReviewTriageTest {
         triage = new InterviewReviewTriage();
         ReflectionTestUtils.setField(triage, "minConfidence", 0.7);
         ReflectionTestUtils.setField(triage, "minAnswers", 5);
+        ReflectionTestUtils.setField(triage, "minCoverage", 0.6);
     }
 
     private CandidateInterviewSchedule schedule(CompletionReason reason) {
@@ -55,6 +56,49 @@ class InterviewReviewTriageTest {
                         .build())
                 .map(e -> (VoiceConversationEntry) e)
                 .toList();
+    }
+
+    private VoiceEvaluationResult.CategoryScore category(String name, double weight, List<Integer> questions) {
+        VoiceEvaluationResult.CategoryScore category = new VoiceEvaluationResult.CategoryScore();
+        category.setCategory(name);
+        category.setWeight(weight);
+        category.setQuestionNumbers(questions);
+        return category;
+    }
+
+    @Test
+    @DisplayName("an interview that asked about under 60% of the scoring areas is not decidable, and says why")
+    void thinCoverageWithholdsTheVerdict() {
+        VoiceEvaluationResult result = evaluation(0.9, "HIRE");
+        result.setCategoryScores(List.of(
+                category("Technical Skills", 40, List.of(1, 2)),
+                category("Programming", 30, List.of()),
+                category("Problem Solving", 30, List.of())));
+
+        assertThat(triage.coverage(result)).isEqualTo(0.4);
+        assertThat(triage.insufficientEvidence(result, answers(10))).isTrue();
+        assertThat(triage.reviewReasons(schedule(CompletionReason.NATURAL_COMPLETION), result, answers(10)))
+                .anySatisfy(reason -> assertThat(reason).contains("40%").contains("no pass or fail"));
+    }
+
+    @Test
+    @DisplayName("an interview that covered the areas and was answered fully can be decided")
+    void fullCoverageCanBeDecided() {
+        VoiceEvaluationResult result = evaluation(0.9, "HIRE");
+        result.setCategoryScores(List.of(
+                category("Technical Skills", 50, List.of(1, 2)),
+                category("Programming", 50, List.of(3))));
+
+        assertThat(triage.insufficientEvidence(result, answers(10))).isFalse();
+    }
+
+    @Test
+    @DisplayName("too few answers is not decidable even when every area was touched")
+    void tooFewAnswersCannotBeDecided() {
+        VoiceEvaluationResult result = evaluation(0.9, "HIRE");
+        result.setCategoryScores(List.of(category("Technical Skills", 100, List.of(1))));
+
+        assertThat(triage.insufficientEvidence(result, answers(3))).isTrue();
     }
 
     @Test

@@ -29,6 +29,8 @@ import com.rightpath.enums.PromptType;
 import com.rightpath.exceptions.AiServiceException;
 import com.rightpath.exceptions.ResourceNotFoundException;
 import com.rightpath.repository.JobPromptRepository;
+import com.rightpath.entity.JobPrompt;
+import com.rightpath.service.DefaultPrompts;
 import com.rightpath.service.OpenAiService;
 import com.rightpath.util.PromptPlaceholderResolver;
 
@@ -52,13 +54,16 @@ public class OpenAiServiceImpl implements OpenAiService {
 			.build();
 	private final JobPromptRepository jobPromptRepository;
 	private final PromptPlaceholderResolver placeholderResolver;
+	private final DefaultPrompts defaultPrompts;
 
 	public OpenAiServiceImpl(@Qualifier("openAiWebClient") WebClient webClient,
 			JobPromptRepository jobPromptRepository,
-			PromptPlaceholderResolver placeholderResolver) {
+			PromptPlaceholderResolver placeholderResolver,
+			DefaultPrompts defaultPrompts) {
 		this.webClient = webClient;
 		this.jobPromptRepository = jobPromptRepository;
 		this.placeholderResolver = placeholderResolver;
+		this.defaultPrompts = defaultPrompts;
 	}
 
 	@Override
@@ -89,8 +94,11 @@ public class OpenAiServiceImpl implements OpenAiService {
 		if (t instanceof WebClientResponseException ex) {
 			boolean retry = ex.getStatusCode().is5xxServerError() || ex.getStatusCode().value() == 429;
 			if (retry) {
-				log.warn("Retryable error from OpenAI: status={}, message={}", ex.getStatusCode().value(),
-						ex.getMessage());
+				// The body says which 429 this is: "rate_limit_exceeded" clears itself, "insufficient_quota"
+				// means the account is out of credit and retrying only delays the same failure.
+				String body = ex.getResponseBodyAsString();
+				log.warn("Retryable error from OpenAI: status={}, message={}, body={}", ex.getStatusCode().value(),
+						ex.getMessage(), body.length() > 400 ? body.substring(0, 400) : body);
 			}
 			return retry;
 		}
@@ -102,11 +110,13 @@ public class OpenAiServiceImpl implements OpenAiService {
 		log.info("generateQuestions START - jobPrefix={}", jobPrefix);
 		long start = System.currentTimeMillis();
 
+		// The job's own prompt, else the built-in one: a job nobody has written a prompt for still generates.
 		String prompt = jobPromptRepository.findByJobPrefixAndPromptType(jobPrefix, PromptType.APTITUDE)
+				.map(JobPrompt::getPrompt)
+				.or(() -> defaultPrompts.find(PromptType.APTITUDE, null))
 				.orElseThrow(() -> new ResourceNotFoundException(
 						"Aptitude prompt is not configured for job '" + jobPrefix
-								+ "'. Please configure the aptitude prompt for this job before generating questions."))
-				.getPrompt();
+								+ "'. Please configure the aptitude prompt for this job before generating questions."));
 		prompt = placeholderResolver.resolveJobPlaceholders(prompt, jobPrefix);
 		log.info("generateQuestions - prompt loaded, length={}, took={}ms", prompt.length(),
 				System.currentTimeMillis() - start);
@@ -155,10 +165,11 @@ public class OpenAiServiceImpl implements OpenAiService {
 		long start = System.currentTimeMillis();
 
 		String prompt = jobPromptRepository.findByJobPrefixAndPromptType(jobPrefix, PromptType.CODING)
+				.map(JobPrompt::getPrompt)
+				.or(() -> defaultPrompts.find(PromptType.CODING, null))
 				.orElseThrow(() -> new ResourceNotFoundException(
 						"Coding prompt is not configured for job '" + jobPrefix
-								+ "'. Please configure the coding prompt for this job before generating questions."))
-				.getPrompt();
+								+ "'. Please configure the coding prompt for this job before generating questions."));
 		prompt = placeholderResolver.resolveJobPlaceholders(prompt, jobPrefix);
 		log.info("generateCodingQuestions - prompt loaded, length={}, took={}ms", prompt.length(),
 				System.currentTimeMillis() - start);

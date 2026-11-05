@@ -6,11 +6,11 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -18,7 +18,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -43,6 +42,7 @@ import com.rightpath.service.JobApplicationForCandidateService;
 import com.rightpath.service.ResumeService;
 import com.rightpath.service.WhatsAppService;
 import com.rightpath.util.BusinessSchedule;
+import com.rightpath.util.SkillMatcher;
 import com.rightpath.util.StatusTransitionValidator;
 import com.rightpath.util.SynonymLoader;
 
@@ -86,13 +86,13 @@ public class JobApplicationForCandidateServiceImpl implements JobApplicationForC
 
     private final String baseUrl;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.rightpath.util.AcknowledgeLinkSigner acknowledgeLinkSigner;
+
     @Value("${ats.screening.threshold:60.0}")
     private double atsThreshold;
 
 
-
-    @Autowired
-    private JavaMailSender mailSender;
 
     public JobApplicationForCandidateServiceImpl(JobApplicationForCandidateRepository applicationForCandidateRepository,
 			UsersRepository usersRepository, JobPostRepository jobPostRepository,@Value("${app.base.url}")  String baseUrl) {
@@ -103,14 +103,6 @@ public class JobApplicationForCandidateServiceImpl implements JobApplicationForC
 		this.baseUrl=baseUrl;
 	}
 
-    
-    private String getLogoHtml() {
-        return """
-            <div style='text-align: center; margin-bottom: 20px;'>
-                <img src='cid:isigntech-logo' alt='Company Logo' style='height: 60px;'/>
-            </div>
-            """;
-    }
     
     @Override
     public void applyForJob(JobApplicationForCandidateDTO dto) {
@@ -265,7 +257,10 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
         dto.setStatus(app.getStatus() != null ? app.getStatus().name() : null);
         // Score from the last screening run. Read paths surface it without re-scoring;
         // a screening run overwrites it with the freshly computed value.
-        dto.setMatchPercent(app.getMatchPercent());
+        // null, not 0, for a candidate who was never ATS-scored (referral or manual shortlist): 0% reads as a
+        // failed score sitting next to a "Shortlisted" status.
+        boolean scored = "Screening Completed".equalsIgnoreCase(app.getAtsScanStatus()) || app.getMatchPercent() > 0;
+        dto.setMatchPercent(scored ? app.getMatchPercent() : null);
         dto.setConfirmationStatus(app.getConfirmationStatus());
         dto.setAcknowledgedStatus(app.getAcknowledgedStatus());
         dto.setReconfirmationStatus(app.getReconfirmationStatus());
@@ -329,17 +324,43 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
     /**
      * CORE LOGIC: Centralized Filtering Logic
      */
-    private double calculateMatchPercent(JobApplicationForCandidate app, String[] requiredSkills, Map<String, List<String>> synonyms) {
-        String resumeText = resumeService.extractText(app.getResumeData()).toLowerCase();
+    private double calculateMatchPercent(String resumeText, String[] requiredSkills, Map<String, List<String>> synonyms) {
+        return SkillMatcher.matchPercent(resumeText, Arrays.asList(requiredSkills), synonyms);
+    }
 
-        long matchCount = Arrays.stream(requiredSkills)
-                .filter(skill -> {
-                    List<String> variations = synonyms.getOrDefault(skill, List.of(skill));
-                    return variations.stream().anyMatch(resumeText::contains);
-                })
-                .count();
+    /**
+     * The ATS score of a resume against the whole job posting: key skills, job description, experience, role and
+     * education, weighted (see {@link com.rightpath.util.AtsScorer}). Not the key skills alone.
+     */
+    private double calculateMatchPercent(String resumeText, JobPost job, Map<String, List<String>> synonyms) {
+        if (job == null) {
+            return 0.0;
+        }
+        com.rightpath.util.AtsScorer.Result result = com.rightpath.util.AtsScorer.score(resumeText,
+                new com.rightpath.util.AtsScorer.Posting(job.getKeySkills(), job.getJobDescription(),
+                        job.getExperience(), job.getEducation(), job.getJobTitle(), job.getRole()),
+                synonyms);
+        logger.debug("ATS score for job {}: {}% from {}", job.getJobPrefix(), result.percent(), result.components());
+        return result.percent();
+    }
 
-        return (matchCount * 100.0) / requiredSkills.length;
+    /**
+     * The resume's text, or null when there is nothing to score: no file, or one that parses to no text
+     * (a scanned image, a corrupt or password-protected file). Scoring those as 0% would reject a candidate
+     * for a problem with the file, so the caller leaves them alone and says why.
+     */
+    private String readableResumeText(JobApplicationForCandidate app) {
+        byte[] data = app.getResumeData();
+        if (data == null || data.length == 0) {
+            return null;
+        }
+        try {
+            String text = resumeService.extractText(data);
+            return (text == null || text.isBlank()) ? null : text;
+        } catch (RuntimeException e) {
+            logger.warn("Could not read the resume of application {}: {}", app.getId(), e.getMessage());
+            return null;
+        }
     }
     
     
@@ -419,6 +440,40 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
         return response;
     }
 
+    @Override
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public List<ScreeningResultDTO> previewScores(String jobPrefix, List<String> emails) {
+        JobPost jobPost = requireJobPost(jobPrefix);
+        String[] requiredSkills = requiredSkills(jobPost);
+        Map<String, List<String>> synonyms = synonymLoader.getSynonymMap();
+        boolean wholeJob = emails == null || emails.isEmpty();
+        Set<String> wanted = new HashSet<>();
+        if (!wholeJob) {
+            emails.stream().filter(e -> e != null && !e.isBlank()).forEach(e -> wanted.add(normalizeEmail(e)));
+        }
+
+        List<ScreeningResultDTO> results = new ArrayList<>();
+        for (JobApplicationForCandidate app : applicationForCandidateRepository.findByJobPost(jobPost)) {
+            String email = app.getUser() != null ? app.getUser().getEmail() : null;
+            if (!wholeJob && (email == null || !wanted.contains(normalizeEmail(email)))) {
+                continue;
+            }
+            String fullName = (trimToEmpty(app.getFirstName()) + " " + trimToEmpty(app.getLastName())).trim();
+            String resumeText = readableResumeText(app);
+            String status = app.getStatus() != null ? app.getStatus().name() : null;
+            if (resumeText == null) {
+                results.add(new ScreeningResultDTO(email, fullName, null, status, false,
+                        "The resume is missing or could not be read, so there is no score."));
+                continue;
+            }
+            // Never saved: this path has no repository write, and the transaction is read-only.
+            double score = calculateMatchPercent(resumeText, app.getJobPost(), synonyms);
+            results.add(ScreeningResultDTO.skipped(email, fullName, score, status,
+                    "Score check only. Nothing was changed."));
+        }
+        return results;
+    }
+
     /**
      * Screens one application: always scores it, but only persists the shortlist
      * decision when the row is still in the screening phase.
@@ -430,7 +485,8 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
                                          Map<String, List<String>> synonyms) {
         String email = app.getUser() != null ? app.getUser().getEmail() : null;
         String fullName = (trimToEmpty(app.getFirstName()) + " " + trimToEmpty(app.getLastName())).trim();
-        double matchPercent = calculateMatchPercent(app, requiredSkills, synonyms);
+        String resumeText = readableResumeText(app);
+        double matchPercent = resumeText == null ? 0.0 : calculateMatchPercent(resumeText, app.getJobPost(), synonyms);
 
         String blockReason = screeningBlockReason(app);
         if (blockReason != null) {
@@ -438,9 +494,18 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
                     app.getStatus() != null ? app.getStatus().name() : null, blockReason);
         }
 
+        if (resumeText == null) {
+            logger.warn("ATS screening skipped for application {}: no readable resume text", app.getId());
+            return ScreeningResultDTO.skipped(email, fullName, 0.0,
+                    app.getStatus() != null ? app.getStatus().name() : null,
+                    "The resume is missing or could not be read (a scanned image or damaged file), so it was not scored. "
+                            + "Ask the candidate for a text-based resume.");
+        }
+
         // Recompute and persist the shortlist decision on EVERY run so the status
         // matches the current score (e.g. after a resume edit + re-screen).
-        boolean shortlisted = matchPercent >= atsThreshold;
+        // A score of 0 never shortlists, whatever the threshold is configured to.
+        boolean shortlisted = matchPercent > 0 && matchPercent >= atsThreshold;
         // Set directly rather than via StatusTransitionValidator: a re-screen is an
         // in-phase re-evaluation (REJECTED->SHORTLISTED, or same->same), which the
         // forward-only pipeline validator intentionally forbids.
@@ -533,7 +598,12 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
             throw new IllegalStateException("Job " + jobPost.getJobPrefix()
                     + " has no key skills configured, so ATS screening cannot score candidates.");
         }
-        return keySkills.toLowerCase().split(",\\s*");
+        String[] skills = SkillMatcher.parseSkills(keySkills).toArray(new String[0]);
+        if (skills.length == 0) {
+            throw new IllegalStateException("Job " + jobPost.getJobPrefix()
+                    + " has no key skills configured, so ATS screening cannot score candidates.");
+        }
+        return skills;
     }
 
     private static String normalizeEmail(String email) {
@@ -650,7 +720,7 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
 	        JobPost jobPost = jobPostRepository.findById(jobPostId)
 	                .orElseThrow(() -> new ResourceNotFoundException("Job not found"));
 	
-	        String[] requiredSkills = jobPost.getKeySkills().toLowerCase().split(",\\s*");
+	        String[] requiredSkills = requiredSkills(jobPost);
 	
 	        List<JobApplicationForCandidate> applicants = applicationForCandidateRepository.findByJobPost(jobPost);
 	
@@ -658,20 +728,13 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
 	
 	        return applicants.stream()
 	                .filter(app -> {
-	                    String resumeText = resumeService.extractText(app.getResumeData()).toLowerCase();
-	
-	                    long matchCount = Arrays.stream(requiredSkills)
-	                            .filter(skill -> {
-	                                List<String> variations = synonyms.getOrDefault(skill, List.of(skill));
-	                                return variations.stream().anyMatch(resumeText::contains);
-	                            })
-	                            .count();
-	
-	                    double matchPercent = (matchCount * 100.0) / requiredSkills.length;
-	                    System.out.println("Resume Text: " + resumeText);
-	                    System.out.println("Required Skills: " + Arrays.toString(requiredSkills));
-	                    System.out.println("Match %: " + matchPercent);
-	                    return matchPercent >= atsThreshold;
+	                    String resumeText = readableResumeText(app);
+	                    if (resumeText == null) {
+	                        return false;
+	                    }
+	                    double matchPercent = calculateMatchPercent(resumeText, app.getJobPost(), synonyms);
+	                    logger.debug("ATS skill match: requiredSkills={} match={}%", Arrays.toString(requiredSkills), matchPercent);
+	                    return matchPercent > 0 && matchPercent >= atsThreshold;
 	                })
 	                .map(this::convertToDTO)
 	                .collect(Collectors.toList());
@@ -715,8 +778,13 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
 	            application.setExamTime(examSlot.toLocalTime());
 	            applicationForCandidateRepository.save(application);
 
-	            String acknowledgeUrl = baseUrl +"/api/job-applications/acknowledge?jobPrefix="
-	                    + jobPrefix + "&email=" + email;
+	            // Signed and encoded: the link is opened from a mail client with no login, so the signature is what
+	            // proves it came from us, and the encoding keeps a "+" or "&" in an address from breaking it.
+	            String acknowledgeUrl = baseUrl + "/api/job-applications/acknowledge?jobPrefix="
+	                    + java.net.URLEncoder.encode(jobPrefix, java.nio.charset.StandardCharsets.UTF_8)
+	                    + "&email=" + java.net.URLEncoder.encode(email, java.nio.charset.StandardCharsets.UTF_8)
+	                    + (acknowledgeLinkSigner == null ? ""
+	                            : "&token=" + acknowledgeLinkSigner.sign(jobPrefix, email));
 
 	            // Prepare params for universal email
 	            Map<String, Object> emailParams = new HashMap<>();

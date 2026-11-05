@@ -25,6 +25,7 @@ import jakarta.annotation.PostConstruct;
  * }
  */
 @Component
+@lombok.extern.slf4j.Slf4j
 public class SynonymLoader {
 
     private Map<String, List<String>> synonymMap = new HashMap<>();
@@ -39,7 +40,7 @@ public class SynonymLoader {
             ObjectMapper objectMapper = new ObjectMapper();
             InputStream is = getClass().getClassLoader().getResourceAsStream("synonyms.json");
             synonymMap = objectMapper.readValue(is, new TypeReference<Map<String, List<String>>>() {});
-            System.out.println("Synonyms Loaded Successfully: " + synonymMap);
+            log.info("Synonyms loaded successfully: {} terms", synonymMap.size());
         } catch (Exception e) {
             throw new RuntimeException("❌ Failed to load synonyms file", e);
         }

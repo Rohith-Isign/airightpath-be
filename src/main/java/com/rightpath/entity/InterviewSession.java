@@ -1,17 +1,4 @@
 package com.rightpath.entity;
-//
-//
-//import lombok.Data;
-//import java.util.*;
-//
-//@Data
-//public class InterviewSession {
-//    private String jobPrefix;
-//    private String email;
-//    private List<Map<String, String>> messages = new ArrayList<>();
-//    private String lastAnswer;          // ✅ ADD THIS
-//    private boolean completed = false;
-//}
 
 import java.util.ArrayList;
 import java.util.List;
@@ -32,7 +19,6 @@ public class InterviewSession {
     private String lastAnswer;
     private boolean completed = false;
 
-    //  NEW FIELDS
     private List<InterviewQuestionInfo> questions;     
     private int currentQuestionIndex = 0;
     private String resumeSummary;

@@ -42,6 +42,12 @@ public class InterviewMobileCapture {
     /** A still taken every so often while the interview runs. */
     public static final String MONITOR_FRAME = "MONITOR_FRAME";
 
+    /** Taken because a second person was in the phone camera's view. */
+    public static final String EXTRA_PERSON = "EXTRA_PERSON";
+
+    /** Taken because the candidate was not in the phone camera's view. */
+    public static final String NO_CANDIDATE = "NO_CANDIDATE";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

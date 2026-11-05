@@ -13,6 +13,9 @@ import com.rightpath.repository.RoomVerificationRepository;
 import com.rightpath.service.OpenAiVisionService;
 import com.rightpath.service.RoomVerificationService;
 
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
 @Service
 public class RoomVerificationServiceImpl implements RoomVerificationService {
 
@@ -40,6 +43,7 @@ public class RoomVerificationServiceImpl implements RoomVerificationService {
                 .build();
 
         repo.save(session);
+        log.info("Room verification session {} created", sessionId);
 
         return sessionId;
     }
@@ -62,16 +66,19 @@ public class RoomVerificationServiceImpl implements RoomVerificationService {
 
                 session.setStatus(VerificationStatus.VERIFIED);
                 session.setVerifiedAt(LocalDateTime.now());
+                log.info("Room verification {} verified", sessionId);
 
             } else {
 
                 session.setStatus(VerificationStatus.FAILED);
                 session.setReason(aiResult);
+                log.warn("Room verification {} failed", sessionId);
             }
 
             repo.save(session);
 
         } catch (Exception e) {
+            log.error("Room verification {} errored", sessionId, e);
 
             session.setStatus(VerificationStatus.FAILED);
             session.setReason("Verification error");

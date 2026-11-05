@@ -55,7 +55,7 @@ public class JobApplicationForCandidateDTO {
 
 	    private String jobPrefix;
 	    
-	    private double matchPercent;
+	    private Double matchPercent;
 	    private String status;
 
 	    // Human-readable label of the CURRENT pipeline stage (derived from status),
