@@ -86,6 +86,13 @@ public interface JobApplicationForCandidateService {
     List<ScreeningResultDTO> previewScores(String jobPrefix, List<String> emails);
 
     /**
+     * Why one application scores what it does: the weighted parts, and the key skills found and missing. Read-only.
+     *
+     * @param applicationId the application's id
+     */
+    com.rightpath.dto.ScoreBreakdownDTO scoreBreakdown(Long applicationId);
+
+    /**
      * Retrieves applicants by job post ID.
      *
      * @param jobPostId ID of the job post.

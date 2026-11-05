@@ -114,6 +114,18 @@ class EmailTemplateRenderingTest {
 		assertTrue(body.contains("Before you begin"), "the exam mail must set expectations: " + body);
 	}
 
+	/** An online test is taken from the assessments page; an interview (L2, L3) from the interviews page. */
+	@Test
+	void eachStartButtonOpensItsOwnPage() {
+		String exam = send(EmailType.EXAM_SCHEDULE, examParams()).body();
+		assertTrue(exam.contains("/candidate/assessments"), "the test link must open assessments: " + exam);
+		assertFalse(exam.contains("/candidate/interviews"), "the test link must not open interviews: " + exam);
+
+		String interview = send(EmailType.INTERVIEW_SCHEDULE, examParams()).body();
+		assertTrue(interview.contains("/candidate/interviews"), "the interview link must open interviews: " + interview);
+		assertFalse(interview.contains("/candidate/assessments"), "the interview link must not open assessments: " + interview);
+	}
+
 	@Test
 	void candidateSuppliedTextCannotBreakOutIntoMarkup() {
 		Map<String, Object> params = fullParams();
