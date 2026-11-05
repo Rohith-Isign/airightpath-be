@@ -223,6 +223,16 @@ public class JobApplicationForCandidateController {
     }
 
     /**
+     * Admin: why one application scores what it does (the weighted parts, key skills found and missing). Changes
+     * nothing.
+     */
+    @GetMapping("/{applicationId}/score-breakdown")
+    @PreAuthorize("hasAuthority('JOB_APPLICATION_READ_ALL')")
+    public ResponseEntity<com.rightpath.dto.ScoreBreakdownDTO> scoreBreakdown(@PathVariable Long applicationId) {
+        return ResponseEntity.ok(applicationForCandidateService.scoreBreakdown(applicationId));
+    }
+
+    /**
      * Admin: Get all applicants for a job
      */
     @GetMapping("/applicants/{jobPostId}")

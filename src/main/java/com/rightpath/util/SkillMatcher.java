@@ -59,6 +59,17 @@ public final class SkillMatcher {
         return matched * 100.0 / skills.size();
     }
 
+    /** The skills the resume covers, in the order the job lists them. */
+    public static List<String> coveredSkills(String resumeText, List<String> skills,
+                                             Map<String, List<String>> synonyms) {
+        if (resumeText == null || resumeText.isBlank() || skills.isEmpty()) {
+            return List.of();
+        }
+        String words = " " + NOT_ALNUM.matcher(resumeText.toLowerCase(Locale.ROOT)).replaceAll(" ").trim() + " ";
+        String squashed = words.replace(" ", "");
+        return skills.stream().filter(skill -> covers(words, squashed, skill, synonyms)).toList();
+    }
+
     private static boolean covers(String words, String squashed, String skill, Map<String, List<String>> synonyms) {
         List<String> variations = new ArrayList<>(synonyms.getOrDefault(skill, List.of()));
         variations.add(skill);
