@@ -169,7 +169,10 @@ public class JobPromptController {
         double totalWeight = request.getCategories().stream()
                 .mapToDouble(EvaluationCategorySaveRequest.CategoryItem::getWeight).sum();
         boolean negative = request.getCategories().stream().anyMatch(c -> c.getWeight() < 0);
-        if (negative || Math.abs(totalWeight - 100.0) > 0.01) {
+        // An empty list for a round is not a list of weights, it is how the console removes the round's own list so it
+        // is scored on the shared one again. It has no weights to total, so the rule below is for a list that exists.
+        boolean clearingRoundOverride = round != null && request.getCategories().isEmpty();
+        if (!clearingRoundOverride && (negative || Math.abs(totalWeight - 100.0) > 0.01)) {
             log.warn("Evaluation categories for job {} rejected: weights total {}", jobPrefix, totalWeight);
             throw new IllegalArgumentException("Category weights must be zero or more and total exactly 100; they total "
                     + totalWeight + ".");
