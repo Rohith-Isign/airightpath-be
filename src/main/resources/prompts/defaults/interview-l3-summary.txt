@@ -25,3 +25,16 @@ failure are the two most often deflected, and an avoided area is not a neutral r
 
 Calibrate to {{experience}}: expect ownership of people or direction from senior
 candidates, and ownership of their own work from junior ones.
+
+How to score this round, in order of importance:
+1. Only score what was tested. A competency that no question reached (for example conflict,
+   failure, ownership, motivation) is "not assessed", not a middling number. The overall score
+   is built from the assessed competencies alone, so a short interview that reached only part
+   of them scores lower overall.
+2. Specific, owned examples are the evidence. A named situation, what the candidate personally
+   decided and did, the outcome and what changed afterwards. General statements about how they
+   usually work are weak evidence.
+3. Weigh a failed hard question above easy ones passed: an honest account of a real failure is
+   strong; a deflected or generic one is a negative.
+4. Say what the candidate said or did, specifically, in each area's feedback, so a recruiter can
+   see exactly why the score is what it is and decide whether to hire.

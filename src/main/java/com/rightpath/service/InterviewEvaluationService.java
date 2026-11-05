@@ -80,6 +80,23 @@ public class InterviewEvaluationService {
         }
     }
 
+    /**
+     * Grades the interview again from its transcript and replaces the stored evaluation.
+     *
+     * <p>For when the first grading is not trusted: an older evaluation made before areas were scored only on what
+     * was asked, or one the reviewer disagrees with. The cached result is dropped and the model is asked afresh. A
+     * reviewer's override of the result is left alone; only the AI's own evaluation, score and recommendation are
+     * replaced.</p>
+     */
+    public VoiceEvaluationResult reEvaluate(Long scheduleId) {
+        CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
+                .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
+        schedule.setEvaluationJson(null);
+        schedule.setInterviewResult(InterviewResult.PENDING);
+        scheduleRepo.save(schedule);
+        return evaluateInterview(scheduleId);
+    }
+
     public VoiceEvaluationResult evaluateInterview(Long scheduleId) {
         CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
                 .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
@@ -176,6 +193,17 @@ public class InterviewEvaluationService {
         VoiceEvaluationResult.SpeechAnalysis speechAnalysis = calculateSpeechAnalysis(entries);
         result.setSpeechAnalysis(speechAnalysis);
 
+        // Enough was asked and answered, across the scoring areas, to decide on. If not, the score and notes stand
+        // for what was assessed, but no recommendation and no pass or fail is given: a verdict resting on two
+        // questions is not one a hiring decision can use.
+        boolean decidable = !reviewTriage.insufficientEvidence(result, entries);
+        result.setEvidenceLevel(!decidable ? "INSUFFICIENT"
+                : (reviewTriage.coverage(result) < 0.999 ? "PARTIAL" : "SUFFICIENT"));
+        if (!decidable) {
+            log.info("Schedule {}: too little asked or answered to call a pass or a fail; left for review", scheduleId);
+            result.setRecommendation(null);
+        }
+
         applyTriage(schedule, result, entries);
 
         // Stored as the enriched result rather than the model's raw reply, so a
@@ -185,12 +213,6 @@ public class InterviewEvaluationService {
 
         // B4: Set interviewResult based on recommendation
         String recommendation = result.getRecommendation();
-        // Enough was asked and answered, across the scoring areas, to decide on. If not, the score and notes stand
-        // but pass or fail is left for a person, rather than the verdict resting on the part that was covered.
-        boolean decidable = !reviewTriage.insufficientEvidence(result, entries);
-        if (!decidable) {
-            log.info("Schedule {}: too little asked or answered to call a pass or a fail; left for review", scheduleId);
-        }
         if (recommendation != null && decidable) {
             if (PASS_RECOMMENDATIONS.contains(recommendation)) {
                 schedule.setInterviewResult(InterviewResult.PASSED);
@@ -205,6 +227,50 @@ public class InterviewEvaluationService {
                 scheduleId, result.getOverallScore(), schedule.getInterviewResult());
 
         return result;
+    }
+
+    /**
+     * How the grader must weigh evidence, by round. The two rounds are different interviews and cannot be marked by
+     * the same rules: a technical round is won on correct, deep answers and working code; a behavioural round on
+     * specific, owned examples. Both share the rule that an area nobody tested is not assessed.
+     */
+    static String gradingRules(com.rightpath.enums.InterviewRound round) {
+        String shared = """
+                RULES THAT APPLY TO EVERY INTERVIEW (they override anything above that conflicts):
+                - Grade only what the candidate actually said or wrote in their answers. Do not credit the resume, the
+                  interviewer's questions or the interviewer's praise, and do not credit fluent delivery on its own.
+                - An area is scored only if at least one question really tested it. If no question tested an area, list
+                  no question numbers for it, give it score 0 and say "Not assessed" in its feedback. Never invent a
+                  middle score such as 5 or 6 for an area that was not tested; an untested area adds nothing to the
+                  overall score, so an interview that reached only part of the syllabus scores lower overall.
+                - In each area's feedback, name the specific thing the candidate got right or wrong, so a recruiter can
+                  see exactly why the score is what it is.
+                """;
+        if (round == com.rightpath.enums.InterviewRound.L3_BEHAVIORAL) {
+            return shared + """
+                HOW TO GRADE A BEHAVIOURAL INTERVIEW:
+                - Score on specific, concrete examples: a named situation, what the candidate personally decided and did,
+                  the outcome, and what they learned. A general description of how they usually work is weak evidence.
+                - Ownership counts: "I decided and did" is stronger than "we". Taking responsibility for a failure and
+                  showing what changed is stronger than blaming others.
+                - Staying generic after being asked for an example, or avoiding a whole area (conflict and failure are the
+                  usual ones), is a negative, not a neutral result.
+                - A competency that was never asked about is not assessed. Do not mark technical skill in this round.
+                """;
+        }
+        return shared + """
+                HOW TO GRADE A TECHNICAL INTERVIEW:
+                - Programming and coding areas are scored only from code the candidate wrote ([CODE] and [RUN OUTPUT]):
+                  correctness, edge cases, complexity and quality. Talking about programming, naming libraries or
+                  describing a project is not a coding answer. If the candidate wrote no code, those areas are not
+                  assessed.
+                - Technical and problem-solving areas are scored on correctness and depth: a correct answer that
+                  explains how and why scores high; a correct but shallow answer scores in the middle; a vague, generic
+                  or wrong answer scores low. Reward a candidate who reasons through a problem and catches their own
+                  mistakes.
+                - Many easy questions answered well do not outweigh a hard one failed. Weigh the hardest question asked
+                  in an area most.
+                """;
     }
 
     private String buildEvaluationPrompt(String jobPrefix, com.rightpath.enums.InterviewRound round,
@@ -270,6 +336,7 @@ public class InterviewEvaluationService {
 
                 %s
 
+                %s
                 IMPORTANT: Return ONLY the JSON object, no additional text or markdown.
                 IMPORTANT: Scores must be on a 0-10 scale (not 0-100).
                 IMPORTANT: Score every category on the evidence in the transcript. Use the full range: 9-10 for
@@ -300,8 +367,8 @@ public class InterviewEvaluationService {
 
                 Interview Transcript:
                 %s
-                """, transcriptRules, categorySection, facts, customInstructions, earlyTerminationContext,
-                injectionGuard.fence(transcript));
+                """, transcriptRules, categorySection, facts, gradingRules(round), customInstructions,
+                earlyTerminationContext, injectionGuard.fence(transcript));
     }
 
     /**

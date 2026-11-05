@@ -94,6 +94,9 @@ public class InterviewController {
 	@Autowired
 	private com.rightpath.service.InterviewReviewService interviewReviewService;
 
+	@Autowired
+	private com.rightpath.service.InterviewEvaluationService evaluationService;
+
 	@PostMapping("/assign-interview")
 	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
 	public ResponseEntity<?> assignInterview(@RequestBody AssignInterviewDTO dto) {
@@ -180,6 +183,19 @@ public class InterviewController {
 				request == null ? null : request.getReason());
 		return ResponseEntity.ok(new CandidateInterviewScheduleDTO(
 				removed, interviewReviewService.find(id).orElse(null)));
+	}
+
+	/**
+	 * Grades an interview again and replaces the stored evaluation, score and recommendation. For results the reviewer
+	 * does not trust, including ones graded before areas were scored only on what was asked. A reviewer's override of
+	 * the result is not touched.
+	 */
+	@PostMapping("/results/{id}/re-evaluate")
+	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
+	public ResponseEntity<?> reEvaluate(@PathVariable Long id) {
+		log.info("Re-evaluation of interview {} requested", id);
+		evaluationService.reEvaluate(id);
+		return ResponseEntity.ok(getResultDetail(id).getBody());
 	}
 
 	/** Puts a removed result back. The counterpart to {@link #deleteResult}. */

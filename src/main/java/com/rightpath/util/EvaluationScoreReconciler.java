@@ -39,25 +39,51 @@ public final class EvaluationScoreReconciler {
             return modelOverall;
         }
 
+        // An area no question bore on was not assessed: it gets no score of its own (the grader used to give such areas
+        // 5 or 6 "for lack of evidence", a number for something nobody had seen). It adds nothing to the overall either,
+        // so a candidate who was only asked about part of the syllabus scores lower overall than their marks on that
+        // part, in proportion to the weight of what was never reached. The mean over the assessed areas is kept
+        // separately as assessedScore, so both "how did they do on what was tested" and "how much was shown" can be read.
         double totalWeight = 0;
+        double assessedWeight = 0;
         for (VoiceEvaluationResult.CategoryScore score : scores) {
             double weight = weightOf(score.getCategory(), configured);
-            score.setScore(clamp(score.getScore()));
+            boolean assessed = score.getQuestionNumbers() == null || !score.getQuestionNumbers().isEmpty();
+            score.setAssessed(assessed);
+            score.setScore(assessed ? clamp(score.getScore()) : 0);
             totalWeight += weight;
+            if (assessed) {
+                assessedWeight += weight;
+            }
             // Parked here as the raw configured weight; turned into a share below.
             score.setWeight(weight);
         }
         if (totalWeight <= 0) {
             return modelOverall;
         }
+        result.setCoverage(Math.round(assessedWeight / totalWeight * 1000.0) / 1000.0);
+
+        if (assessedWeight <= 0) {
+            // Nothing was assessed at all: there is no overall score to give.
+            for (VoiceEvaluationResult.CategoryScore score : scores) {
+                score.setWeight(score.getWeight() / totalWeight);
+            }
+            result.setOverallScore(0);
+            result.setAssessedScore(null);
+            return modelOverall;
+        }
 
         double weighted = 0;
         for (VoiceEvaluationResult.CategoryScore score : scores) {
+            // A share of the whole syllabus; an area not assessed contributes nothing.
             double share = score.getWeight() / totalWeight;
             score.setWeight(share);
-            weighted += score.getScore() * share;
+            if (score.isAssessed()) {
+                weighted += score.getScore() * share;
+            }
         }
         result.setOverallScore(Math.round(clamp(weighted) * 10.0) / 10.0);
+        result.setAssessedScore(Math.round(clamp(weighted * totalWeight / assessedWeight) * 10.0) / 10.0);
         return modelOverall;
     }
 
