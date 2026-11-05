@@ -749,7 +749,7 @@ public class EmailServiceImpl implements EmailService {
      * reminder cannot disagree about how one slot reads.
      */
     private String scheduleRow(Object slot) {
-        return fill(PANEL_ROW, "label", esc("Date & Time"), "value", businessSchedule.formatForTemplate(slot));
+        return fill(PANEL_ROW, "label", esc("Exam Date & Time"), "value", businessSchedule.formatForTemplate(slot));
     }
 
     private String steps(String accent, String... items) {

@@ -96,7 +96,7 @@ class SchedulingEmailFormatTest {
 		String confirmation = render(EmailType.ACKNOWLEDGEMENT_CONFIRMATION, baseParams());
 
 		for (String body : new String[] { acknowledgement, reconfirmation, confirmation }) {
-			assertTrue(body.contains("<strong>Date &amp; Time:</strong> " + EXPECTED_DISPLAY),
+			assertTrue(body.contains("<strong>Exam Date &amp; Time:</strong> " + EXPECTED_DISPLAY),
 					"expected identical schedule line, got: " + body);
 		}
 	}
