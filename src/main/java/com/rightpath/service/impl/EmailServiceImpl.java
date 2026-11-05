@@ -117,9 +117,14 @@ public class EmailServiceImpl implements EmailService {
     @Value("${app.mail.candidate-portal-url:https://www.airightpath.com}")
     private String portalUrl = "https://www.airightpath.com";
 
-    /** The candidate's interviews page: where "Start my test" / "Start my interview" go. */
+    /** The candidate's interviews page (L2 technical, L3 behavioural): where "Start my interview" goes. */
     private String interviewsUrl() {
         return portalUrl.replaceAll("/+$", "") + "/candidate/interviews";
+    }
+
+    /** The candidate's assessments page (aptitude, coding): where "Start my test" goes. */
+    private String assessmentsUrl() {
+        return portalUrl.replaceAll("/+$", "") + "/candidate/assessments";
     }
 
     /** On-site test address, shown on every slot mail so all three agree. */
@@ -529,7 +534,7 @@ public class EmailServiceImpl implements EmailService {
                                     row("Test window closes",
                                             businessSchedule.formatForTemplate(params.get("endTime"))),
                                     row("Attempts allowed", "1"))
-                            + button(ACCENT_INFO, interviewsUrl(), "Start my test")
+                            + button(ACCENT_INFO, assessmentsUrl(), "Start my test")
                             + sectionTitle("Before you begin")
                             + bullets(ACCENT_INFO,
                                     "Use a laptop or desktop with an up-to-date Chrome browser.",
