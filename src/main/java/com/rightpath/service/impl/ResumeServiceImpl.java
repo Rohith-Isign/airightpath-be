@@ -102,6 +102,25 @@ public class ResumeServiceImpl implements ResumeService {
 	 * @throws ResourceNotFoundException If no application carries a resume (HTTP 404).
 	 */
 	@Override
+	public ResumeDownload getResumeForDownload(String email, String jobPrefix) {
+		if (jobPrefix != null && !jobPrefix.isBlank()) {
+			// The file sent with that particular application, not whichever application is the newest.
+			JobApplicationForCandidate application = applicationForCandidateRepository
+					.findByJobPost_JobPrefixAndUser_Email(jobPrefix, email).orElse(null);
+			if (application != null && application.getResumeData() != null && application.getResumeData().length > 0) {
+				String fileName = application.getResumeFileName() != null && !application.getResumeFileName().isBlank()
+						? application.getResumeFileName()
+						: "resume";
+				String contentType = application.getContentType() != null && !application.getContentType().isBlank()
+						? application.getContentType()
+						: MediaType.APPLICATION_OCTET_STREAM_VALUE;
+				return new ResumeDownload(application.getResumeData(), fileName, contentType);
+			}
+		}
+		return getResumeForDownload(email);
+	}
+
+	@Override
 	public ResumeDownload getResumeForDownload(String email) {
 		JobApplicationForCandidate application = applicationForCandidateRepository
 				.findResumeBearingApplicationsByEmail(email).stream()

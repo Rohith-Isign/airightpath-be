@@ -88,13 +88,15 @@ public class ResumeController {
      */
     @GetMapping("/view-resume/{email}")
     @PreAuthorize("hasAuthority('RESUME_VIEW')")
-    public ResponseEntity<byte[]> viewResume(@PathVariable String email) {
+    public ResponseEntity<byte[]> viewResume(@PathVariable String email,
+            @RequestParam(value = "jobPrefix", required = false) String jobPrefix) {
         // Serves the resume the candidate submitted with their application
         // (JobApplicationForCandidate.resumeData) — the same source the ATS engine
         // scores. A genuinely missing resume throws ResourceNotFoundException, which
         // the global handler maps to 404 (not the old misleading 400).
         log.info("Resume download requested for {}", email);
-        ResumeDownload resume = resumeService.getResumeForDownload(email);
+        // With a job, the resume sent with that application; without one, the candidate's latest.
+        ResumeDownload resume = resumeService.getResumeForDownload(email, jobPrefix);
 
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(resume.contentType()))
