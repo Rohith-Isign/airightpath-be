@@ -474,6 +474,45 @@ public void updateJobApplicationByJobPrefixAndEmail(JobApplicationForCandidateDT
         return results;
     }
 
+    @Override
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    public com.rightpath.dto.ScoreBreakdownDTO scoreBreakdown(Long applicationId) {
+        JobApplicationForCandidate app = applicationForCandidateRepository.findById(applicationId)
+                .orElseThrow(() -> new ResourceNotFoundException("Application not found with id: " + applicationId));
+        JobPost job = app.getJobPost();
+        Double stored = "Screening Completed".equalsIgnoreCase(app.getAtsScanStatus()) || app.getMatchPercent() > 0
+                ? app.getMatchPercent() : null;
+        String resumeText = readableResumeText(app);
+        if (job == null || resumeText == null) {
+            return new com.rightpath.dto.ScoreBreakdownDTO(null, stored, atsThreshold, List.of(), List.of(), List.of(),
+                    "The resume is missing or could not be read (a scanned image or damaged file), so there is no "
+                            + "breakdown.");
+        }
+        Map<String, List<String>> synonyms = synonymLoader.getSynonymMap();
+        com.rightpath.util.AtsScorer.Result result = com.rightpath.util.AtsScorer.score(resumeText,
+                new com.rightpath.util.AtsScorer.Posting(job.getKeySkills(), job.getJobDescription(),
+                        job.getExperience(), job.getEducation(), job.getJobTitle(), job.getRole()),
+                synonyms);
+
+        double totalWeight = result.components().stream().mapToDouble(com.rightpath.util.AtsScorer.Component::weight).sum();
+        List<com.rightpath.dto.ScoreBreakdownDTO.Part> parts = new ArrayList<>();
+        for (com.rightpath.util.AtsScorer.Component c : result.components()) {
+            double share = totalWeight <= 0 ? 0 : c.weight() * 100.0 / totalWeight;
+            parts.add(new com.rightpath.dto.ScoreBreakdownDTO.Part(c.name(), round1(c.score()), round1(share),
+                    round1(c.score() * share / 100.0), c.note()));
+        }
+
+        List<String> skills = SkillMatcher.parseSkills(job.getKeySkills());
+        List<String> matched = SkillMatcher.coveredSkills(resumeText, skills, synonyms);
+        List<String> missing = skills.stream().filter(s -> !matched.contains(s)).toList();
+        return new com.rightpath.dto.ScoreBreakdownDTO(result.percent(), stored, atsThreshold, parts, matched, missing,
+                null);
+    }
+
+    private static double round1(double value) {
+        return Math.round(value * 10.0) / 10.0;
+    }
+
     /**
      * Screens one application: always scores it, but only persists the shortlist
      * decision when the row is still in the screening phase.
