@@ -347,14 +347,24 @@ public class InterviewEvaluationService {
                 IMPORTANT: Answers carry "[Rated at the time: n/10]" from the interviewer. Treat those as strong
                 evidence: a category's score should sit close to the ratings of the answers that bear on it, and move
                 away from them only for a reason you state in its feedback.
-                IMPORTANT: For a coding answer, judge the [CODE] and [RUN OUTPUT] themselves. Code that is correct and
-                produces the expected output is a strong answer (8-10 for the programming and problem-solving areas it
-                demonstrates) even if the spoken explanation was brief; never score it down for answers to other
-                questions. Score down only for wrong output, errors, or code that was never run.
+                IMPORTANT: For a coding answer, judge the [CODE] itself by reading it and tracing the examples by hand.
+                The interview notepad has no compiler, so code is never run: never score it down for not being run.
+                The answer may be code in any language, pseudocode or step-by-step logic; judge the correctness and
+                completeness of the approach, edge cases and complexity, not syntax. Code or logic that is correct is
+                a strong answer (8-10 for the programming and problem-solving areas it demonstrates) even if the
+                spoken explanation was brief; never score it down for answers to other questions. Score down only for
+                logic that is wrong, misses cases, or does not solve the problem.
                 IMPORTANT: Each interviewer line in the transcript is numbered ("Question 3"). For every category, list in
                 "questionNumbers" the numbers of the interviewer questions that bear on it: the ones its score and
                 feedback are based on. A question may count toward more than one category. Use an empty list for a
                 category that was never asked about, and say so in its feedback. Use only numbers that appear.
+                IMPORTANT: Where a category carries "highestLevel", give the highest level the candidate actually
+                demonstrated in that area (BASIC, INTERMEDIATE, ADVANCED or EXPERT), judged from their answers and
+                not from the level of the questions asked. A level only counts if they answered it well; levels never
+                reached are simply not claimed. Use NONE when the area was asked about but even Basic was not shown,
+                and also for an area never asked about. "mapped" is true when the candidate's resume, projects or
+                introduction showed this area, false when it did not. It records what they claimed, not what they can
+                do: never raise a score for it.
                 IMPORTANT: Each category's "feedback" must be 2-3 plain sentences that cite what the candidate actually
                 said: what they got right, where they fell short, and what they should do to improve.
                 IMPORTANT: "overallScore" should be consistent with the category scores and their weights.
@@ -440,6 +450,16 @@ public class InterviewEvaluationService {
             }
         }
         return result;
+    }
+
+    /** The level a category reports, normalised, or null when absent or not one of the five known values. */
+    private String highestLevelOf(JsonNode scoreNode) {
+        String raw = textOrNull(scoreNode, "highestLevel");
+        if (raw == null) {
+            return null;
+        }
+        String level = raw.trim().toUpperCase();
+        return List.of("NONE", "BASIC", "INTERMEDIATE", "ADVANCED", "EXPERT").contains(level) ? level : null;
     }
 
     /** Keeps a stated confidence inside 0..1 — models do return 85 for "85%". */
@@ -538,6 +558,8 @@ public class InterviewEvaluationService {
                             .weight(scoreNode.path("weight").asDouble())
                             .feedback(textOrNull(scoreNode, "feedback"))
                             .questionNumbers(questionNumbersOf(scoreNode))
+                            .highestLevel(highestLevelOf(scoreNode))
+                            .mapped(scoreNode.path("mapped").isBoolean() ? scoreNode.path("mapped").asBoolean() : null)
                             .build());
                 }
             }

@@ -82,6 +82,19 @@ public class VoiceEvaluationResult {
          * about.
          */
         private List<Integer> questionNumbers;
+
+        /**
+         * The highest level of this area the candidate actually demonstrated: NONE, BASIC, INTERMEDIATE, ADVANCED or
+         * EXPERT. L2 only. Null when the grader did not say (an L3 round, or a result graded before this was asked
+         * for), which the results page shows as nothing rather than as NONE.
+         */
+        private String highestLevel;
+
+        /**
+         * Whether the candidate's resume, projects or introduction showed this area. True means they claimed
+         * exposure; it is context for how it was assessed, not proof of skill. Null when not stated.
+         */
+        private Boolean mapped;
     }
 
     @Data

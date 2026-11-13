@@ -124,13 +124,19 @@ public class EvaluationCategoryFormatter {
     public String buildEvaluationCategorySection(String jobPrefix, InterviewRound round) {
         List<EvaluationCategory> categories = getCategories(jobPrefix, round);
 
+        // Technical round only: how far the candidate got in each area, and whether their resume showed it. A
+        // behavioural round has no levels, so asking for them there would produce invented ones.
+        String levelFields = round == InterviewRound.L2_TECHNICAL
+                ? ", \"highestLevel\": \"<NONE | BASIC | INTERMEDIATE | ADVANCED | EXPERT>\", \"mapped\": <true | false>"
+                : "";
+
         StringBuilder sb = new StringBuilder("\"categoryScores\": [\n");
         for (int i = 0; i < categories.size(); i++) {
             EvaluationCategory cat = categories.get(i);
             double weightDecimal = cat.getWeight() / 100.0;
             sb.append(String.format(
-                    "        {\"category\": \"%s\", \"score\": <0-10>, \"weight\": %.2f, \"feedback\": \"<2-3 sentences on %s: what was right, where it fell short, how to improve>\", \"questionNumbers\": [<numbers of the questions this score is based on>]}",
-                    cat.getCategoryName(), weightDecimal, cat.getCategoryName().toLowerCase()
+                    "        {\"category\": \"%s\", \"score\": <0-10>, \"weight\": %.2f, \"feedback\": \"<2-3 sentences on %s: what was right, where it fell short, how to improve>\", \"questionNumbers\": [<numbers of the questions this score is based on>]%s}",
+                    cat.getCategoryName(), weightDecimal, cat.getCategoryName().toLowerCase(), levelFields
             ));
             if (i < categories.size() - 1) sb.append(",");
             sb.append("\n");

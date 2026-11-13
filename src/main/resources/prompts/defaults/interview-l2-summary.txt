@@ -20,7 +20,8 @@ Discount:
 
 Treat as significant negatives:
 - Confidently stated incorrect fundamentals.
-- Coding answers that were never made to work and were not reasoned about.
+- Coding answers whose logic is wrong, misses obvious cases, or was not reasoned about. Code is read, never run, so
+  do not count "not run" or "does not compile" against pseudocode or logic written in a notepad.
 - Contradicting an earlier answer without acknowledging it.
 
 Calibrate to {{experience}}: do not penalise a mid-level candidate for lacking
