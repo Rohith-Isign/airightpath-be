@@ -15,27 +15,26 @@ public class EvaluationCategoryFormatter {
 
     // Defaults, per round, used when neither the round nor the job has a list.
     //
-    // Split because the two rounds are different interviews. L2's weights are
-    // unchanged from the single list that used to apply to both: Programming
-    // and Logical Reasoning are scored in their own right rather than folded
-    // into Technical Skills, because the transcript now carries the code the
-    // candidate wrote and what it printed, so how they write code is visible
-    // evidence rather than a guess from how they talk about it.
+    // Split because the two rounds are different interviews.
     //
-    // L3 previously inherited that list, which is why a behavioural round came
-    // back with a Programming score for questions it never asked. Its
-    // categories are the ones a behavioural interview can actually evidence.
-    // Either list can be replaced per job from /api/prompts/evaluation-categories.
+    // L2 is the technical round, so it is scored on technical ability only: Technical Skills and Programming carry
+    // 75% of the weight, and the interviewer divides its questions by these weights, so about three in four
+    // questions are technical or coding. Communication, culture fit and delivery are not scored here; they belong
+    // to the behavioural round (L3). Programming is scored from the code or logic the candidate wrote in the
+    // notepad, which is read and never run.
+    //
+    // L3 previously inherited the old combined list, which is why a behavioural round came back with a Programming
+    // score for questions it never asked. Its categories are the ones a behavioural interview can evidence.
+    // Either list can be replaced per job from /api/prompts/evaluation-categories; a job with its own list keeps it.
     private static final List<DefaultCategory> L2_DEFAULTS = List.of(
-            new DefaultCategory("Technical Skills", 22, "Core technical knowledge and expertise"),
-            new DefaultCategory("Programming", 18,
-                    "Correctness, structure and quality of the code written during the interview"),
-            new DefaultCategory("Logical Reasoning", 15,
-                    "Sound reasoning, and whether conclusions follow from what was said"),
-            new DefaultCategory("Communication", 15, "Clarity and effectiveness of communication"),
-            new DefaultCategory("Problem Solving", 12, "Analytical thinking and approach to problems"),
-            new DefaultCategory("Behavioral & Culture Fit", 10, "Values alignment and teamwork"),
-            new DefaultCategory("Articulation & Confidence", 8, "Confidence, poise, and delivery")
+            new DefaultCategory("Technical Skills", 40,
+                    "Depth and correctness of knowledge in the technologies this role needs"),
+            new DefaultCategory("Programming", 35,
+                    "Correctness, edge cases, complexity and structure of the code or logic written in the notepad"),
+            new DefaultCategory("Problem Solving", 15,
+                    "Analytical thinking, debugging and how a problem is approached and broken down"),
+            new DefaultCategory("Logical Reasoning", 10,
+                    "Sound reasoning, and whether conclusions follow from what was said")
     );
 
     private static final List<DefaultCategory> L3_DEFAULTS = List.of(
