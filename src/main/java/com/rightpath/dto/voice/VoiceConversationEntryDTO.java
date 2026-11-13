@@ -35,6 +35,7 @@ import com.rightpath.entity.VoiceConversationEntry;
  * @param codeOutput             what it printed when last run
  * @param answerScore            the interviewer's 0-10 read on a candidate turn
  * @param topic                  the category an interviewer turn was asking about
+ * @param level                  BASIC, INTERMEDIATE, ADVANCED or EXPERT for a technical-round question, else null
  * @param turnKind               NEW_QUESTION, FOLLOW_UP or REPHRASE
  * @param injectionSuspected     set on a candidate turn that tried to instruct the model
  * @param timestamp              when the turn was recorded
@@ -54,6 +55,7 @@ public record VoiceConversationEntryDTO(
         String codeOutput,
         Integer answerScore,
         String topic,
+        String level,
         String turnKind,
         Boolean injectionSuspected,
         LocalDateTime timestamp) {
@@ -81,6 +83,7 @@ public record VoiceConversationEntryDTO(
                 entry.getCodeOutput(),
                 entry.getAnswerScore(),
                 entry.getTopic(),
+                entry.getLevel(),
                 entry.getTurnKind() != null ? entry.getTurnKind().name() : null,
                 entry.getInjectionSuspected(),
                 entry.getTimestamp());

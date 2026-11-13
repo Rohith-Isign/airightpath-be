@@ -19,13 +19,26 @@ import com.rightpath.enums.TurnKind;
  * @param topic        the evaluation category this question belongs to, or null
  *                     when the model did not say. Drives coverage.
  * @param closing      whether the model asked to end the interview here.
+ * @param level        BASIC, INTERMEDIATE, ADVANCED or EXPERT, or null when the model did not say (technical round only).
  */
 public record ParsedInterviewReply(
         String spokenText,
         Integer answerScore,
         TurnKind turnKind,
         String topic,
-        boolean closing) {
+        boolean closing,
+        String level) {
+
+    /** A reply with no level: every caller that predates levels, and any model that does not give one. */
+    public ParsedInterviewReply(String spokenText, Integer answerScore, TurnKind turnKind, String topic,
+            boolean closing) {
+        this(spokenText, answerScore, turnKind, topic, closing, null);
+    }
+
+    /** True when the model said which level this question is at. */
+    public boolean hasLevel() {
+        return level != null && !level.isBlank();
+    }
 
     /** True when the model rated the answer it just heard. */
     public boolean hasScore() {

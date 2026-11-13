@@ -94,6 +94,14 @@ public class VoiceConversationEntry {
     @Column(length = 80)
     private String topic;
 
+    /**
+     * How deep this INTERVIEWER question goes: BASIC, INTERMEDIATE, ADVANCED or EXPERT. Set on the technical
+     * round only, and null on a behavioural question, on a turn the model did not label, and on every CANDIDATE
+     * row and every turn recorded before levels were asked for. The column is added by the schema update, nullable.
+     */
+    @Column(length = 16)
+    private String level;
+
     /** Whether this INTERVIEWER turn opened new ground, pressed, or re-asked. */
     @Enumerated(EnumType.STRING)
     @Column(length = 16)

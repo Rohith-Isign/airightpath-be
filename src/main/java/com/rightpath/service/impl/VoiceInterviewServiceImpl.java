@@ -385,6 +385,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 .role(ConversationRole.INTERVIEWER)
                 .content(firstQuestionClean)
                 .topic(parsedFirst.topic())
+                .level(parsedFirst.level())
                 .turnKind(TurnKind.NEW_QUESTION)
                 .build();
         entryRepository.save(entry);
@@ -621,6 +622,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         .role(ConversationRole.INTERVIEWER)
                         .content(spoken)
                         .topic(turn.hasTopic() ? turn.topic() : null)
+                        .level(turn.level())
                         .turnKind(turn.turnKind())
                         .build());
 
@@ -790,6 +792,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     .role(ConversationRole.INTERVIEWER)
                     .content(parsed.spokenText())
                     .topic(parsed.hasTopic() ? parsed.topic() : null)
+                    .level(parsed.level())
                     .turnKind(parsed.turnKind())
                     .build());
             schedule.incrementQuestionsAsked();
@@ -1000,7 +1003,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 if (isCodingQuestion(retry) && hasExamples(retry.spokenText())) {
                     Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
                     String topic = retry.topic() != null ? retry.topic() : original.topic();
-                    return new ParsedInterviewReply(retry.spokenText(), score, retry.turnKind(), topic, false);
+                    return new ParsedInterviewReply(retry.spokenText(), score, retry.turnKind(), topic, false,
+                            retry.level() != null ? retry.level() : original.level());
                 }
             }
         } catch (Exception e) {
@@ -1038,7 +1042,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         } catch (Exception e) {
             log.warn("Could not get a farewell for interview {}", schedule.getId(), e);
         }
-        return new ParsedInterviewReply(text, score, original.turnKind(), original.topic(), true);
+        return new ParsedInterviewReply(text, score, original.turnKind(), original.topic(), true, original.level());
     }
 
     private ParsedInterviewReply askForOutstandingTopic(CandidateInterviewSchedule schedule) {

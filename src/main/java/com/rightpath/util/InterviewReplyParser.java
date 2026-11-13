@@ -40,6 +40,10 @@ public class InterviewReplyParser {
     private static final Pattern TOPIC = Pattern.compile(
             "\\[\\s*TOPIC\\s*:\\s*([^\\]]{1,60})\\]", Pattern.CASE_INSENSITIVE);
 
+    /** {@code [LEVEL:BASIC]} — how deep this question goes. Technical round only; absent elsewhere. */
+    private static final Pattern LEVEL = Pattern.compile(
+            "\\[\\s*LEVEL\\s*:\\s*(BASIC|INTERMEDIATE|ADVANCED|EXPERT)\\s*\\]", Pattern.CASE_INSENSITIVE);
+
     /** {@code [FOLLOWUP]} — pressing on the question already asked. */
     private static final Pattern FOLLOW_UP = Pattern.compile(
             "\\[\\s*FOLLOW[ _-]?UP\\s*\\]", Pattern.CASE_INSENSITIVE);
@@ -82,6 +86,8 @@ public class InterviewReplyParser {
 
         Integer score = firstInt(SCORE, reply);
         String topic = firstGroup(TOPIC, reply);
+        String level = firstGroup(LEVEL, reply);
+        level = level == null ? null : level.trim().toUpperCase();
 
         // A reply tagged both ways is the model hedging. Rephrase is the stronger
         // signal — it says the question itself did not land — so it wins, and
@@ -98,11 +104,12 @@ public class InterviewReplyParser {
         String spoken = conductPolicy.stripCompletionMarker(reply);
         spoken = SCORE.matcher(spoken).replaceAll("");
         spoken = TOPIC.matcher(spoken).replaceAll("");
+        spoken = LEVEL.matcher(spoken).replaceAll("");
         spoken = FOLLOW_UP.matcher(spoken).replaceAll("");
         spoken = REPHRASE.matcher(spoken).replaceAll("");
         spoken = promoteCodingTag(spoken);
 
-        return new ParsedInterviewReply(spoken, score, kind, topic, closing);
+        return new ParsedInterviewReply(spoken, score, kind, topic, closing, level);
     }
 
     /**

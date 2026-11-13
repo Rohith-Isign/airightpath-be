@@ -165,4 +165,23 @@ class InterviewReplyParserTest {
                 parser.parse("[THEORY] Explain how you would write a class that is thread safe.").spokenText()
                         .startsWith("[CODING]"));
     }
+
+    @Test
+    @DisplayName("reads the level and keeps it out of the speech, with [CODING] still leading")
+    void parsesTheLevelTag() {
+        ParsedInterviewReply reply = parser.parse(
+                "[SCORE:7] [TOPIC:Programming] [LEVEL:intermediate] [CODING] Write the logic for a palindrome check.");
+
+        assertThat(reply.level()).isEqualTo("INTERMEDIATE");
+        assertThat(reply.hasLevel()).isTrue();
+        assertThat(reply.spokenText()).isEqualTo("[CODING] Write the logic for a palindrome check.");
+    }
+
+    @Test
+    @DisplayName("a reply with no level, or an unknown one, has none and the tag text is not left in the speech")
+    void missingOrUnknownLevelIsNull() {
+        assertThat(parser.parse("What is a foreign key?").level()).isNull();
+        ParsedInterviewReply reply = parser.parse("[LEVEL:GURU] What is a foreign key?");
+        assertThat(reply.level()).isNull();
+    }
 }
