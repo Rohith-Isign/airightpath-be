@@ -34,6 +34,7 @@ import com.rightpath.entity.VoiceConversationEntry;
  * @param codeLanguage           the language it was written in
  * @param codeOutput             what it printed when last run
  * @param answerScore            the interviewer's 0-10 read on a candidate turn
+ * @param answerCorrect          whether that score met the pass mark when it was given, or null if not rated
  * @param topic                  the category an interviewer turn was asking about
  * @param level                  BASIC, INTERMEDIATE, ADVANCED or EXPERT for a technical-round question, else null
  * @param turnKind               NEW_QUESTION, FOLLOW_UP or REPHRASE
@@ -54,6 +55,7 @@ public record VoiceConversationEntryDTO(
         String codeLanguage,
         String codeOutput,
         Integer answerScore,
+        Boolean answerCorrect,
         String topic,
         String level,
         String turnKind,
@@ -82,6 +84,7 @@ public record VoiceConversationEntryDTO(
                 entry.getCodeLanguage(),
                 entry.getCodeOutput(),
                 entry.getAnswerScore(),
+                entry.getAnswerCorrect(),
                 entry.getTopic(),
                 entry.getLevel(),
                 entry.getTurnKind() != null ? entry.getTurnKind().name() : null,

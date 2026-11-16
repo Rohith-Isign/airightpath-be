@@ -32,6 +32,7 @@ public class InterviewContextService {
     private final InterviewTopicCoverage topicCoverage;
     private final PromptInjectionGuard injectionGuard;
     private final InterviewTemplateService templateService;
+    private final InterviewLevelProgression levelProgression;
 
     @Value("${interview.context-window-size:4}")
     private int contextWindowSize;
@@ -44,7 +45,8 @@ public class InterviewContextService {
                                    InterviewConductPolicy conductPolicy,
                                    InterviewTopicCoverage topicCoverage,
                                    PromptInjectionGuard injectionGuard,
-                                   InterviewTemplateService templateService) {
+                                   InterviewTemplateService templateService,
+                                   InterviewLevelProgression levelProgression) {
         this.entryRepository = entryRepository;
         this.openAiStreamingService = openAiStreamingService;
         this.jobPromptService = jobPromptService;
@@ -54,6 +56,7 @@ public class InterviewContextService {
         this.topicCoverage = topicCoverage;
         this.injectionGuard = injectionGuard;
         this.templateService = templateService;
+        this.levelProgression = levelProgression;
     }
 
     /**
@@ -85,6 +88,15 @@ public class InterviewContextService {
         String coverageStatus = topicCoverage.buildCoverageStatus(schedule);
         if (coverageStatus != null) {
             messages.add(Map.of("role", "system", "content", coverageStatus));
+        }
+
+        // Which level each skill is at, decided by the server from the ratings so far (technical round only).
+        if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
+            String levels = levelProgression.buildDirective(
+                    entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()));
+            if (levels != null) {
+                messages.add(Map.of("role", "system", "content", levels));
+            }
         }
 
         // Add running summary if exists

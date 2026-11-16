@@ -407,7 +407,10 @@ public class InterviewEvaluationService {
                 IMPORTANT: For a coding answer, judge the [CODE] itself by reading it and tracing the examples by hand.
                 The interview notepad has no compiler, so code is never run: never score it down for not being run.
                 The answer may be code in any language, pseudocode or step-by-step logic; judge the correctness and
-                completeness of the approach, edge cases and complexity, not syntax. Code or logic that is correct is
+                completeness of the approach, edge cases and complexity, not syntax. A framework task (for example a
+                Spring Boot CRUD API) is answered as a rough sketch of the key classes, annotations, signatures and
+                flow: judge whether the right pieces are there and wired correctly, and never mark it down for missing
+                imports, configuration, getters and setters or unfinished method bodies. Code or logic that is correct is
                 a strong answer (8-10 for the programming and problem-solving areas it demonstrates) even if the
                 spoken explanation was brief; never score it down for answers to other questions. Score down only for
                 logic that is wrong, misses cases, or does not solve the problem.

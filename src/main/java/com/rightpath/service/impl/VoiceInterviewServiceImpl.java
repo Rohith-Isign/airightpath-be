@@ -84,6 +84,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     private final SimpMessagingTemplate messagingTemplate;
     private final TransactionTemplate transactionTemplate;
     private final InterviewConductPolicy conductPolicy;
+
+    /** Judges each rated answer correct or not. Field-injected so the existing constructor is unchanged. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.rightpath.service.InterviewLevelProgression levelProgression;
     private final InterviewReplyParser replyParser;
 
     /** The zone interview slots are written in; see {@link BusinessSchedule}. */
@@ -650,7 +654,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 return null;
             });
 
-            sendResponseComplete(scheduleId, spoken, finished, parsed.closing() ? "ai_closed" : "question_limit");
+            sendResponseComplete(scheduleId, spoken, finished, parsed.closing() ? "ai_closed" : "question_limit",
+                    turn.turnKind());
 
             if (!isCodeExplanation(spoken)) {
                 textToSpeechService.generateAndStreamTTS(scheduleId, stripQuestionTypeTags(spoken));
@@ -820,6 +825,9 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     .reduce((first, second) -> second)
                     .ifPresent(last -> {
                         last.setAnswerScore(score);
+                        if (levelProgression != null) {
+                            last.setAnswerCorrect(levelProgression.isCorrect(score));
+                        }
                         entryRepository.save(last);
                     });
         } catch (Exception e) {
@@ -1247,6 +1255,28 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
                 .orElseThrow(() -> new ResourceNotFoundException("Schedule not found: " + scheduleId));
         sendResponseComplete(scheduleId, schedule, response, isComplete, endReason);
+    }
+
+    /**
+     * As above, and says whether the turn is a new question, a follow-up or a rephrase. The browser uses it to put the
+     * candidate's last code back in the notepad when they are asked to fix it, instead of a blank page.
+     */
+    private void sendResponseComplete(Long scheduleId, String response, boolean isComplete, String endReason,
+            com.rightpath.enums.TurnKind turnKind) {
+        CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
+                .orElseThrow(() -> new ResourceNotFoundException("Schedule not found: " + scheduleId));
+        Map<String, Object> message = new HashMap<>();
+        if (endReason != null && isComplete) {
+            message.put("reason", endReason);
+        }
+        message.put("response", response);
+        message.put("questionsAsked", schedule.getTotalQuestionsAsked());
+        message.put("isComplete", isComplete);
+        message.put("terminated", false);
+        if (turnKind != null) {
+            message.put("turnKind", turnKind.name());
+        }
+        messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/response-complete", message);
     }
 
     private void sendResponseComplete(Long scheduleId, String response, boolean isComplete) {

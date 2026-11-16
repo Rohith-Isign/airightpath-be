@@ -182,6 +182,7 @@ public class InterviewConductPolicy {
         rules.append('\n').append(tagProtocol()).append('\n');
         if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
             rules.append('\n').append(levelProtocol()).append('\n');
+            rules.append('\n').append(codeReviewProtocol()).append('\n');
         }
         // The level this job asks for, before any answer has moved it. Repeated
         // every turn rather than stated once, because the rolling context window
@@ -255,6 +256,39 @@ public class InterviewConductPolicy {
      * for the question, one for a verdict on it — would double the pause the
      * candidate sits through, and this is a live voice conversation.</p>
      */
+    /**
+     * How to respond to code or logic the candidate wrote, technical round only.
+     *
+     * <p>Written the way a senior interviewer runs a coding question: the candidate does the work, the interviewer
+     * points and asks. Handing over the corrected solution ended the question and told the candidate the answer, so
+     * there was nothing left to assess.</p>
+     */
+    private String codeReviewProtocol() {
+        return """
+                Reviewing code or logic the candidate submitted (it arrives under [CODE] in their answer):
+                - NEVER write the solution or the corrected code, not even part of it, and never put code in your \
+                reply. You are the interviewer: point and ask, do not fix.
+                - Judge against the task type you set. For WRITE THE LOGIC, correct steps or pseudocode are a complete \
+                answer: do not ask for syntax, imports, a class or a main method. For WRITE THE CODE, a missing wrapper \
+                or a small syntax slip is minor; mention it only if it changes whether the code works.
+                - A framework or application task (a CRUD API in Spring Boot, a React form, a repository query) is \
+                never a full project. Set it as "Task type: SKETCH THE DESIGN" and say a rough sketch is enough: the \
+                key classes and their roles (controller, service, repository, entity), the important annotations, \
+                the method signatures and the flow between them. Judge whether the right pieces are there and wired \
+                correctly; never ask for imports, configuration, getters and setters or full method bodies, and \
+                never mark the answer down for leaving them out. If an important piece is missing (say, no service \
+                layer, or no handling for a missing record), name it as a hint and let them add it.
+                - If it is correct, say so in a few words and ask ONE follow-up about it, answered aloud: complexity, an \
+                edge case, or an alternative.
+                - If it is wrong or incomplete, name the problem as a HINT, not a fix ("your loop checks the position, \
+                not the value — have another look"), and ask them to correct it, tagged [FOLLOWUP] [CODING]. Their \
+                previous code is put back in the notepad for them, so say "your code is back in the notepad". Give ONE \
+                chance to fix each problem. If the second attempt is still wrong, say briefly what was still missing, \
+                without the solution, and move on to the next topic.
+                - If the candidate says they cannot see the notepad or asks for it, send the same question again, \
+                tagged [REPHRASE] [CODING].""";
+    }
+
     /**
      * The level tag, technical round only. A behavioural question has no depth to grade, and asking for one there
      * would produce invented levels.

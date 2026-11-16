@@ -85,6 +85,13 @@ public class VoiceConversationEntry {
     private Integer answerScore;
 
     /**
+     * Whether {@link #answerScore} met the pass mark in force when it was given (see InterviewLevelProgression).
+     * Stored rather than worked out on reading, so a later change to the pass mark does not rewrite how past
+     * answers were judged. Null where the answer was not rated, and on every INTERVIEWER row.
+     */
+    private Boolean answerCorrect;
+
+    /**
      * The evaluation category an INTERVIEWER turn was asking about.
      *
      * <p>What makes coverage checkable: without it "have we asked about
