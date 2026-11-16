@@ -70,13 +70,54 @@ public class InterviewEvaluationService {
         this.objectMapper = new ObjectMapper();
     }
 
+    /** What a reply that could not be read is recorded as. Never stored: it is retried instead. */
+    private static final String UNABLE_TO_EVALUATE = "UNABLE_TO_EVALUATE";
+
+    /** Waits before each retry of a background evaluation: the first try, then after 15 s, then after 45 s. */
+    private static final long[] RETRY_DELAYS_MS = {0, 15_000, 45_000};
+
+    /**
+     * Interviews being graded in the background right now. An interview can be ended by two paths at once (the
+     * interviewer closing it and the browser ending it), and each starts an evaluation; the second is dropped so the
+     * model is not called twice and two results do not race to be saved.
+     */
+    private final Set<Long> inFlight = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Grades a finished interview in the background, retrying a failed attempt.
+     *
+     * <p>It used to try once and log the failure. A timeout or a rate limit from the model then left a completed
+     * interview with no result at all until someone pressed Re-evaluate, which is why results sometimes appeared on
+     * their own and sometimes did not.</p>
+     */
     @Async("transcriptionExecutor")
     public void triggerEvaluationAsync(Long scheduleId) {
+        if (!inFlight.add(scheduleId)) {
+            log.info("Evaluation for schedule {} is already running; not starting another", scheduleId);
+            return;
+        }
         try {
-            evaluateInterview(scheduleId);
-            log.info("Async evaluation completed for schedule {}", scheduleId);
-        } catch (Exception e) {
-            log.error("Async evaluation failed for schedule {}", scheduleId, e);
+            for (int attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
+                try {
+                    if (RETRY_DELAYS_MS[attempt] > 0) {
+                        Thread.sleep(RETRY_DELAYS_MS[attempt]);
+                    }
+                    evaluateInterview(scheduleId);
+                    log.info("Async evaluation completed for schedule {} (attempt {})", scheduleId, attempt + 1);
+                    return;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.warn("Async evaluation for schedule {} interrupted", scheduleId);
+                    return;
+                } catch (Exception e) {
+                    log.warn("Async evaluation attempt {} of {} failed for schedule {}: {}",
+                            attempt + 1, RETRY_DELAYS_MS.length, scheduleId, e.toString());
+                }
+            }
+            log.error("Async evaluation gave up for schedule {} after {} attempts; it will be graded when its "
+                    + "result is next opened, or with Re-evaluate", scheduleId, RETRY_DELAYS_MS.length);
+        } finally {
+            inFlight.remove(scheduleId);
         }
     }
 
@@ -101,10 +142,19 @@ public class InterviewEvaluationService {
         CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
                 .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
 
-        // Return cached evaluation if already generated
-        if (schedule.getEvaluationJson() != null && !schedule.getEvaluationJson().isBlank()) {
+        // Return cached evaluation if already generated — unless what is stored is a failed grading. Those were
+        // saved before failures stopped being stored, and served from cache they showed "not scored yet" for good,
+        // so they are graded again here instead.
+        VoiceEvaluationResult cached = schedule.getEvaluationJson() == null || schedule.getEvaluationJson().isBlank()
+                ? null
+                : parseEvaluation(schedule.getEvaluationJson());
+        if (cached != null && UNABLE_TO_EVALUATE.equals(cached.getRecommendation())) {
+            log.warn("Schedule {} holds a failed evaluation; grading it again", scheduleId);
+            schedule.setEvaluationJson(null);
+            cached = null;
+        }
+        if (cached != null) {
             log.info("Returning cached evaluation for schedule {}", scheduleId);
-            VoiceEvaluationResult cached = parseEvaluation(schedule.getEvaluationJson());
             List<VoiceConversationEntry> cachedEntries = entryRepository
                     .findByInterviewScheduleIdOrderByTimestampAsc(scheduleId);
             cached.setSpeechAnalysis(calculateSpeechAnalysis(cachedEntries));
@@ -176,9 +226,16 @@ public class InterviewEvaluationService {
         );
 
         String evaluationJson = openAiStreamingService.chatCompletion(messages);
+        if (evaluationJson == null || evaluationJson.isBlank()) {
+            throw new IllegalStateException("The model returned no evaluation for schedule " + scheduleId);
+        }
 
-        // Parse evaluation
+        // Parse evaluation. A reply that cannot be read is an error to retry, never a result to store: stored, it
+        // was served from cache as an empty evaluation from then on.
         VoiceEvaluationResult result = parseEvaluation(evaluationJson);
+        if (UNABLE_TO_EVALUATE.equals(result.getRecommendation())) {
+            throw new IllegalStateException("The model's evaluation for schedule " + scheduleId + " could not be read");
+        }
 
         // The overall follows from the area scores and the configured weights, rather than being a separate number
         // the model chose. See EvaluationScoreReconciler.
