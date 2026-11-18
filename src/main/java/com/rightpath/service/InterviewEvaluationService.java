@@ -70,6 +70,18 @@ public class InterviewEvaluationService {
         this.objectMapper = new ObjectMapper();
     }
 
+    /**
+     * Least share of the expected scope, out of 100, a candidate must earn to be passed. Below it a passing
+     * recommendation is lowered and the result is flagged for a person to look at: answering a few questions well is
+     * not doing the job. Set {@code interview.evaluation.scope-pass-mark} in every environment if it is changed.
+     */
+    @org.springframework.beans.factory.annotation.Value("${interview.evaluation.scope-pass-mark:50}")
+    private double scopePassMark = 50;
+
+    /** The candidate's name as on their account, so the summary uses the same name the interview did. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CandidateNameResolver nameResolver;
+
     /** What a reply that could not be read is recorded as. Never stored: it is retried instead. */
     private static final String UNABLE_TO_EVALUATE = "UNABLE_TO_EVALUATE";
 
@@ -193,6 +205,14 @@ public class InterviewEvaluationService {
         StringBuilder transcript = new StringBuilder();
         transcript.append("Position: ").append(schedule.getJobPrefix()).append("\n");
         transcript.append("Candidate: ").append(schedule.getEmail()).append("\n");
+        // The summary called candidates by the name on their resume, or one misheard in their speech, rather than the
+        // one the interview used. The account name is given, and only that one may be used.
+        String candidateName = nameResolver == null ? null
+                : nameResolver.firstName(schedule.getEmail()).orElse(null);
+        transcript.append(candidateName != null
+                ? "Candidate name: " + candidateName + " (refer to the candidate only by this name, never by a name "
+                        + "in the resume or one heard in the answers)\n"
+                : "Candidate name: not on file (do not name the candidate)\n");
         // Named so the grader weighs a behavioural round as one, rather than
         // marking it down for technical depth it was never meant to ask about.
         transcript.append("Round: ").append(schedule.getEffectiveRound().getDisplayName()).append("\n\n");
@@ -270,6 +290,15 @@ public class InterviewEvaluationService {
         if (!decidable) {
             log.info("Schedule {}: too little asked or answered to call a pass or a fail; left for review", scheduleId);
             result.setRecommendation(null);
+        }
+
+        // A pass needs the scope, not only good answers to the questions that happened to be asked.
+        if (result.getScopeScore() != null && result.getScopeScore() < scopePassMark
+                && result.getRecommendation() != null && PASS_RECOMMENDATIONS.contains(result.getRecommendation())) {
+            log.info("Schedule {}: recommendation {} lowered to LEAN_NO_HIRE; only {} of 100 of the expected scope "
+                    + "was earned (pass mark {})", scheduleId, result.getRecommendation(), result.getScopeScore(),
+                    scopePassMark);
+            result.setRecommendation("LEAN_NO_HIRE");
         }
 
         applyTriage(schedule, result, entries);
@@ -532,7 +561,14 @@ public class InterviewEvaluationService {
      */
     private void applyTriage(CandidateInterviewSchedule schedule, VoiceEvaluationResult result,
                              List<VoiceConversationEntry> entries) {
-        List<String> reasons = reviewTriage.reviewReasons(schedule, result, entries);
+        List<String> reasons = new ArrayList<>(reviewTriage.reviewReasons(schedule, result, entries));
+        // Worked out on every read, like the other reasons, so it is never lost from a stored result.
+        if (result.getScopeScore() != null && result.getScopeScore() < scopePassMark) {
+            reasons.add(String.format(java.util.Locale.ROOT,
+                    "Only %.0f of 100 of what this interview should have covered was earned (a pass needs %.0f), "
+                            + "so it cannot be passed on the questions answered well alone.",
+                    result.getScopeScore(), scopePassMark));
+        }
         result.setReviewReasons(reasons);
         result.setNeedsHumanReview(!reasons.isEmpty());
         schedule.setNeedsHumanReview(!reasons.isEmpty());

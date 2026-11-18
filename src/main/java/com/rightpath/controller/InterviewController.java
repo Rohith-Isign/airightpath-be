@@ -362,7 +362,23 @@ public class InterviewController {
 	
 	@PostMapping("/voice/{id}/end")
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
-	public ResponseEntity<?> endVoiceInterview(@PathVariable Long id) {
+	public ResponseEntity<?> endVoiceInterview(@PathVariable Long id,
+			@RequestParam(value = "sessionId", required = false) String sessionId,
+			org.springframework.security.core.Authentication authentication) {
+		// Only the candidate the interview belongs to may end it. There was no check at all: any signed-in candidate
+		// could end anyone's interview by its id.
+		var owned = scheduleRepo.findByIdAndEmail(id, authentication.getName());
+		if (owned.isEmpty()) {
+			log.warn("End refused: interview {} is not assigned to {}", id, authentication.getName());
+			throw new org.springframework.security.access.AccessDeniedException(
+					"Interview " + id + " is not assigned to the authenticated candidate");
+		}
+		// And only from the window running it: a window another one has replaced must not end the interview there.
+		String active = owned.get().getActiveSessionId();
+		if (sessionId != null && !sessionId.isBlank() && active != null && !active.equals(sessionId)) {
+			log.warn("End refused for interview {}: sent from a window that has been replaced", id);
+			return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT).build();
+		}
 		log.info("Voice interview {} end requested", id);
 		voiceInterviewService.endVoiceInterview(id);
 		return ResponseEntity.ok().build();
