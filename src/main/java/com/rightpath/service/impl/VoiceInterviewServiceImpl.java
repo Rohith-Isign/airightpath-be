@@ -408,7 +408,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 .role(ConversationRole.INTERVIEWER)
                 .content(firstQuestionClean)
                 .topic(parsedFirst.topic())
-                .level(parsedFirst.level())
+                // The opening asks for an introduction, not a technical answer: it has no level.
+                .level(null)
                 .turnKind(TurnKind.NEW_QUESTION)
                 .build();
         entryRepository.save(entry);
@@ -653,7 +654,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         .role(ConversationRole.INTERVIEWER)
                         .content(spoken)
                         .topic(turn.hasTopic() ? turn.topic() : null)
-                        .level(turn.level())
+                        .level(levelOf(turn))
                         .turnKind(turn.turnKind())
                         .build());
 
@@ -824,7 +825,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     .role(ConversationRole.INTERVIEWER)
                     .content(parsed.spokenText())
                     .topic(parsed.hasTopic() ? parsed.topic() : null)
-                    .level(parsed.level())
+                    .level(levelOf(parsed))
                     .turnKind(parsed.turnKind())
                     .build());
             schedule.incrementQuestionsAsked();
@@ -985,6 +986,18 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             return isClosingQuestion(entry.getContent());
         }
         return false;
+    }
+
+    /**
+     * The level to record for a turn, or null when the turn is not an interview question. The closing question
+     * ("any questions for us?") and the goodbye were saved with whatever level the model put on them, so the
+     * transcript labelled "do you have any questions for us" as Expert.
+     */
+    private static String levelOf(ParsedInterviewReply reply) {
+        if (reply == null || reply.closing() || isClosingQuestion(reply.spokenText())) {
+            return null;
+        }
+        return reply.level();
     }
 
     /** The closing question in any of its wordings, including "any other questions for us?" after an answer. */

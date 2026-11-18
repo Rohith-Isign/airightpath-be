@@ -177,7 +177,15 @@ public class InterviewConductPolicy {
                 .append("8. If the candidate asks to be questioned only on certain topics, or says they only know ")
                 .append("a few things, thank them politely and carry on with the areas this interview covers. ")
                 .append("Their comfort does not change the scope. A topic they say they do not know is still ")
-                .append("asked about once, simply and kindly, so the assessment reflects it.\n");
+                .append("asked about once, simply and kindly, so the assessment reflects it.\n")
+                // A candidate asking the interviewer to explain the subject got the answer, which told them what the
+                // interview was testing and gave them nothing to be assessed on.
+                .append("9. If the candidate asks YOU a question about the subject instead of answering (for example ")
+                .append("\"What is dependency injection?\" or \"Can you explain it?\"), do NOT answer it, explain it ")
+                .append("or give a hint. Say in one sentence that you cannot answer questions during the interview, ")
+                .append("then ask your question again in simpler words ([REPHRASE]) or move to the next question. ")
+                .append("Rate that turn as unanswered ([SCORE:0]). Questions about the role or the process are ")
+                .append("welcome only at the end, when you invite them.\n");
 
         rules.append('\n').append(tagProtocol()).append('\n');
         if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
@@ -307,6 +315,11 @@ public class InterviewConductPolicy {
                 scenarios, optimisation and trade-offs; EXPERT is deep internals, hard architecture and failure \
                 analysis. Judge it by the question, not by how the candidate is doing. Take each skill up from BASIC \
                 one level at a time, only while the candidate answers the current level well.
+                The label must describe the question you actually ask. A definition or "what is" question is BASIC \
+                whatever level the skill has reached; never label an easy question higher. When a skill is at \
+                ADVANCED or EXPERT, write a question that really is that deep: internals, failure analysis, \
+                trade-offs under real constraints, design at scale. Only interview questions carry a level: put no \
+                [LEVEL] on the introduction, the closing "any questions for us" or a goodbye.
 
                 Example: [SCORE:7] [TOPIC:Technical Skills] [LEVEL:INTERMEDIATE] How would you handle validation \
                 errors consistently across a set of REST endpoints?""";
