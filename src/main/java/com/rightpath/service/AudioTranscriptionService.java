@@ -34,6 +34,10 @@ public class AudioTranscriptionService {
      */
     private final SharedStateStore sharedState;
 
+    /** The candidate's name, given to the speech model so it spells it the way it is on their account. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CandidateNameResolver nameResolver;
+
     public AudioTranscriptionService(OpenAiStreamingService openAiStreamingService,
                                      SimpMessagingTemplate messagingTemplate,
                                      SharedStateStore sharedState) {
@@ -52,7 +56,10 @@ public class AudioTranscriptionService {
 
         try {
             String filename = String.format("chunk_%d.webm", chunkIndex);
-            TranscriptionResult result = openAiStreamingService.transcribe(audioData, filename);
+            String hint = nameResolver == null ? null : nameResolver.forInterview(scheduleId)
+                    .map(name -> "The speaker's name is " + name + ".")
+                    .orElse(null);
+            TranscriptionResult result = openAiStreamingService.transcribe(audioData, filename, hint);
 
             String comparable = result.getText() == null ? "" : TranscriptionSanitizer.comparable(result.getText());
             if (comparable.contains(" ") && comparable.equals(sharedState.get(lastPublishedKey(scheduleId)).orElse(null))) {

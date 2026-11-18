@@ -33,6 +33,7 @@ public class InterviewContextService {
     private final PromptInjectionGuard injectionGuard;
     private final InterviewTemplateService templateService;
     private final InterviewLevelProgression levelProgression;
+    private final CandidateNameResolver nameResolver;
 
     @Value("${interview.context-window-size:4}")
     private int contextWindowSize;
@@ -46,7 +47,8 @@ public class InterviewContextService {
                                    InterviewTopicCoverage topicCoverage,
                                    PromptInjectionGuard injectionGuard,
                                    InterviewTemplateService templateService,
-                                   InterviewLevelProgression levelProgression) {
+                                   InterviewLevelProgression levelProgression,
+                                   CandidateNameResolver nameResolver) {
         this.entryRepository = entryRepository;
         this.openAiStreamingService = openAiStreamingService;
         this.jobPromptService = jobPromptService;
@@ -57,6 +59,7 @@ public class InterviewContextService {
         this.injectionGuard = injectionGuard;
         this.templateService = templateService;
         this.levelProgression = levelProgression;
+        this.nameResolver = nameResolver;
     }
 
     /**
@@ -75,6 +78,9 @@ public class InterviewContextService {
         // instruction can fall out of the conversation the model still sees.
         EffectiveInterviewTemplate template = templateService.resolve(schedule);
         messages.add(Map.of("role", "system", "content", conductPolicy.asSystemMessage(schedule, template)));
+
+        // The same name as the welcome, every turn: it drifted to a misheard name or the one on the resume.
+        messages.add(Map.of("role", "system", "content", nameResolver.namingRule(schedule.getId())));
 
         // Where to pitch the next question, from how the last few were answered.
         String difficultyGuidance = buildDifficultyGuidance(schedule);

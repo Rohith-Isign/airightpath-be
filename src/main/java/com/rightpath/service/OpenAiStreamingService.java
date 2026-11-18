@@ -297,6 +297,14 @@ public class OpenAiStreamingService {
      * Transcribe audio using Whisper API with word-level timestamps.
      */
     public TranscriptionResult transcribe(byte[] audioData, String filename) {
+        return transcribe(audioData, filename, null);
+    }
+
+    /**
+     * As above, with a hint for the speech model: words it should expect, such as the candidate's own name, which
+     * it otherwise tends to hear as a commoner one ("Sahil" for "Sai").
+     */
+    public TranscriptionResult transcribe(byte[] audioData, String filename, String hint) {
         // A webm/opus blob this small is a container header with no audio.
         // Whisper answers it with 400 "audio too short" (or "could not be
         // decoded"), which was logged as an error for every such chunk.
@@ -322,6 +330,9 @@ public class OpenAiStreamingService {
 
             if (whisperLanguage != null && !whisperLanguage.isBlank()) {
                 bodyBuilder.addFormDataPart("language", whisperLanguage.trim());
+            }
+            if (hint != null && !hint.isBlank()) {
+                bodyBuilder.addFormDataPart("prompt", hint.trim());
             }
 
             MultipartBody body = bodyBuilder.build();
