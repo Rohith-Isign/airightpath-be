@@ -74,6 +74,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     private static final Random random = new Random();
 
     private final CandidateInterviewScheduleRepository scheduleRepo;
+
+    /** For noting on the record that the interview was opened in a second window. Field-injected: optional. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.rightpath.repository.ProctoringEventRepository proctoringEventRepository;
     private final VoiceConversationEntryRepository entryRepository;
     private final OpenAiStreamingService openAiStreamingService;
     private final InterviewContextService contextService;
@@ -298,6 +302,20 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             Long scheduleId) {
         CandidateInterviewSchedule schedule = resolveSchedule(jobPrefix, email, scheduleId);
 
+        // This window becomes the only one that may run the interview. Any window that had it open is told it has
+        // been replaced, and its messages are refused from now on (VoiceInterviewWebSocketController).
+        String sessionId = java.util.UUID.randomUUID().toString();
+        boolean takenOver = schedule.getAttemptStatus() == AttemptStatus.IN_PROGRESS
+                && schedule.getActiveSessionId() != null;
+        schedule.setActiveSessionId(sessionId);
+        scheduleRepo.save(schedule);
+        if (takenOver) {
+            log.warn("Interview {} opened in another window; the earlier window is closed", schedule.getId());
+            messagingTemplate.convertAndSend("/topic/interview/" + schedule.getId() + "/session-replaced",
+                    Map.of("sessionId", sessionId));
+            recordSessionTakeover(schedule);
+        }
+
         // Resume, rather than silently restart.
         //
         // This branch was an empty placeholder, so an interview already under
@@ -321,6 +339,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     .firstQuestionAudio(isCodeExplanation(question)
                             ? null
                             : textToSpeechService.generateTTSBase64(stripQuestionTypeTags(question)))
+                    .sessionId(sessionId)
                     .resumed(true)
                     .questionsAsked(schedule.getTotalQuestionsAsked())
                     // The original deadline, not a fresh one. A refresh used
@@ -408,6 +427,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
         return VoiceStartResponse.builder()
                 .scheduleId(schedule.getId())
+                .sessionId(sessionId)
                 .firstQuestion(firstQuestionRaw)      // raw with tags for frontend detection
                 .interviewerName(schedule.getInterviewerName())
                 .firstQuestionAudio(firstQuestionAudio)   // null for code explanation
@@ -573,6 +593,12 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 parsed = askForExamples(current, parsed, turnPrompt);
             }
 
+            // A coding problem is asked once. Once an answer to it has been submitted, it is rated and the interview
+            // moves on; asking the same problem again left the candidate re-submitting the same answer in a loop.
+            if (isCodingQuestion(parsed) && repeatsEarlierCodingProblem(scheduleId, parsed)) {
+                parsed = askForDifferentProblem(current, parsed, turnPrompt);
+            }
+
             // Closes when the model says it is done, or when the budget is
             // spent. The ceiling is enforced here rather than trusted to the
             // prompt: an interview that never ends is worse than one cut short.
@@ -609,6 +635,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             String spoken = parsed.spokenText();
             ParsedInterviewReply turn = parsed;
             boolean completed = finished;
+            java.util.concurrent.atomic.AtomicBoolean mismatchFlagged = new java.util.concurrent.atomic.AtomicBoolean();
 
             transactionTemplate.execute(status -> {
                 CandidateInterviewSchedule s = scheduleRepo.findById(scheduleId).orElseThrow();
@@ -617,8 +644,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 // the reply it gives to it. Written back onto the answer it is
                 // about, so difficulty and the reviewer both read it where it
                 // belongs rather than off the question that followed.
-                if (turn.hasScore() && !skipped) {
-                    applyScoreToLastAnswer(s.getId(), turn.answerScore());
+                if ((turn.hasScore() || turn.codeMismatch()) && !skipped) {
+                    mismatchFlagged.set(applyScoreToLastAnswer(s.getId(), turn.answerScore(), turn.codeMismatch()));
                 }
 
                 entryRepository.save(VoiceConversationEntry.builder()
@@ -655,7 +682,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             });
 
             sendResponseComplete(scheduleId, spoken, finished, parsed.closing() ? "ai_closed" : "question_limit",
-                    turn.turnKind());
+                    turn.turnKind(), mismatchFlagged.get());
 
             if (!isCodeExplanation(spoken)) {
                 textToSpeechService.generateAndStreamTTS(scheduleId, stripQuestionTypeTags(spoken));
@@ -789,8 +816,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             }
 
             ParsedInterviewReply parsed = replyParser.parse(reply);
-            if (parsed.hasScore()) {
-                applyScoreToLastAnswer(schedule.getId(), parsed.answerScore());
+            if (parsed.hasScore() || parsed.codeMismatch()) {
+                applyScoreToLastAnswer(schedule.getId(), parsed.answerScore(), parsed.codeMismatch());
             }
             entryRepository.save(VoiceConversationEntry.builder()
                     .interviewSchedule(schedule)
@@ -812,26 +839,61 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     }
 
     /**
+     * Notes on the proctoring record that the interview was opened in another window while it was running, so a
+     * reviewer can see it. Best effort: failing to record it must not stop the candidate opening the interview.
+     */
+    private void recordSessionTakeover(CandidateInterviewSchedule schedule) {
+        if (proctoringEventRepository == null) {
+            return;
+        }
+        try {
+            proctoringEventRepository.save(com.rightpath.entity.ProctoringEvent.builder()
+                    .schedule(schedule)
+                    .eventType("interview_opened_elsewhere")
+                    .details("The interview was opened in another browser window while it was running. The earlier "
+                            + "window was closed and the interview continued in the new one.")
+                    .build());
+        } catch (Exception e) {
+            log.warn("Could not record the second window for interview {}", schedule.getId(), e);
+        }
+    }
+
+    /**
      * Puts the rating the model just gave onto the answer it was rating.
      *
      * <p>Best effort. A rating that cannot be attached is a slightly worse
      * difficulty signal on the next turn; failing the turn over it would cost
      * the candidate an answer.</p>
      */
-    private void applyScoreToLastAnswer(Long scheduleId, Integer score) {
+    private boolean applyScoreToLastAnswer(Long scheduleId, Integer score, boolean codeMismatch) {
         try {
-            entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId).stream()
+            VoiceConversationEntry last = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId)
+                    .stream()
                     .filter(e -> e.getRole() == ConversationRole.CANDIDATE)
                     .reduce((first, second) -> second)
-                    .ifPresent(last -> {
-                        last.setAnswerScore(score);
-                        if (levelProgression != null) {
-                            last.setAnswerCorrect(levelProgression.isCorrect(score));
-                        }
-                        entryRepository.save(last);
-                    });
+                    .orElse(null);
+            if (last == null) {
+                return false;
+            }
+            // Code that solves a different problem than the one asked earns nothing, whatever rating came with it.
+            // Only an answer that carried code can be one: the flag is ignored on a spoken answer.
+            boolean mismatch = codeMismatch && last.getCodeContent() != null && !last.getCodeContent().isBlank();
+            Integer applied = mismatch ? Integer.valueOf(0) : score;
+            if (applied != null) {
+                last.setAnswerScore(applied);
+                if (levelProgression != null) {
+                    last.setAnswerCorrect(levelProgression.isCorrect(applied));
+                }
+            }
+            if (mismatch) {
+                last.setCodeMismatch(true);
+                log.info("Interview {}: submitted code solves a different problem; scored 0", scheduleId);
+            }
+            entryRepository.save(last);
+            return mismatch;
         } catch (Exception e) {
             log.warn("Could not attach the answer score for interview {}", scheduleId, e);
+            return false;
         }
     }
 
@@ -1012,7 +1074,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
                     String topic = retry.topic() != null ? retry.topic() : original.topic();
                     return new ParsedInterviewReply(retry.spokenText(), score, retry.turnKind(), topic, false,
-                            retry.level() != null ? retry.level() : original.level());
+                            retry.level() != null ? retry.level() : original.level(),
+                            original.codeMismatch() || retry.codeMismatch());
                 }
             }
         } catch (Exception e) {
@@ -1020,6 +1083,94 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         }
         return original;
     }
+
+    /**
+     * Whether this coding question is one already asked in this interview. A re-ask is allowed only when the
+     * candidate has not yet sent any code for it (they could not see the notepad), so it is not a repeat.
+     */
+    private boolean repeatsEarlierCodingProblem(Long scheduleId, ParsedInterviewReply reply) {
+        List<VoiceConversationEntry> entries = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId);
+        java.util.Set<String> asked = problemWords(reply.spokenText());
+        if (asked.size() < 4) {
+            return false;
+        }
+        boolean answeredWithCode = entries.stream()
+                .filter(e -> e.getRole() == ConversationRole.CANDIDATE)
+                .reduce((first, second) -> second)
+                .map(e -> e.getCodeContent() != null && !e.getCodeContent().isBlank())
+                .orElse(false);
+        if (reply.turnKind() == TurnKind.REPHRASE && !answeredWithCode) {
+            return false;
+        }
+        return entries.stream()
+                .filter(e -> e.getRole() == ConversationRole.INTERVIEWER && e.getContent() != null
+                        && CODING_OPENING.matcher(e.getContent()).find())
+                .anyMatch(e -> similarity(asked, problemWords(e.getContent())) >= 0.8);
+    }
+
+    /** The words of a coding problem's statement: no tag, task type or examples, so wording around it is ignored. */
+    static java.util.Set<String> problemWords(String text) {
+        if (text == null) {
+            return java.util.Set.of();
+        }
+        String statement = text.replaceAll("(?i)\\[\\s*CODING\\s*\\]", " ")
+                .replaceAll("(?im)^\\s*task type:.*$", " ")
+                .replaceAll("(?is)example\\s*1.*", " ")
+                .toLowerCase(java.util.Locale.ROOT);
+        java.util.Set<String> words = new java.util.HashSet<>();
+        for (String word : statement.split("[^a-z0-9]+")) {
+            if (word.length() > 2) {
+                words.add(word);
+            }
+        }
+        return words;
+    }
+
+    /** Share of words two problem statements have in common (Jaccard), 0 to 1. */
+    static double similarity(java.util.Set<String> a, java.util.Set<String> b) {
+        if (a.isEmpty() || b.isEmpty()) {
+            return 0;
+        }
+        java.util.Set<String> common = new java.util.HashSet<>(a);
+        common.retainAll(b);
+        java.util.Set<String> all = new java.util.HashSet<>(a);
+        all.addAll(b);
+        return (double) common.size() / all.size();
+    }
+
+    /**
+     * Asks once for a different question in place of a repeated coding problem. If the second try still repeats it,
+     * the original stands rather than stalling the interview; it is logged so it can be seen.
+     */
+    private ParsedInterviewReply askForDifferentProblem(CandidateInterviewSchedule schedule,
+            ParsedInterviewReply original, String turnPrompt) {
+        try {
+            String reply = openAiStreamingService.chatCompletion(contextService.buildContextMessages(schedule,
+                    turnPrompt + "\n\n" + NEW_PROBLEM_DIRECTIVE));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply retry = replyParser.parse(reply);
+                if (!isCodingQuestion(retry)
+                        || (hasExamples(retry.spokenText()) && !repeatsEarlierCodingProblem(schedule.getId(), retry))) {
+                    Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
+                    return new ParsedInterviewReply(retry.spokenText(), score, TurnKind.NEW_QUESTION,
+                            retry.topic() != null ? retry.topic() : original.topic(), retry.closing(),
+                            retry.level() != null ? retry.level() : original.level(),
+                            original.codeMismatch() || retry.codeMismatch());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not replace a repeated coding problem in interview {}", schedule.getId(), e);
+        }
+        log.warn("Interview {} asked a coding problem again after it was answered", schedule.getId());
+        return original;
+    }
+
+    private static final String NEW_PROBLEM_DIRECTIVE =
+            "Your reply asked a coding problem that was already asked in this interview, and the candidate's answer "
+                    + "to it has been recorded and rated. Do NOT ask it again or reword it. Keep your [SCORE] for "
+                    + "their last answer, say in at most one sentence what was right or missing in it (never the "
+                    + "solution), then ask a DIFFERENT question: a new coding problem on different ground, with its "
+                    + "Task type line and exactly two examples, or a question on another skill.";
 
     private static final String CODING_EXAMPLES_DIRECTIVE =
             "Your reply asked a coding question without examples. Send the SAME coding question again, starting "
@@ -1050,7 +1201,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         } catch (Exception e) {
             log.warn("Could not get a farewell for interview {}", schedule.getId(), e);
         }
-        return new ParsedInterviewReply(text, score, original.turnKind(), original.topic(), true, original.level());
+        return new ParsedInterviewReply(text, score, original.turnKind(), original.topic(), true, original.level(),
+                original.codeMismatch());
     }
 
     private ParsedInterviewReply askForOutstandingTopic(CandidateInterviewSchedule schedule) {
@@ -1262,7 +1414,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * candidate's last code back in the notepad when they are asked to fix it, instead of a blank page.
      */
     private void sendResponseComplete(Long scheduleId, String response, boolean isComplete, String endReason,
-            com.rightpath.enums.TurnKind turnKind) {
+            com.rightpath.enums.TurnKind turnKind, boolean codeMismatch) {
         CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
                 .orElseThrow(() -> new ResourceNotFoundException("Schedule not found: " + scheduleId));
         Map<String, Object> message = new HashMap<>();
@@ -1275,6 +1427,11 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         message.put("terminated", false);
         if (turnKind != null) {
             message.put("turnKind", turnKind.name());
+        }
+        if (codeMismatch) {
+            // The candidate is told their last code did not answer the question, so they are not left thinking it
+            // counted.
+            message.put("codeMismatch", true);
         }
         messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/response-complete", message);
     }

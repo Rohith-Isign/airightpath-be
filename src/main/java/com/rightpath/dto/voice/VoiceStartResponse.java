@@ -11,6 +11,9 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class VoiceStartResponse {
     private Long scheduleId;
+
+    /** This window's id for the interview. Sent back with every message; a newer window replaces it. */
+    private String sessionId;
     private String firstQuestion;
     private String interviewerName;
     private String firstQuestionAudio; // base64 encoded mp3

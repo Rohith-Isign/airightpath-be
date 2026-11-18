@@ -20,6 +20,8 @@ import com.rightpath.enums.TurnKind;
  *                     when the model did not say. Drives coverage.
  * @param closing      whether the model asked to end the interview here.
  * @param level        BASIC, INTERMEDIATE, ADVANCED or EXPERT, or null when the model did not say (technical round only).
+ * @param codeMismatch whether the model judged the code just submitted to solve a different problem than the one
+ *                     asked, so it earns nothing for that question.
  */
 public record ParsedInterviewReply(
         String spokenText,
@@ -27,12 +29,19 @@ public record ParsedInterviewReply(
         TurnKind turnKind,
         String topic,
         boolean closing,
-        String level) {
+        String level,
+        boolean codeMismatch) {
+
+    /** A reply that flags no mismatch: every caller that predates the flag. */
+    public ParsedInterviewReply(String spokenText, Integer answerScore, TurnKind turnKind, String topic,
+            boolean closing, String level) {
+        this(spokenText, answerScore, turnKind, topic, closing, level, false);
+    }
 
     /** A reply with no level: every caller that predates levels, and any model that does not give one. */
     public ParsedInterviewReply(String spokenText, Integer answerScore, TurnKind turnKind, String topic,
             boolean closing) {
-        this(spokenText, answerScore, turnKind, topic, closing, null);
+        this(spokenText, answerScore, turnKind, topic, closing, null, false);
     }
 
     /** True when the model said which level this question is at. */

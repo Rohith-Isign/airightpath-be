@@ -154,6 +154,17 @@ public class CandidateInterviewSchedule {
 	@Column(columnDefinition = "TEXT")
 	private String runningSummary;
 
+	/**
+	 * The one browser window allowed to run this interview, by the id it was given when it opened it.
+	 *
+	 * <p>The same candidate signed in on two browsers could run the interview in both at once: both were sent
+	 * every question and both could answer, so turns were processed twice. Opening the interview now issues a new
+	 * id and the newest window wins; messages from any other window are refused and that window is told to close.
+	 * Newest-wins rather than first-wins, so a candidate whose browser crashed can always carry on.</p>
+	 */
+	@Column(length = 36)
+	private String activeSessionId;
+
 	@Builder.Default
 	private int warningCount = 0;
 

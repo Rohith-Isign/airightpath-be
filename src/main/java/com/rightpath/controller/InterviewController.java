@@ -497,11 +497,20 @@ public class InterviewController {
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
 	public ResponseEntity<Void> audioChunk(@PathVariable Long scheduleId, @RequestParam("audio") MultipartFile audio,
 			@RequestParam(value = "chunkIndex", defaultValue = "0") int chunkIndex,
+			@RequestParam(value = "sessionId", required = false) String sessionId,
 			org.springframework.security.core.Authentication authentication) throws java.io.IOException {
-		if (scheduleRepo.findByIdAndEmail(scheduleId, authentication.getName()).isEmpty()) {
+		var owned = scheduleRepo.findByIdAndEmail(scheduleId, authentication.getName());
+		if (owned.isEmpty()) {
 			log.warn("Audio chunk refused: interview {} is not assigned to {}", scheduleId, authentication.getName());
 			throw new org.springframework.security.access.AccessDeniedException(
 					"Interview " + scheduleId + " is not assigned to the authenticated candidate");
+		}
+		// Only the window that opened the interview last may answer. Audio from a window that has been replaced is
+		// refused, so two browsers cannot both feed answers into one interview. No id: a page from before the check.
+		String active = owned.get().getActiveSessionId();
+		if (sessionId != null && !sessionId.isBlank() && active != null && !active.equals(sessionId)) {
+			log.warn("Audio chunk refused for interview {}: sent from a window that has been replaced", scheduleId);
+			return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT).build();
 		}
 		if (audio.isEmpty()) {
 			throw new IllegalArgumentException("audio is required");

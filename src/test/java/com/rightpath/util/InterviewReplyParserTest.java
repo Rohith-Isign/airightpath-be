@@ -184,4 +184,15 @@ class InterviewReplyParserTest {
         ParsedInterviewReply reply = parser.parse("[LEVEL:GURU] What is a foreign key?");
         assertThat(reply.level()).isNull();
     }
+
+    @Test
+    @DisplayName("[MISMATCH] is read and never spoken; a reply without it flags nothing")
+    void parsesMismatch() {
+        ParsedInterviewReply reply = parser.parse(
+                "[SCORE:0] [TOPIC:Programming] [LEVEL:BASIC] [MISMATCH] That code checks for primes, not palindromes. "
+                        + "Let's move on.");
+        assertThat(reply.codeMismatch()).isTrue();
+        assertThat(reply.spokenText()).doesNotContain("MISMATCH").startsWith("That code checks");
+        assertThat(parser.parse("[SCORE:7] Good. Next question?").codeMismatch()).isFalse();
+    }
 }

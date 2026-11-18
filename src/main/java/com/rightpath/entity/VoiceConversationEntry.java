@@ -92,6 +92,13 @@ public class VoiceConversationEntry {
     private Boolean answerCorrect;
 
     /**
+     * Set on a CANDIDATE turn whose submitted code solved a different problem than the one asked (a prime check
+     * sent for a palindrome question). Such an answer is scored 0 and earns no credit; the flag says why, to the
+     * candidate at the time, to the grader and to the reviewer. Null otherwise.
+     */
+    private Boolean codeMismatch;
+
+    /**
      * The evaluation category an INTERVIEWER turn was asking about.
      *
      * <p>What makes coverage checkable: without it "have we asked about

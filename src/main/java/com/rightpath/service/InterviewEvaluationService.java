@@ -212,6 +212,10 @@ public class InterviewEvaluationService {
             if (entry.getRole() == ConversationRole.CANDIDATE && entry.getAnswerScore() != null) {
                 transcript.append("[Rated at the time: ").append(entry.getAnswerScore()).append("/10]\n");
             }
+            if (entry.getRole() == ConversationRole.CANDIDATE && Boolean.TRUE.equals(entry.getCodeMismatch())) {
+                transcript.append("[MISMATCH: this code solves a different problem than the one asked. It earns no ")
+                        .append("credit for that question.]\n");
+            }
             transcript.append("\n");
         }
 
@@ -404,6 +408,8 @@ public class InterviewEvaluationService {
                 IMPORTANT: Answers carry "[Rated at the time: n/10]" from the interviewer. Treat those as strong
                 evidence: a category's score should sit close to the ratings of the answers that bear on it, and move
                 away from them only for a reason you state in its feedback.
+                IMPORTANT: Code marked [MISMATCH], or any code you can see solves a different problem than the question
+                before it asked, earns NO credit for that question, however good it is.
                 IMPORTANT: For a coding answer, judge the [CODE] itself by reading it and tracing the examples by hand.
                 The interview notepad has no compiler, so code is never run: never score it down for not being run.
                 The answer may be code in any language, pseudocode or step-by-step logic; judge the correctness and

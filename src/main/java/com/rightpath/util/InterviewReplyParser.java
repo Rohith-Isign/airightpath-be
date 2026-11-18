@@ -44,6 +44,10 @@ public class InterviewReplyParser {
     private static final Pattern LEVEL = Pattern.compile(
             "\\[\\s*LEVEL\\s*:\\s*(BASIC|INTERMEDIATE|ADVANCED|EXPERT)\\s*\\]", Pattern.CASE_INSENSITIVE);
 
+    /** {@code [MISMATCH]} — the code just submitted solves a different problem than the one asked. */
+    private static final Pattern MISMATCH = Pattern.compile(
+            "\\[\\s*(MISMATCH|OFF[ _-]?TOPIC)\\s*\\]", Pattern.CASE_INSENSITIVE);
+
     /** {@code [FOLLOWUP]} — pressing on the question already asked. */
     private static final Pattern FOLLOW_UP = Pattern.compile(
             "\\[\\s*FOLLOW[ _-]?UP\\s*\\]", Pattern.CASE_INSENSITIVE);
@@ -88,6 +92,7 @@ public class InterviewReplyParser {
         String topic = firstGroup(TOPIC, reply);
         String level = firstGroup(LEVEL, reply);
         level = level == null ? null : level.trim().toUpperCase();
+        boolean codeMismatch = MISMATCH.matcher(reply).find();
 
         // A reply tagged both ways is the model hedging. Rephrase is the stronger
         // signal — it says the question itself did not land — so it wins, and
@@ -105,11 +110,12 @@ public class InterviewReplyParser {
         spoken = SCORE.matcher(spoken).replaceAll("");
         spoken = TOPIC.matcher(spoken).replaceAll("");
         spoken = LEVEL.matcher(spoken).replaceAll("");
+        spoken = MISMATCH.matcher(spoken).replaceAll("");
         spoken = FOLLOW_UP.matcher(spoken).replaceAll("");
         spoken = REPHRASE.matcher(spoken).replaceAll("");
         spoken = promoteCodingTag(spoken);
 
-        return new ParsedInterviewReply(spoken, score, kind, topic, closing, level);
+        return new ParsedInterviewReply(spoken, score, kind, topic, closing, level, codeMismatch);
     }
 
     /**
