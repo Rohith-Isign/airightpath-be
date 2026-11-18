@@ -38,7 +38,17 @@ How to score this round, in order of importance:
    problem failed is not offset by easy ones passed.
 3. Reasoning. Reward a candidate who works a problem out aloud, tests their own answer and
    corrects a mistake. Do not reward a confident answer that is wrong.
-4. Coverage. Only score what was tested. An area no question reached is "not assessed", not a
-   middling number. The overall score is built from the assessed areas alone.
+4. Coverage. Score each area only on what was tested: an area no question reached is "not
+   assessed", not a middling number. The overall score is measured against everything the role
+   needs, so what was never reached earns nothing and is named as not covered.
 5. Say what the candidate got right or wrong in each area, specifically, so a recruiter reading
    it can see exactly why the score is what it is and judge whether to hire.
+
+JUDGE LIKE A SENIOR INTERVIEWER
+- Grade this interview only, from this transcript. Never draw on another candidate or interview.
+- Measure against what the role needs, not against the questions that happened to be asked: an area this interview
+  never reached is still open, and must be named as not covered, not quietly left out.
+- Separate what the candidate knows from how deep it goes. A correct but textbook answer that could not survive a
+  follow-up is shallow, and is not the same as real understanding.
+- End with the verdict a person would give the hiring manager: what kind of candidate this is, the level they actually
+  showed against the level the job asks for, what is still not covered, and what they would need.

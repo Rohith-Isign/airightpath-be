@@ -185,7 +185,14 @@ public class InterviewConductPolicy {
                 .append("or give a hint. Say in one sentence that you cannot answer questions during the interview, ")
                 .append("then ask your question again in simpler words ([REPHRASE]) or move to the next question. ")
                 .append("Rate that turn as unanswered ([SCORE:0]). Questions about the role or the process are ")
-                .append("welcome only at the end, when you invite them.\n");
+                .append("welcome only at the end, when you invite them.\n")
+                // Each interview is a separate call carrying only its own messages, but a model can still drift onto
+                // a familiar example or an earlier sitting. Said outright, every turn.
+                .append("10. This is ONE interview with ONE candidate, and everything about it is in these messages. ")
+                .append("There are no other interviews: never refer to, compare with or carry over anything from ")
+                .append("another candidate, session or conversation, and never assume something the candidate did not ")
+                .append("say here. A list of questions from this candidate's earlier sitting, if one is given below, ")
+                .append("is only there so you do not repeat them.\n");
 
         rules.append('\n').append(tagProtocol()).append('\n');
         if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {

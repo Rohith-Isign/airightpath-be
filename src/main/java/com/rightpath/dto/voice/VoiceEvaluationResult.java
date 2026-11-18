@@ -76,6 +76,21 @@ public class VoiceEvaluationResult {
      */
     private Double scopeScore;
 
+    /**
+     * The verdict as a senior interviewer would give it to a hiring manager: what kind of candidate this is, how deep
+     * they really are, and whether they are ready for this role, in a few plain sentences.
+     */
+    private String verdict;
+
+    /** The seniority the answers actually showed (for example "Junior", "Mid-level"), next to what the job asks for. */
+    private String observedSeniority;
+
+    /** What the job needs that this interview never tested, so a later round or a reviewer knows what is still open. */
+    private List<String> notCovered;
+
+    /** Where answers were right but shallow: the depth a person in this role needs and the candidate did not show. */
+    private List<String> depthGaps;
+
     @Data
     @Builder
     @NoArgsConstructor

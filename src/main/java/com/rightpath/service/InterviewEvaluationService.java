@@ -430,6 +430,10 @@ public class InterviewEvaluationService {
                     "areasForImprovement": ["<area 1>", "<area 2>", "<area 3>"],
                     "expectedConcepts": [{"concept": "<a concept this interview should have tested>", "area": "<AREA>", "status": "<CORRECT | PARTIAL | INCORRECT | NOT_ASKED>", "questionNumbers": [<questions that tested it>]}],
                     "questionAreas": [{"questionNumber": <n>, "area": "<AREA>"}],
+                    "verdict": "<3-4 sentences, as a senior interviewer to the hiring manager>",
+                    "observedSeniority": "<Fresher | Junior | Mid-level | Senior | Lead> (job asks for <experience>)",
+                    "notCovered": ["<what the job needs that was never tested>"],
+                    "depthGaps": ["<topic: what depth was missing>"],
                     %s
                 }
 
@@ -438,6 +442,24 @@ public class InterviewEvaluationService {
                 %s
 
                 %s
+                IMPORTANT — JUDGE LIKE A SENIOR INTERVIEWER, NOT A QUESTION COUNTER. Read the job, the plan and the
+                transcript as a person deciding whether to hire would. Separate three things: what the candidate KNOWS
+                (correct answers), how DEEP it goes (can they say why, handle a follow-up, debug, weigh trade-offs, or
+                only recite a definition), and what was NEVER TESTED. A correct but textbook answer is shallow; say so.
+                - "verdict": 3-4 plain sentences for the hiring manager: what kind of candidate this is (for example
+                  "a solid junior backend developer who knows CRUD and REST well but has not worked with
+                  transactions or performance"), whether they are ready for THIS role at its stated experience
+                  level, and what they would need.
+                - "observedSeniority": the level the answers actually showed, one of "Fresher", "Junior",
+                  "Mid-level", "Senior", "Lead", followed by " (job asks for <the job's experience>)".
+                - "notCovered": what the job needs that this interview never tested (from expectedConcepts marked
+                  NOT_ASKED, said in words a recruiter understands). Empty if everything was covered.
+                - "depthGaps": where answers were correct but not deep enough for this role, each naming the topic
+                  and what was missing ("JWT: knows the flow but not how expiry and refresh are handled").
+                Base every word on this transcript only.
+                IMPORTANT — THIS INTERVIEW ONLY. You are grading one interview with one candidate. Use only the job,
+                the plan and the transcript given here; never draw on any other candidate, interview or conversation,
+                and never credit something the candidate did not say in this transcript.
                 IMPORTANT — SCOPE FIRST. Before you score anything, decide what this interview was MEANT to cover, from
                 the JOB and the INTERVIEW PLAN above, not from the questions that happened to be asked. List it in
                 "expectedConcepts": every concept a complete interview for this role and round should have tested,
@@ -826,7 +848,24 @@ public class InterviewEvaluationService {
                 }
             }
 
+            List<String> notCovered = new ArrayList<>();
+            if (node.path("notCovered").isArray()) {
+                node.path("notCovered").forEach(n -> {
+                    if (!n.asText().isBlank()) notCovered.add(n.asText().trim());
+                });
+            }
+            List<String> depthGaps = new ArrayList<>();
+            if (node.path("depthGaps").isArray()) {
+                node.path("depthGaps").forEach(n -> {
+                    if (!n.asText().isBlank()) depthGaps.add(n.asText().trim());
+                });
+            }
+
             return VoiceEvaluationResult.builder()
+                    .verdict(textOrNull(node, "verdict"))
+                    .observedSeniority(textOrNull(node, "observedSeniority"))
+                    .notCovered(notCovered)
+                    .depthGaps(depthGaps)
                     .expectedConcepts(concepts)
                     .questionAreas(questionAreas)
                     .confidence(confidence)
