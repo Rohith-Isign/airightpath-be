@@ -75,6 +75,30 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
     private final CandidateInterviewScheduleRepository scheduleRepo;
 
+    /** Per-interview counters shared across pods: the language of the answer being recorded, the early stop. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.rightpath.service.state.SharedStateStore sharedState;
+
+    /** Most an answer to a coding question can be rated when no code was written (spoken explanation only). */
+    @org.springframework.beans.factory.annotation.Value("${interview.coding.spoken-only-max-score:3}")
+    private int spokenOnlyCodingMax = 3;
+
+    /** Ends an interview early once the candidate is plainly not answering correctly (see shouldStopEarly). */
+    @org.springframework.beans.factory.annotation.Value("${interview.early-stop.enabled:true}")
+    private boolean earlyStopEnabled = true;
+
+    @org.springframework.beans.factory.annotation.Value("${interview.early-stop.min-rated-answers:8}")
+    private int earlyStopMinAnswers = 8;
+
+    @org.springframework.beans.factory.annotation.Value("${interview.early-stop.window:6}")
+    private int earlyStopWindow = 6;
+
+    @org.springframework.beans.factory.annotation.Value("${interview.early-stop.max-average:3.0}")
+    private double earlyStopMaxAverage = 3.0;
+
+    /** Put in front of an answer that was not spoken in English, for the interviewer, the grader and the reviewer. */
+    static final String NOT_IN_ENGLISH = "[NOT IN ENGLISH";
+
     /** For noting on the record that the interview was opened in a second window. Field-injected: optional. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.rightpath.repository.ProctoringEventRepository proctoringEventRepository;
@@ -480,6 +504,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 throw new IllegalStateException("Interview is not active");
             }
             if (skipped) {
+                clearLanguageCount(scheduleId);
                 VoiceConversationEntry candidateEntry = VoiceConversationEntry.builder()
                         .interviewSchedule(s)
                         .role(ConversationRole.CANDIDATE)
@@ -509,6 +534,19 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     injectionGuard.recordAttempt(scheduleId, answerContent);
                 }
                 answerContent = injectionGuard.stripControlMarkers(answerContent);
+
+                // Transcription is pinned to English, which translates another language into English: an answer
+                // given in Telugu read as a fluent English one and was scored as such. When most of the answer's
+                // audio was in another language, the answer says so in front, is scored 0 when rated, and the
+                // candidate is asked to answer in English.
+                String spokenIn = nonEnglishLanguage(scheduleId);
+                if (spokenIn != null) {
+                    answerContent = NOT_IN_ENGLISH + ": the candidate answered in " + spokenIn + ". The text below is "
+                            + "a machine translation, not their English. It earns no marks, including for "
+                            + "communication.]\n" + answerContent;
+                    messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/language-warning",
+                            Map.of("language", spokenIn));
+                }
 
                 VoiceConversationEntry candidateEntry = VoiceConversationEntry.builder()
                         .interviewSchedule(s)
@@ -574,6 +612,14 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             } else if (closingAsked) {
                 turnPrompt += "\n\n" + FINAL_REPLY_DIRECTIVE;
             } else if (turnsLeft == 1) {
+                turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
+            } else if (!moreQuestionsWelcome && shouldStopEarly(scheduleId)) {
+                // The candidate is plainly not answering correctly. Carrying on only lengthens a result that is
+                // already clear, so the interview moves to its close, and is recorded as ended for that reason.
+                log.info("Interview {}: answers consistently below the mark; moving to close", scheduleId);
+                if (sharedState != null) {
+                    sharedState.set("early-stop:" + scheduleId, "1", java.time.Duration.ofHours(3));
+                }
                 turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
             }
             String reply = openAiStreamingService.chatCompletion(
@@ -667,7 +713,11 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     // interview that simply finished stamped nothing, so the
                     // commonest outcome of all reached the reviewer's screen
                     // as "how this interview ended was not recorded".
-                    s.setCompletionReason(CompletionReason.NATURAL_COMPLETION);
+                    boolean stoppedEarly = sharedState != null
+                            && sharedState.get("early-stop:" + scheduleId).isPresent();
+                    s.setCompletionReason(stoppedEarly
+                            ? CompletionReason.EARLY_TERMINATION_POOR_PERFORMANCE
+                            : CompletionReason.NATURAL_COMPLETION);
                     advanceApplicationAfterInterview(s);
                 } else {
                     // Every turn spends from the ceiling, probes included —
@@ -839,6 +889,88 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         }
     }
 
+    /** The language most of the answer just recorded was in, when that was not English; null otherwise. */
+    private String nonEnglishLanguage(Long scheduleId) {
+        if (sharedState == null) {
+            return null;
+        }
+        try {
+            long total = sharedState.get(AudioTranscriptionServiceKeys.total(scheduleId)).map(Long::parseLong).orElse(0L);
+            long foreign = sharedState.get(AudioTranscriptionServiceKeys.foreign(scheduleId)).map(Long::parseLong).orElse(0L);
+            String name = sharedState.get(AudioTranscriptionServiceKeys.name(scheduleId)).orElse("another language");
+            clearLanguageCount(scheduleId);
+            return foreign > 0 && foreign * 2 >= total ? capitalise(name) : null;
+        } catch (Exception e) {
+            log.debug("Could not read the language count for interview {}", scheduleId, e);
+            return null;
+        }
+    }
+
+    private void clearLanguageCount(Long scheduleId) {
+        if (sharedState == null) {
+            return;
+        }
+        sharedState.delete(AudioTranscriptionServiceKeys.total(scheduleId));
+        sharedState.delete(AudioTranscriptionServiceKeys.foreign(scheduleId));
+        sharedState.delete(AudioTranscriptionServiceKeys.name(scheduleId));
+    }
+
+    private static String capitalise(String value) {
+        return value == null || value.isBlank() ? value
+                : Character.toUpperCase(value.charAt(0)) + value.substring(1);
+    }
+
+    /** Key names, kept in one place with the service that writes them. */
+    private static final class AudioTranscriptionServiceKeys {
+        static String total(Long id) {
+            return com.rightpath.service.AudioTranscriptionService.languageTotalKey(id);
+        }
+
+        static String foreign(Long id) {
+            return com.rightpath.service.AudioTranscriptionService.languageForeignKey(id);
+        }
+
+        static String name(Long id) {
+            return com.rightpath.service.AudioTranscriptionService.languageNameKey(id);
+        }
+    }
+
+    /** Whether the question this answer replied to asked for code. */
+    private boolean answeredCodingQuestion(Long scheduleId, VoiceConversationEntry answer) {
+        VoiceConversationEntry question = null;
+        for (VoiceConversationEntry entry : entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId)) {
+            if (entry.getId() != null && entry.getId().equals(answer.getId())) {
+                break;
+            }
+            if (entry.getRole() == ConversationRole.INTERVIEWER) {
+                question = entry;
+            }
+        }
+        return question != null && question.getContent() != null
+                && CODING_OPENING.matcher(question.getContent()).find();
+    }
+
+    /**
+     * Whether the candidate has plainly stopped answering correctly: once enough answers are rated, the last few
+     * average below the mark. Only rated, non-introduction answers count, so one bad question never ends anything.
+     */
+    boolean shouldStopEarly(Long scheduleId) {
+        if (!earlyStopEnabled) {
+            return false;
+        }
+        List<Integer> scores = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId).stream()
+                .filter(e -> e.getRole() == ConversationRole.CANDIDATE && e.getAnswerScore() != null)
+                .map(VoiceConversationEntry::getAnswerScore)
+                .skip(1) // the introduction
+                .toList();
+        if (scores.size() < earlyStopMinAnswers) {
+            return false;
+        }
+        List<Integer> recent = scores.subList(scores.size() - Math.min(earlyStopWindow, scores.size()), scores.size());
+        double average = recent.stream().mapToInt(Integer::intValue).average().orElse(10);
+        return average < earlyStopMaxAverage;
+    }
+
     /**
      * Notes on the proctoring record that the interview was opened in another window while it was running, so a
      * reviewer can see it. Best effort: failing to record it must not stop the candidate opening the interview.
@@ -878,8 +1010,18 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             }
             // Code that solves a different problem than the one asked earns nothing, whatever rating came with it.
             // Only an answer that carried code can be one: the flag is ignored on a spoken answer.
-            boolean mismatch = codeMismatch && last.getCodeContent() != null && !last.getCodeContent().isBlank();
+            boolean hasCode = last.getCodeContent() != null && !last.getCodeContent().isBlank();
+            boolean mismatch = codeMismatch && hasCode;
             Integer applied = mismatch ? Integer.valueOf(0) : score;
+            // An answer not spoken in English earns nothing: what was rated was a machine translation.
+            if (applied != null && last.getContent() != null && last.getContent().startsWith(NOT_IN_ENGLISH)) {
+                applied = 0;
+            }
+            // A coding question answered only by talking has not shown coding: the approach can earn a little,
+            // never a coding score. It was being rated 7/10 for a spoken outline.
+            if (applied != null && !hasCode && answeredCodingQuestion(scheduleId, last)) {
+                applied = Math.min(applied, spokenOnlyCodingMax);
+            }
             if (applied != null) {
                 last.setAnswerScore(applied);
                 if (levelProgression != null) {

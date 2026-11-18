@@ -292,12 +292,14 @@ public class InterviewEvaluationService {
             result.setRecommendation(null);
         }
 
-        // A pass needs the scope, not only good answers to the questions that happened to be asked.
-        if (result.getScopeScore() != null && result.getScopeScore() < scopePassMark
+        // A pass needs the numbers to support it, whatever the recommendation says: the share of the scope earned,
+        // or, where the grader listed no scope, the overall score. A candidate rated low on most answers was being
+        // passed because the recommendation alone set the result.
+        double earned = earnedOutOf100(result);
+        if (earned < scopePassMark
                 && result.getRecommendation() != null && PASS_RECOMMENDATIONS.contains(result.getRecommendation())) {
-            log.info("Schedule {}: recommendation {} lowered to LEAN_NO_HIRE; only {} of 100 of the expected scope "
-                    + "was earned (pass mark {})", scheduleId, result.getRecommendation(), result.getScopeScore(),
-                    scopePassMark);
+            log.info("Schedule {}: recommendation {} lowered to LEAN_NO_HIRE; only {} of 100 earned (pass mark {})",
+                    scheduleId, result.getRecommendation(), earned, scopePassMark);
             result.setRecommendation("LEAN_NO_HIRE");
         }
 
@@ -457,6 +459,12 @@ public class InterviewEvaluationService {
                 - "depthGaps": where answers were correct but not deep enough for this role, each naming the topic
                   and what was missing ("JWT: knows the flow but not how expiry and refresh are handled").
                 Base every word on this transcript only.
+                IMPORTANT: An answer marked [NOT IN ENGLISH] was not given in English; its text is a machine
+                translation. It earns NO credit in any category, communication included.
+                IMPORTANT: A coding question answered only by talking, with no [CODE] submitted, has not shown coding:
+                it earns at most partial credit for the approach, and never a strong programming score.
+                IMPORTANT: The recommendation must match the scores. A candidate whose answers were mostly rated low,
+                or whose interview ended early for poor performance, is not a hire, however the summary reads.
                 IMPORTANT — THIS INTERVIEW ONLY. You are grading one interview with one candidate. Use only the job,
                 the plan and the transcript given here; never draw on any other candidate, interview or conversation,
                 and never credit something the candidate did not say in this transcript.
@@ -585,11 +593,12 @@ public class InterviewEvaluationService {
                              List<VoiceConversationEntry> entries) {
         List<String> reasons = new ArrayList<>(reviewTriage.reviewReasons(schedule, result, entries));
         // Worked out on every read, like the other reasons, so it is never lost from a stored result.
-        if (result.getScopeScore() != null && result.getScopeScore() < scopePassMark) {
+        if (result.getCategoryScores() != null && !result.getCategoryScores().isEmpty()
+                && earnedOutOf100(result) < scopePassMark) {
             reasons.add(String.format(java.util.Locale.ROOT,
-                    "Only %.0f of 100 of what this interview should have covered was earned (a pass needs %.0f), "
-                            + "so it cannot be passed on the questions answered well alone.",
-                    result.getScopeScore(), scopePassMark));
+                    "Only %.0f of 100 was earned (a pass needs %.0f), so it cannot be passed on the questions "
+                            + "answered well alone.",
+                    earnedOutOf100(result), scopePassMark));
         }
         result.setReviewReasons(reasons);
         result.setNeedsHumanReview(!reasons.isEmpty());
@@ -696,6 +705,11 @@ public class InterviewEvaluationService {
         }
         result.setOverallScore(Math.round(scope) / 10.0);
         result.setCoverage(Math.round((double) reached / concepts.size() * 1000.0) / 1000.0);
+    }
+
+    /** What the candidate earned out of 100: the scope score where there is one, otherwise the overall score. */
+    static double earnedOutOf100(VoiceEvaluationResult result) {
+        return result.getScopeScore() != null ? result.getScopeScore() : result.getOverallScore() * 10;
     }
 
     /** Keeps a stated confidence inside 0..1 — models do return 85 for "85%". */

@@ -34,6 +34,47 @@ public class AudioTranscriptionService {
      */
     private final SharedStateStore sharedState;
 
+    /** Whether to check what language each chunk was really spoken in (see {@link #looksForeign}). */
+    @org.springframework.beans.factory.annotation.Value("${openai.audio.detect-language:true}")
+    private boolean detectLanguage = true;
+
+    /** Counters for the answer being recorded: chunks checked, and chunks found not to be English. */
+    public static String languageTotalKey(Long scheduleId) {
+        return "lang-total:" + scheduleId;
+    }
+
+    public static String languageForeignKey(Long scheduleId) {
+        return "lang-foreign:" + scheduleId;
+    }
+
+    public static String languageNameKey(Long scheduleId) {
+        return "lang-name:" + scheduleId;
+    }
+
+    /**
+     * Whether a detection result is really another language. Two conditions, because detection on a few seconds of
+     * accented English sometimes names another language (that is why transcription is pinned to English): the
+     * language must not be English, and the text it heard must be mostly in a non-Latin script, which an English
+     * answer misheard as another language rarely is.
+     */
+    static boolean looksForeign(String language, String text) {
+        if (language == null || language.isBlank() || language.toLowerCase().startsWith("en")) {
+            return false;
+        }
+        if (text == null) {
+            return false;
+        }
+        long letters = text.codePoints().filter(Character::isLetter).count();
+        if (letters < 8) {
+            return false;
+        }
+        long nonLatin = text.codePoints()
+                .filter(Character::isLetter)
+                .filter(cp -> Character.UnicodeScript.of(cp) != Character.UnicodeScript.LATIN)
+                .count();
+        return nonLatin * 2 >= letters;
+    }
+
     /** The candidate's name, given to the speech model so it spells it the way it is on their account. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private CandidateNameResolver nameResolver;
@@ -59,7 +100,27 @@ public class AudioTranscriptionService {
             String hint = nameResolver == null ? null : nameResolver.forInterview(scheduleId)
                     .map(name -> "The speaker's name is " + name + ".")
                     .orElse(null);
+            // What was really spoken, asked at the same time as the transcription so it adds no wait.
+            java.util.concurrent.CompletableFuture<java.util.Optional<String[]>> detected = detectLanguage
+                    ? java.util.concurrent.CompletableFuture.supplyAsync(
+                            () -> openAiStreamingService.detectLanguage(audioData, filename))
+                    : java.util.concurrent.CompletableFuture.completedFuture(java.util.Optional.empty());
             TranscriptionResult result = openAiStreamingService.transcribe(audioData, filename, hint);
+            // Counted before the chunk is reported done, so the answer is never submitted ahead of its count.
+            try {
+                java.util.Optional<String[]> language = detected.get(20, java.util.concurrent.TimeUnit.SECONDS);
+                if (language.isPresent() && result.getText() != null && !result.getText().isBlank()) {
+                    sharedState.increment(languageTotalKey(scheduleId), LAST_PUBLISHED_TTL);
+                    if (looksForeign(language.get()[0], language.get()[1])) {
+                        sharedState.increment(languageForeignKey(scheduleId), LAST_PUBLISHED_TTL);
+                        sharedState.set(languageNameKey(scheduleId), language.get()[0], LAST_PUBLISHED_TTL);
+                        log.info("Chunk {} for schedule {} was spoken in {}, not English", chunkIndex, scheduleId,
+                                language.get()[0]);
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("No language check for chunk {} of schedule {}", chunkIndex, scheduleId, e);
+            }
 
             String comparable = result.getText() == null ? "" : TranscriptionSanitizer.comparable(result.getText());
             if (comparable.contains(" ") && comparable.equals(sharedState.get(lastPublishedKey(scheduleId)).orElse(null))) {

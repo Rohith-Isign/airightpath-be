@@ -301,6 +301,46 @@ public class OpenAiStreamingService {
     }
 
     /**
+     * What language a chunk of speech is really in, and the text in that language's own script.
+     *
+     * <p>Transcription is pinned to English for accuracy, and pinned like that Whisper translates other languages into
+     * English: an answer given in Telugu reached the interviewer as fluent English and was scored as one. This asks
+     * again with no language set, only to find out what was spoken. Empty when it cannot tell.</p>
+     */
+    public java.util.Optional<String[]> detectLanguage(byte[] audioData, String filename) {
+        if (audioData == null || audioData.length < MIN_AUDIO_BYTES) {
+            return java.util.Optional.empty();
+        }
+        try {
+            MultipartBody body = new MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", filename, RequestBody.create(audioData, MediaType.parse("audio/webm")))
+                    .addFormDataPart("model", whisperModel)
+                    .addFormDataPart("response_format", "verbose_json")
+                    .addFormDataPart("temperature", "0")
+                    .build();
+            Request request = new Request.Builder()
+                    .url(baseUrl + "/audio/transcriptions")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .post(body)
+                    .build();
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful() || response.body() == null) {
+                    return java.util.Optional.empty();
+                }
+                JsonNode node = objectMapper.readTree(response.body().string());
+                String language = node.path("language").asText("");
+                String text = node.path("text").asText("");
+                return language.isBlank() ? java.util.Optional.empty()
+                        : java.util.Optional.of(new String[] {language, text});
+            }
+        } catch (Exception e) {
+            log.debug("Language detection failed for {}", filename, e);
+            return java.util.Optional.empty();
+        }
+    }
+
+    /**
      * As above, with a hint for the speech model: words it should expect, such as the candidate's own name, which
      * it otherwise tends to hear as a commoner one ("Sahil" for "Sai").
      */
