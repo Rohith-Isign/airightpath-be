@@ -58,6 +58,46 @@ public class VoiceEvaluationResult {
     /** How much the score rests on: SUFFICIENT, PARTIAL (some areas never asked) or INSUFFICIENT (too little to judge). */
     private String evidenceLevel;
 
+    /**
+     * Everything a complete interview for this role and round should have tested, worked out by the grader from the
+     * job and the interview plan, each with how the candidate did on it (or NOT_ASKED). The score is measured
+     * against this whole list, so an interview that only reached half the concepts cannot score as if that half
+     * were the whole job.
+     */
+    private List<Concept> expectedConcepts;
+
+    /** The area each interviewer question was about (Frontend, Backend, Database, Communication and so on). */
+    private List<QuestionArea> questionAreas;
+
+    /**
+     * The score against the full scope, 0 to 100: each expected concept counts 1 when answered well, a half when
+     * partly, nothing when wrong or never asked. Worked out by the server from {@link #expectedConcepts}, not taken
+     * from the model. Null on an evaluation graded before this existed.
+     */
+    private Double scopeScore;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Concept {
+        private String concept;
+        /** COMMUNICATION, FRONTEND, BACKEND, DATABASE, PROGRAMMING, DEVOPS_CLOUD, SYSTEM_DESIGN, TESTING, BEHAVIOURAL, OTHER. */
+        private String area;
+        /** CORRECT, PARTIAL, INCORRECT or NOT_ASKED. */
+        private String status;
+        private List<Integer> questionNumbers;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class QuestionArea {
+        private int questionNumber;
+        private String area;
+    }
+
     @Data
     @Builder
     @NoArgsConstructor

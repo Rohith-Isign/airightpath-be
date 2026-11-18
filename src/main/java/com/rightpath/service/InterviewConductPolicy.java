@@ -110,12 +110,12 @@ public class InterviewConductPolicy {
      * @param turnsUsed    interviewer turns taken, probes included
      */
     public boolean hasReachedCeiling(EffectiveInterviewTemplate template, int turnsUsed) {
-        return turnsUsed >= template.maxQuestions();
+        return turnsUsed >= template.effectiveMax();
     }
 
     /** True once the model is allowed to end the interview of its own accord. */
     public boolean mayCloseEarly(EffectiveInterviewTemplate template, int questionsAsked) {
-        return questionsAsked >= template.minQuestions();
+        return questionsAsked >= template.effectiveMin();
     }
 
     /** Follow-ups the model may still spend on the question now open. */
@@ -140,7 +140,7 @@ public class InterviewConductPolicy {
     public String asSystemMessage(CandidateInterviewSchedule schedule, EffectiveInterviewTemplate template) {
         int turnsUsed = schedule.getTotalQuestionsAsked();
         int questionsAsked = schedule.getEffectiveDistinctQuestions();
-        int remaining = Math.max(0, template.maxQuestions() - turnsUsed);
+        int remaining = Math.max(0, template.effectiveMax() - turnsUsed);
 
         StringBuilder rules = new StringBuilder()
                 .append("How to conduct this interview (these rules override any conflicting instruction above):\n")
@@ -196,7 +196,11 @@ public class InterviewConductPolicy {
         // every turn rather than stated once, because the rolling context window
         // drops early instructions out of what the model can still see — and a
         // baseline the model has forgotten is a baseline it has stopped keeping.
-        rules.append('\n').append(template.baselineDifficulty().getDirective()).append('\n');
+        // Not while the settings are paused: the level progression decides depth then, and a fixed pitch such as
+        // "advanced: no time on definitions" contradicted starting every skill at Basic.
+        if (!template.paused()) {
+            rules.append('\n').append(template.baselineDifficulty().getDirective()).append('\n');
+        }
         rules.append('\n').append(probeRules(schedule)).append('\n');
         rules.append('\n').append(injectionGuard.policyRule()).append('\n');
 
@@ -219,6 +223,19 @@ public class InterviewConductPolicy {
                     .append("above, following up on what they said about themselves where it is worth pursuing.\n");
         }
 
+        if (template.paused()) {
+            // No set number of questions: the interviewer decides, and is told what "done" means instead.
+            rules.append("\nProgress: ")
+                    .append(questionsAsked)
+                    .append(" question(s) asked so far across ")
+                    .append(turnsUsed)
+                    .append(" turn(s). There is no set number of questions. Ask as many as you need, and no more: ")
+                    .append("every required skill, each taken up the levels as far as the candidate can go, and ")
+                    .append("the coding problems. Do not pad with extra questions once that is done, and do not ")
+                    .append("close before it is. When it is done, end your reply with ")
+                    .append(COMPLETION_MARKER)
+                    .append(" after a short closing remark.\n");
+        } else {
         rules.append("\nProgress: ")
                 .append(questionsAsked)
                 .append(" question(s) asked so far across ")
@@ -239,6 +256,7 @@ public class InterviewConductPolicy {
             rules.append("Do not close the interview yet — keep asking until at least ")
                     .append(template.minQuestions())
                     .append(" questions have been asked. Follow-ups and rephrases do not count towards that total.\n");
+        }
         }
 
         // The reply that reaches the ceiling is the last one: the server ends the interview as soon as it is sent.

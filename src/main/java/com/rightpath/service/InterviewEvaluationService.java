@@ -250,6 +250,13 @@ public class InterviewEvaluationService {
                     scheduleId, modelOverall, result.getOverallScore());
         }
 
+        // Measured against everything the interview should have covered, not only what it reached.
+        applyScope(result);
+        if (result.getScopeScore() != null) {
+            log.info("Schedule {}: {} of the expected scope earned ({} concepts)", scheduleId,
+                    result.getScopeScore(), result.getExpectedConcepts().size());
+        }
+
         // Add speech analysis
         VoiceEvaluationResult.SpeechAnalysis speechAnalysis = calculateSpeechAnalysis(entries);
         result.setSpeechAnalysis(speechAnalysis);
@@ -392,12 +399,32 @@ public class InterviewEvaluationService {
                     "confidence": <number 0.0-1.0>,
                     "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
                     "areasForImprovement": ["<area 1>", "<area 2>", "<area 3>"],
+                    "expectedConcepts": [{"concept": "<a concept this interview should have tested>", "area": "<AREA>", "status": "<CORRECT | PARTIAL | INCORRECT | NOT_ASKED>", "questionNumbers": [<questions that tested it>]}],
+                    "questionAreas": [{"questionNumber": <n>, "area": "<AREA>"}],
                     %s
                 }
 
                 %s
 
                 %s
+
+                %s
+                IMPORTANT — SCOPE FIRST. Before you score anything, decide what this interview was MEANT to cover, from
+                the JOB and the INTERVIEW PLAN above, not from the questions that happened to be asked. List it in
+                "expectedConcepts": every concept a complete interview for this role and round should have tested,
+                usually 8 to 15, with at least one for every required skill and every scoring category. Then mark each
+                one: CORRECT (asked and answered well), PARTIAL (asked, partly right), INCORRECT (asked and answered
+                wrongly, skipped or not answered) or NOT_ASKED (never reached). A concept the interview never reached
+                is NOT_ASKED and earns nothing: an interview that covered 5 of 10 concepts cannot be scored as if those
+                5 were the whole job. Build the same list however the interview went, and never shorten it to fit what
+                was asked.
+                IMPORTANT: In "questionAreas" give, for EVERY numbered interviewer question including the introduction,
+                the area it was about, one of COMMUNICATION, FRONTEND, BACKEND, DATABASE, PROGRAMMING, DEVOPS_CLOUD,
+                SYSTEM_DESIGN, TESTING, BEHAVIOURAL, OTHER. Use the same areas for "expectedConcepts". The introduction
+                and questions about the candidate themselves are COMMUNICATION.
+                IMPORTANT: The recommendation must follow the scope. A candidate who leaves most expected concepts
+                NOT_ASKED or INCORRECT has not shown they can do this job, however well they answered the few questions
+                they did: do not recommend HIRE or STRONG_HIRE for them.
                 IMPORTANT: Return ONLY the JSON object, no additional text or markdown.
                 IMPORTANT: Scores must be on a 0-10 scale (not 0-100).
                 IMPORTANT: Score every category on the evidence in the transcript. Use the full range: 9-10 for
@@ -443,8 +470,43 @@ public class InterviewEvaluationService {
 
                 Interview Transcript:
                 %s
-                """, transcriptRules, categorySection, facts, gradingRules(round), customInstructions,
+                """, transcriptRules, categorySection, scopeContext(jobPrefix, round), facts, gradingRules(round),
+                customInstructions,
                 earlyTerminationContext, injectionGuard.fence(transcript));
+    }
+
+    /** Longest the interview plan given to the grader may be: enough for the plan, not a second transcript. */
+    private static final int MAX_PLAN_CHARS = 8000;
+
+    /**
+     * What the interview was for: the job, and the plan the interviewer was given for this round. The grader used to
+     * see only the transcript, so it graded the questions that happened to be asked as if they were the whole job.
+     */
+    private String scopeContext(String jobPrefix, com.rightpath.enums.InterviewRound round) {
+        StringBuilder sb = new StringBuilder("JOB\n");
+        try {
+            sb.append(placeholderResolver.resolveJobPlaceholders(
+                    "Title: {{jobTitle}}\nRole: {{role}}\nRequired skills: {{skills}}\nExperience: {{experience}}\n"
+                            + "Education: {{education}}\nJob description: {{jobDescription}}",
+                    jobPrefix));
+        } catch (Exception e) {
+            log.debug("Could not describe job {} for the grader", jobPrefix, e);
+            sb.append("Job ").append(jobPrefix);
+        }
+        try {
+            String plan = jobPromptService.getInterviewPrompt(jobPrefix, round, com.rightpath.enums.PromptStage.START);
+            if (plan != null && !plan.isBlank()) {
+                plan = placeholderResolver.resolveJobPlaceholders(plan, jobPrefix)
+                        .replaceAll("\\{\\{[a-zA-Z]+}}", "");
+                if (plan.length() > MAX_PLAN_CHARS) {
+                    plan = plan.substring(0, MAX_PLAN_CHARS) + "\n[plan shortened]";
+                }
+                sb.append("\n\nINTERVIEW PLAN (the instructions the interviewer was given for this round)\n").append(plan);
+            }
+        } catch (Exception e) {
+            log.debug("No interview plan for job {} round {}", jobPrefix, round, e);
+        }
+        return sb.toString();
     }
 
     /**
@@ -526,6 +588,56 @@ public class InterviewEvaluationService {
         }
         String level = raw.trim().toUpperCase();
         return List.of("NONE", "BASIC", "INTERMEDIATE", "ADVANCED", "EXPERT").contains(level) ? level : null;
+    }
+
+    private static final List<String> AREAS = List.of("COMMUNICATION", "FRONTEND", "BACKEND", "DATABASE",
+            "PROGRAMMING", "DEVOPS_CLOUD", "SYSTEM_DESIGN", "TESTING", "BEHAVIOURAL", "OTHER");
+
+    /** An area name the grader gave, normalised to one of {@link #AREAS}; anything else is OTHER. */
+    private static String areaOf(String raw) {
+        if (raw == null) {
+            return "OTHER";
+        }
+        String area = raw.trim().toUpperCase().replace(' ', '_').replace('&', '_').replace("__", "_");
+        if (area.startsWith("DEVOPS") || area.startsWith("CLOUD")) {
+            return "DEVOPS_CLOUD";
+        }
+        if (area.startsWith("BEHAVIO")) {
+            return "BEHAVIOURAL";
+        }
+        return AREAS.contains(area) ? area : "OTHER";
+    }
+
+    /**
+     * Applies the score against the full scope: each expected concept counts 1 answered well, a half partly, nothing
+     * wrong or never asked. The overall becomes that share out of 10, so half the concepts covered can never score as
+     * the whole job; the mean over what was asked stays as the assessed score. Too short a list (under 3) is not a
+     * scope, and the weighted area score stands.
+     */
+    static void applyScope(VoiceEvaluationResult result) {
+        List<VoiceEvaluationResult.Concept> concepts = result.getExpectedConcepts();
+        if (concepts == null || concepts.size() < 3) {
+            return;
+        }
+        double credit = 0;
+        int reached = 0;
+        for (VoiceEvaluationResult.Concept concept : concepts) {
+            switch (concept.getStatus()) {
+                case "CORRECT" -> credit += 1;
+                case "PARTIAL" -> credit += 0.5;
+                default -> { }
+            }
+            if (!"NOT_ASKED".equals(concept.getStatus())) {
+                reached++;
+            }
+        }
+        double scope = Math.round(credit / concepts.size() * 1000.0) / 10.0;
+        result.setScopeScore(scope);
+        if (result.getAssessedScore() == null) {
+            result.setAssessedScore(result.getOverallScore());
+        }
+        result.setOverallScore(Math.round(scope) / 10.0);
+        result.setCoverage(Math.round((double) reached / concepts.size() * 1000.0) / 1000.0);
     }
 
     /** Keeps a stated confidence inside 0..1 — models do return 85 for "85%". */
@@ -648,7 +760,39 @@ public class InterviewEvaluationService {
                     ? clampConfidence(node.path("confidence").asDouble())
                     : null;
 
+            List<VoiceEvaluationResult.Concept> concepts = new ArrayList<>();
+            if (node.path("expectedConcepts").isArray()) {
+                for (JsonNode c : node.path("expectedConcepts")) {
+                    String name = textOrNull(c, "concept");
+                    if (name == null || name.isBlank()) {
+                        continue;
+                    }
+                    String status = textOrNull(c, "status");
+                    status = status == null ? "NOT_ASKED" : status.trim().toUpperCase();
+                    if (!List.of("CORRECT", "PARTIAL", "INCORRECT", "NOT_ASKED").contains(status)) {
+                        status = "NOT_ASKED";
+                    }
+                    concepts.add(VoiceEvaluationResult.Concept.builder()
+                            .concept(name.trim())
+                            .area(areaOf(textOrNull(c, "area")))
+                            .status(status)
+                            .questionNumbers(questionNumbersOf(c))
+                            .build());
+                }
+            }
+            List<VoiceEvaluationResult.QuestionArea> questionAreas = new ArrayList<>();
+            if (node.path("questionAreas").isArray()) {
+                for (JsonNode q : node.path("questionAreas")) {
+                    if (q.path("questionNumber").canConvertToInt() && q.path("questionNumber").asInt() > 0) {
+                        questionAreas.add(new VoiceEvaluationResult.QuestionArea(
+                                q.path("questionNumber").asInt(), areaOf(textOrNull(q, "area"))));
+                    }
+                }
+            }
+
             return VoiceEvaluationResult.builder()
+                    .expectedConcepts(concepts)
+                    .questionAreas(questionAreas)
                     .confidence(confidence)
                     .overallScore(node.path("overallScore").asDouble())
                     .recommendation(textOrNull(node, "recommendation"))

@@ -344,7 +344,7 @@ public class InterviewContextService {
         // wants every candidate asked at the same level, and an interview that
         // eases off for whoever struggles makes those scores incomparable — so
         // "off" means the baseline stands, not that difficulty is unmanaged.
-        if (!templateService.resolve(schedule).adaptiveDifficulty()) {
+        if (!templateService.resolve(schedule).effectiveAdaptive()) {
             return null;
         }
         PerformanceSnapshot snapshot = performanceAnalyzer.analyze(schedule);

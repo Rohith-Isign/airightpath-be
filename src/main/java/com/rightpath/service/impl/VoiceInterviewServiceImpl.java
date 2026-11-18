@@ -561,7 +561,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             if (moreQuestionsWelcome) {
                 closingAsked = false;
             }
-            int turnsLeft = template.maxQuestions() - current.getTotalQuestionsAsked();
+            int turnsLeft = template.effectiveMax() - current.getTotalQuestionsAsked();
 
             String turnPrompt = contextService.buildNextQuestionPrompt(
                     current,
@@ -616,7 +616,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // a configuration problem, and holding the candidate longer does not
             // fix it.
             if (parsed.closing() && !ceilingHit && !closingAsked && !moreQuestionsWelcome) {
-                int remaining = template.maxQuestions() - current.getTotalQuestionsAsked();
+                int remaining = template.effectiveMax() - current.getTotalQuestionsAsked();
                 if (!topicCoverage.mayCloseOnCoverage(current, remaining)) {
                     ParsedInterviewReply redirected = askForOutstandingTopic(current);
                     if (redirected != null) {
