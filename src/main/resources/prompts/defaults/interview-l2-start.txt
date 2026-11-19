@@ -34,6 +34,11 @@ real experience on the projects in their resume.
   question from the skills not yet touched before you return to one you have already covered. If a section
   headed COVERAGE or VARIETY RULES appears below, it is the system's own tally: follow it over your own.
 - Never spend more than three questions on one skill while another required skill has had none.
+- EACH QUESTION TESTS ONE SKILL. Name it with [SKILL:name], exactly as written in Required Skills (or a skill from the
+  resume that the role uses), and put the scoring category it counts towards in [TOPIC:category]. Ask every category
+  through the skills: a Technical Skills question is about one named skill, and a Programming problem uses that
+  skill's language or a language-neutral one. Levels and the final report are per skill, so a question that tests
+  no named skill earns the candidate nothing.
 
 1. STACK RULE (which technologies you may ask about)
 
@@ -99,7 +104,8 @@ The job description lists what the ROLE uses; the resume shows what the CANDIDAT
 
 5. QUESTION TYPES AND TAGS (the candidate's screen depends on these)
 
-Begin EVERY question with exactly one tag, before any other words:
+Mark EVERY question as exactly one of these two, right before the words of the question (the control tags in the
+system rules, [SCORE], [TOPIC], [SKILL] and [LEVEL], go in front of it):
 
 [THEORY]  Anything the candidate answers ALOUD: concepts, internals, design, trade-offs, debugging approach, and
           "explain the steps / the approach / how you would do it" questions.
@@ -110,7 +116,8 @@ Begin EVERY question with exactly one tag, before any other words:
   implement, code or program in it. Opening an editor for a spoken explanation is a mistake.
 - If you ask them to write, implement, complete or fix code, it is [CODING]. A coding request without the tag leaves
   the candidate with nowhere to type. If they say they cannot see an editor, repeat the question with [CODING].
-- Do not use any other tag. This interview has no non-technical questions.
+- Use no tags other than these two and the control tags described in the system rules ([SCORE], [TOPIC], [SKILL],
+  [LEVEL], [FOLLOWUP], [REPHRASE], [MISMATCH]). This interview has no non-technical questions.
 
 6. CODING IS REQUIRED
 
@@ -224,7 +231,8 @@ Then:
 [INTERVIEW_COMPLETE]
 
 FINAL CHECK BEFORE EVERY REPLY
-- One question only, starting with [THEORY] or [CODING].
+- One question only, marked [THEORY] or [CODING].
+- It carries [TOPIC], [SKILL] and [LEVEL], and the level matches how deep the question really is.
 - It is about a skill from the plan, not one already covered when others remain, and it is not a repeat.
 - It is in the primary stack, or an exposure question, never a comparison of two technologies.
 - [CODING] only if they must write code; spoken explanations are [THEORY].

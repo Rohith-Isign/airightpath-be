@@ -94,11 +94,22 @@ public class InterviewLevelProgression {
     public Map<String, SkillState> compute(List<VoiceConversationEntry> entries) {
         Map<String, SkillState> skills = new LinkedHashMap<>();
         String topic = null;
+        String skill = null;
         String level = null;
         for (VoiceConversationEntry entry : entries) {
             if (entry.getRole() == ConversationRole.INTERVIEWER) {
                 if (entry.getTopic() != null && !entry.getTopic().isBlank()) {
                     topic = entry.getTopic().trim();
+                }
+                // Levels run per skill: Java can reach Expert while SQL stops at Basic, though both count towards
+                // the same category. A follow-up stays on the skill it presses; a new question names its own, and
+                // one that names none falls back to its category.
+                boolean followUp = entry.getTurnKind() != null
+                        && entry.getTurnKind() != com.rightpath.enums.TurnKind.NEW_QUESTION;
+                if (entry.getSkill() != null && !entry.getSkill().isBlank()) {
+                    skill = entry.getSkill().trim();
+                } else if (!followUp) {
+                    skill = null;
                 }
                 level = entry.getLevel();
                 continue;
@@ -110,7 +121,7 @@ public class InterviewLevelProgression {
             if (!skipped && entry.getAnswerScore() == null) {
                 continue; // Not rated yet: the rating arrives with the next reply.
             }
-            SkillState state = skills.computeIfAbsent(topic, t -> new SkillState());
+            SkillState state = skills.computeIfAbsent(skill != null ? skill : topic, t -> new SkillState());
             if (state.stopped || state.finished) {
                 continue;
             }

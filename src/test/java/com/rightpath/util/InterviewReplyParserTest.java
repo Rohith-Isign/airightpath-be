@@ -195,4 +195,14 @@ class InterviewReplyParserTest {
         assertThat(reply.spokenText()).doesNotContain("MISMATCH").startsWith("That code checks");
         assertThat(parser.parse("[SCORE:7] Good. Next question?").codeMismatch()).isFalse();
     }
+
+    @Test
+    @DisplayName("[SKILL] is read and never spoken")
+    void parsesSkill() {
+        ParsedInterviewReply reply = parser.parse(
+                "[SCORE:6] [TOPIC:Technical Skills] [SKILL:Spring Boot] [LEVEL:BASIC] What does @RestController do?");
+        assertThat(reply.skill()).isEqualTo("Spring Boot");
+        assertThat(reply.topic()).isEqualTo("Technical Skills");
+        assertThat(reply.spokenText()).isEqualTo("What does @RestController do?");
+    }
 }

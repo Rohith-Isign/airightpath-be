@@ -222,7 +222,9 @@ public class InterviewEvaluationService {
         int questionNumber = 0;
         for (VoiceConversationEntry entry : entries) {
             String speaker = switch (entry.getRole()) {
-                case INTERVIEWER -> schedule.getInterviewerName() + " (Question " + (++questionNumber) + ")";
+                case INTERVIEWER -> schedule.getInterviewerName() + " (Question " + (++questionNumber)
+                        + (entry.getSkill() != null ? " · skill: " + entry.getSkill() : "")
+                        + (entry.getLevel() != null ? " · level: " + entry.getLevel() : "") + ")";
                 case CANDIDATE -> "Candidate";
                 case SYSTEM -> "System";
             };
@@ -377,6 +379,11 @@ public class InterviewEvaluationService {
                                          CompletionReason completionReason, int totalQuestionsAsked,
                                          String facts) {
         String categorySection = categoryFormatter.buildEvaluationCategorySection(jobPrefix, round);
+        // Technical round: a score per skill as well as per category, so the report says how the candidate did in
+        // Java, in SQL, in React, and not only in "Technical Skills".
+        if (round == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
+            categorySection = SKILL_SCORES_TEMPLATE + System.lineSeparator() + "                    " + categorySection;
+        }
 
         // Try to load custom SUMMARY prompt
         String customInstructions = "";
@@ -432,6 +439,7 @@ public class InterviewEvaluationService {
                     "areasForImprovement": ["<area 1>", "<area 2>", "<area 3>"],
                     "expectedConcepts": [{"concept": "<a concept this interview should have tested>", "area": "<AREA>", "status": "<CORRECT | PARTIAL | INCORRECT | NOT_ASKED>", "questionNumbers": [<questions that tested it>]}],
                     "questionAreas": [{"questionNumber": <n>, "area": "<AREA>"}],
+                    "answerNotes": [{"questionNumber": <n>, "gotRight": "<what the answer got right>", "missed": "<what cost it the missing marks>"}],
                     "verdict": "<3-4 sentences, as a senior interviewer to the hiring manager>",
                     "observedSeniority": "<Fresher | Junior | Mid-level | Senior | Lead> (job asks for <experience>)",
                     "notCovered": ["<what the job needs that was never tested>"],
@@ -465,6 +473,19 @@ public class InterviewEvaluationService {
                 it earns at most partial credit for the approach, and never a strong programming score.
                 IMPORTANT: The recommendation must match the scores. A candidate whose answers were mostly rated low,
                 or whose interview ended early for poor performance, is not a hire, however the summary reads.
+                IMPORTANT: Where "skillScores" is asked for, give ONE entry for EVERY required skill in the JOB
+                above, plus any skill from the resume that the interview actually tested and the role uses. Name each
+                skill as the job names it. "category" is the scoring category it counts towards, from the categories
+                above. Score each skill only on the questions that tested it, and list them in "questionNumbers"; a
+                required skill no question tested gets an empty list and is not assessed, never a middling score.
+                "highestLevel" and "onResume" mean the same as for the categories.
+                IMPORTANT: In "answerNotes" give, for EVERY numbered question the candidate answered or skipped (not the
+                closing questions), one short phrase for what the answer got right and one for what it missed or got
+                wrong: the reason it did not score 10. For an answer rated 7/10, "missed" says what the other 3 marks
+                were for. Name the actual concept ("did not mention that @Transactional rolls back only on unchecked
+                exceptions"), never just "lacked depth". A full-marks answer has an empty "missed"; a skipped or
+                unanswered one has an empty "gotRight" and "missed" says it was not answered. Explain the rating the
+                answer was given at the time; if you disagree with it, say so in "missed".
                 IMPORTANT — THIS INTERVIEW ONLY. You are grading one interview with one candidate. Use only the job,
                 the plan and the transcript given here; never draw on any other candidate, interview or conversation,
                 and never credit something the candidate did not say in this transcript.
@@ -533,6 +554,12 @@ public class InterviewEvaluationService {
                 customInstructions,
                 earlyTerminationContext, injectionGuard.fence(transcript));
     }
+
+    /** The per-skill part of the grader's JSON, technical round only. */
+    private static final String SKILL_SCORES_TEMPLATE = "\"skillScores\": [{\"skill\": \"<a required skill of the job>\", "
+            + "\"category\": \"<the scoring category it counts towards>\", \"onResume\": <true | false>, "
+            + "\"score\": <0-10>, \"highestLevel\": \"<NONE | BASIC | INTERMEDIATE | ADVANCED | EXPERT>\", "
+            + "\"questionNumbers\": [<questions that tested it>], \"feedback\": \"<1-2 sentences>\"}],";
 
     /** Longest the interview plan given to the grader may be: enough for the plan, not a second transcript. */
     private static final int MAX_PLAN_CHARS = 8000;
@@ -875,7 +902,47 @@ public class InterviewEvaluationService {
                 });
             }
 
+            List<VoiceEvaluationResult.SkillScore> skillScores = new ArrayList<>();
+            if (node.path("skillScores").isArray()) {
+                for (JsonNode sNode : node.path("skillScores")) {
+                    String skill = textOrNull(sNode, "skill");
+                    if (skill == null || skill.isBlank()) {
+                        continue;
+                    }
+                    List<Integer> numbers = questionNumbersOf(sNode);
+                    boolean assessed = numbers == null || !numbers.isEmpty();
+                    skillScores.add(VoiceEvaluationResult.SkillScore.builder()
+                            .skill(skill.trim())
+                            .category(textOrNull(sNode, "category"))
+                            .mapped(sNode.path("onResume").isBoolean() ? sNode.path("onResume").asBoolean() : null)
+                            .score(assessed ? Math.max(0, Math.min(10, sNode.path("score").asDouble())) : 0)
+                            .highestLevel(highestLevelOf(sNode))
+                            .questionNumbers(numbers)
+                            .feedback(textOrNull(sNode, "feedback"))
+                            .assessed(assessed)
+                            .build());
+                }
+            }
+
+            List<VoiceEvaluationResult.AnswerNote> answerNotes = new ArrayList<>();
+            if (node.path("answerNotes").isArray()) {
+                for (JsonNode n : node.path("answerNotes")) {
+                    if (!n.path("questionNumber").canConvertToInt() || n.path("questionNumber").asInt() <= 0) {
+                        continue;
+                    }
+                    String gotRight = textOrNull(n, "gotRight");
+                    String missed = textOrNull(n, "missed");
+                    if ((gotRight == null || gotRight.isBlank()) && (missed == null || missed.isBlank())) {
+                        continue;
+                    }
+                    answerNotes.add(new VoiceEvaluationResult.AnswerNote(n.path("questionNumber").asInt(),
+                            gotRight == null ? "" : gotRight.trim(), missed == null ? "" : missed.trim()));
+                }
+            }
+
             return VoiceEvaluationResult.builder()
+                    .answerNotes(answerNotes)
+                    .skillScores(skillScores)
                     .verdict(textOrNull(node, "verdict"))
                     .observedSeniority(textOrNull(node, "observedSeniority"))
                     .notCovered(notCovered)

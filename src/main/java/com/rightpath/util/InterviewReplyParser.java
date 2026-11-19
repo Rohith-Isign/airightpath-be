@@ -36,6 +36,10 @@ public class InterviewReplyParser {
     private static final Pattern SCORE = Pattern.compile(
             "\\[\\s*SCORE\\s*:\\s*(10|\\d)\\s*(?:/\\s*10\\s*)?\\]", Pattern.CASE_INSENSITIVE);
 
+    /** {@code [SKILL:Spring Boot]} — the specific skill from the job this question tests. */
+    private static final Pattern SKILL = Pattern.compile(
+            "\\[\\s*SKILL\\s*:\\s*([^\\]]{1,60})\\]", Pattern.CASE_INSENSITIVE);
+
     /** {@code [TOPIC:Data Structures]} — which evaluation category this question is for. */
     private static final Pattern TOPIC = Pattern.compile(
             "\\[\\s*TOPIC\\s*:\\s*([^\\]]{1,60})\\]", Pattern.CASE_INSENSITIVE);
@@ -90,6 +94,8 @@ public class InterviewReplyParser {
 
         Integer score = firstInt(SCORE, reply);
         String topic = firstGroup(TOPIC, reply);
+        String skill = firstGroup(SKILL, reply);
+        skill = skill == null || skill.isBlank() ? null : skill.trim();
         String level = firstGroup(LEVEL, reply);
         level = level == null ? null : level.trim().toUpperCase();
         boolean codeMismatch = MISMATCH.matcher(reply).find();
@@ -109,13 +115,14 @@ public class InterviewReplyParser {
         String spoken = conductPolicy.stripCompletionMarker(reply);
         spoken = SCORE.matcher(spoken).replaceAll("");
         spoken = TOPIC.matcher(spoken).replaceAll("");
+        spoken = SKILL.matcher(spoken).replaceAll("");
         spoken = LEVEL.matcher(spoken).replaceAll("");
         spoken = MISMATCH.matcher(spoken).replaceAll("");
         spoken = FOLLOW_UP.matcher(spoken).replaceAll("");
         spoken = REPHRASE.matcher(spoken).replaceAll("");
         spoken = promoteCodingTag(spoken);
 
-        return new ParsedInterviewReply(spoken, score, kind, topic, closing, level, codeMismatch);
+        return new ParsedInterviewReply(spoken, score, kind, topic, closing, level, codeMismatch, skill);
     }
 
     /**

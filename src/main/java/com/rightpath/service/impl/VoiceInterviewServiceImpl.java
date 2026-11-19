@@ -701,6 +701,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         .content(spoken)
                         .topic(turn.hasTopic() ? turn.topic() : null)
                         .level(levelOf(turn))
+                        .skill(levelOf(turn) == null && turn.closing() ? null : turn.skill())
                         .turnKind(turn.turnKind())
                         .build());
 
@@ -876,6 +877,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     .content(parsed.spokenText())
                     .topic(parsed.hasTopic() ? parsed.topic() : null)
                     .level(levelOf(parsed))
+                    .skill(parsed.closing() ? null : parsed.skill())
                     .turnKind(parsed.turnKind())
                     .build());
             schedule.incrementQuestionsAsked();
@@ -1230,7 +1232,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     String topic = retry.topic() != null ? retry.topic() : original.topic();
                     return new ParsedInterviewReply(retry.spokenText(), score, retry.turnKind(), topic, false,
                             retry.level() != null ? retry.level() : original.level(),
-                            original.codeMismatch() || retry.codeMismatch());
+                            original.codeMismatch() || retry.codeMismatch(),
+                            retry.skill() != null ? retry.skill() : original.skill());
                 }
             }
         } catch (Exception e) {
@@ -1310,7 +1313,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     return new ParsedInterviewReply(retry.spokenText(), score, TurnKind.NEW_QUESTION,
                             retry.topic() != null ? retry.topic() : original.topic(), retry.closing(),
                             retry.level() != null ? retry.level() : original.level(),
-                            original.codeMismatch() || retry.codeMismatch());
+                            original.codeMismatch() || retry.codeMismatch(),
+                            retry.skill() != null ? retry.skill() : original.skill());
                 }
             }
         } catch (Exception e) {

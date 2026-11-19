@@ -350,8 +350,16 @@ public class InterviewConductPolicy {
                 trade-offs under real constraints, design at scale. Only interview questions carry a level: put no \
                 [LEVEL] on the introduction, the closing "any questions for us" or a goodbye.
 
-                Example: [SCORE:7] [TOPIC:Technical Skills] [LEVEL:INTERMEDIATE] How would you handle validation \
-                errors consistently across a set of REST endpoints?""";
+                Skill. Also put [SKILL:name] on EVERY question: the one specific skill it tests, named exactly as in \
+                the job's required skills (for example Java, Spring Boot, SQL, React), or a skill from the resume that \
+                the role uses. [TOPIC] is the scoring category the question counts towards; [SKILL] is what it \
+                actually tests. Cover the job's required skills one at a time, those on the resume first, each taken \
+                up its own levels; levels are tracked per skill. Ask categories through their skills: a Technical \
+                Skills question is about one named skill, and a Programming problem uses that skill's language or a \
+                language-neutral one.
+
+                Example: [SCORE:7] [TOPIC:Technical Skills] [SKILL:Spring Boot] [LEVEL:INTERMEDIATE] How would you \
+                handle validation errors consistently across a set of REST endpoints?""";
     }
 
     private String tagProtocol() {

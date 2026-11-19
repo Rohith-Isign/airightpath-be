@@ -20,6 +20,8 @@ import com.rightpath.enums.TurnKind;
  *                     when the model did not say. Drives coverage.
  * @param closing      whether the model asked to end the interview here.
  * @param level        BASIC, INTERMEDIATE, ADVANCED or EXPERT, or null when the model did not say (technical round only).
+ * @param skill        the specific skill from the job (or a job-relevant resume skill) the question tests, such
+ *                     as "Java" or "Spring Boot", or null when not named. Levels progress per skill.
  * @param codeMismatch whether the model judged the code just submitted to solve a different problem than the one
  *                     asked, so it earns nothing for that question.
  */
@@ -30,18 +32,25 @@ public record ParsedInterviewReply(
         String topic,
         boolean closing,
         String level,
-        boolean codeMismatch) {
+        boolean codeMismatch,
+        String skill) {
+
+    /** A reply that names no skill: every caller from before skills were tagged. */
+    public ParsedInterviewReply(String spokenText, Integer answerScore, TurnKind turnKind, String topic,
+            boolean closing, String level, boolean codeMismatch) {
+        this(spokenText, answerScore, turnKind, topic, closing, level, codeMismatch, null);
+    }
 
     /** A reply that flags no mismatch: every caller that predates the flag. */
     public ParsedInterviewReply(String spokenText, Integer answerScore, TurnKind turnKind, String topic,
             boolean closing, String level) {
-        this(spokenText, answerScore, turnKind, topic, closing, level, false);
+        this(spokenText, answerScore, turnKind, topic, closing, level, false, null);
     }
 
     /** A reply with no level: every caller that predates levels, and any model that does not give one. */
     public ParsedInterviewReply(String spokenText, Integer answerScore, TurnKind turnKind, String topic,
             boolean closing) {
-        this(spokenText, answerScore, turnKind, topic, closing, null, false);
+        this(spokenText, answerScore, turnKind, topic, closing, null, false, null);
     }
 
     /** True when the model said which level this question is at. */

@@ -52,3 +52,9 @@ JUDGE LIKE A SENIOR INTERVIEWER
   follow-up is shallow, and is not the same as real understanding.
 - End with the verdict a person would give the hiring manager: what kind of candidate this is, the level they actually
   showed against the level the job asks for, what is still not covered, and what they would need.
+
+SKILL BY SKILL, ANSWER BY ANSWER
+- Score each required skill of the job on its own, from the questions that tested it (each is labelled with its
+  skill), and give the level it reached. A required skill nobody asked about is not assessed and stays open.
+- For every answer, say briefly what it got right and what cost it the missing marks: for an answer rated 7/10,
+  what the other 3 were for. Name the actual concept that was missing or wrong, not "lacked depth".

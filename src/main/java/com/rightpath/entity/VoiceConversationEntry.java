@@ -109,6 +109,15 @@ public class VoiceConversationEntry {
     private String topic;
 
     /**
+     * The specific skill an INTERVIEWER question tests ("Java", "Spring Boot", "SQL"), from the job's required skills or
+     * a job-relevant skill on the resume. The topic is the scoring category it counts towards; the skill is what is
+     * actually being tested, and the level progression and the skill-wise report run on it. Null on older turns, on
+     * the introduction and closing, and on every CANDIDATE row.
+     */
+    @Column(length = 80)
+    private String skill;
+
+    /**
      * How deep this INTERVIEWER question goes: BASIC, INTERMEDIATE, ADVANCED or EXPERT. Set on the technical
      * round only, and null on a behavioural question, on a turn the model did not label, and on every CANDIDATE
      * row and every turn recorded before levels were asked for. The column is added by the schema update, nullable.

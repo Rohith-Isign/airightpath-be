@@ -96,6 +96,22 @@ public class InterviewContextService {
             messages.add(Map.of("role", "system", "content", coverageStatus));
         }
 
+        // The skills to tag questions with, named as the job names them, so the skill-wise report and the level
+        // progression line up with the job description rather than with whatever the model calls them.
+        if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
+            try {
+                String skills = placeholderResolver.resolveJobPlaceholders("{{skills}}", schedule.getJobPrefix());
+                if (skills != null && !skills.isBlank() && !skills.contains("{{")) {
+                    messages.add(Map.of("role", "system", "content",
+                            "SKILLS FOR [SKILL] TAGS — the job's required skills: " + skills.trim()
+                                    + ". Use these names exactly. A skill on the resume that is not listed may be "
+                                    + "used only if the role needs it."));
+                }
+            } catch (Exception e) {
+                log.debug("No skill list for job {}", schedule.getJobPrefix(), e);
+            }
+        }
+
         // Which level each skill is at, decided by the server from the ratings so far (technical round only).
         if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
             String levels = levelProgression.buildDirective(

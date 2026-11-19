@@ -96,4 +96,23 @@ class InterviewLevelProgressionTest {
         answer(7);
         assertThat(progression.buildDirective(entries)).contains("Java: ask at INTERMEDIATE next");
     }
+
+    @Test
+    @DisplayName("levels progress per skill, not per category: Java moves up while SQL in the same category stops")
+    void perSkill() {
+        entries.add(VoiceConversationEntry.builder().role(ConversationRole.INTERVIEWER).content("q")
+                .topic("Technical Skills").skill("Java").level("BASIC").build());
+        answer(8);
+        entries.add(VoiceConversationEntry.builder().role(ConversationRole.INTERVIEWER).content("q")
+                .topic("Technical Skills").skill("SQL").level("BASIC").build());
+        answer(2);
+        entries.add(VoiceConversationEntry.builder().role(ConversationRole.INTERVIEWER).content("q")
+                .topic("Technical Skills").skill("SQL").level("BASIC").build());
+        answer(3);
+
+        Map<String, InterviewLevelProgression.SkillState> skills = progression.compute(entries);
+        assertThat(skills.get("Java").currentLevel()).isEqualTo("INTERMEDIATE");
+        assertThat(skills.get("SQL").isStopped()).isTrue();
+        assertThat(skills).doesNotContainKey("Technical Skills");
+    }
 }

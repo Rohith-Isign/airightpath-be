@@ -66,8 +66,50 @@ public class VoiceEvaluationResult {
      */
     private List<Concept> expectedConcepts;
 
+    /**
+     * One entry per skill the job requires (and any job-relevant resume skill the interview tested): its score, the
+     * level reached, the category it counts towards and the questions it rests on. The skill-wise report reads this;
+     * the categories stay as the weighted scoring groups. Empty on a behavioural round and on older results.
+     */
+    private List<SkillScore> skillScores;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class SkillScore {
+        private String skill;
+        /** The scoring category it counts towards, as configured for the job. */
+        private String category;
+        /** Whether the resume, projects or introduction showed it. */
+        private Boolean mapped;
+        private double score;
+        private String highestLevel;
+        private List<Integer> questionNumbers;
+        private String feedback;
+        /** False when no question tested it: shown as not assessed, never as a zero. */
+        @Builder.Default
+        private boolean assessed = true;
+    }
+
     /** The area each interviewer question was about (Frontend, Backend, Database, Communication and so on). */
     private List<QuestionArea> questionAreas;
+
+    /**
+     * For each answered question, what the answer got right and what cost it the missing marks ("7/10: the missing 3
+     * were for not mentioning rollback on checked exceptions"), so a reviewer can see why each answer scored what it did.
+     */
+    private List<AnswerNote> answerNotes;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class AnswerNote {
+        private int questionNumber;
+        private String gotRight;
+        private String missed;
+    }
 
     /**
      * The score against the full scope, 0 to 100: each expected concept counts 1 when answered well, a half when
