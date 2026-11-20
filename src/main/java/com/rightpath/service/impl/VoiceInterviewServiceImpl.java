@@ -691,8 +691,14 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 // the reply it gives to it. Written back onto the answer it is
                 // about, so difficulty and the reviewer both read it where it
                 // belongs rather than off the question that followed.
-                if ((turn.hasScore() || turn.codeMismatch()) && !skipped) {
-                    mismatchFlagged.set(applyScoreToLastAnswer(s.getId(), turn.answerScore(), turn.codeMismatch()));
+                // The interviewer found the answer was not in English, including another language written out in
+                // English letters, which the speech check cannot see. Marked, scored 0, and the candidate is told.
+                if (turn.notEnglish() && !skipped) {
+                    markLastAnswerNotEnglish(s.getId());
+                }
+                if ((turn.hasScore() || turn.codeMismatch() || turn.notEnglish()) && !skipped) {
+                    mismatchFlagged.set(applyScoreToLastAnswer(s.getId(),
+                            turn.notEnglish() ? Integer.valueOf(0) : turn.answerScore(), turn.codeMismatch()));
                 }
 
                 entryRepository.save(VoiceConversationEntry.builder()
@@ -915,6 +921,33 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         sharedState.delete(AudioTranscriptionServiceKeys.total(scheduleId));
         sharedState.delete(AudioTranscriptionServiceKeys.foreign(scheduleId));
         sharedState.delete(AudioTranscriptionServiceKeys.name(scheduleId));
+        sharedState.delete(com.rightpath.service.AudioTranscriptionService.languageWarnedKey(scheduleId));
+    }
+
+    /**
+     * Marks the last answer as not in English when the interviewer saw it from the text, and tells the candidate.
+     * Left alone if the speech check had already marked it, so the candidate is not told twice.
+     */
+    private void markLastAnswerNotEnglish(Long scheduleId) {
+        try {
+            VoiceConversationEntry last = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId)
+                    .stream()
+                    .filter(e -> e.getRole() == ConversationRole.CANDIDATE)
+                    .reduce((first, second) -> second)
+                    .orElse(null);
+            if (last == null || last.getContent() == null || last.getContent().startsWith(NOT_IN_ENGLISH)) {
+                return;
+            }
+            last.setContent(NOT_IN_ENGLISH + ": the interviewer found this answer was not in English (another "
+                    + "language, or one written out in English letters). It earns no marks, including for "
+                    + "communication.]\n" + last.getContent());
+            entryRepository.save(last);
+            messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/language-warning",
+                    Map.of("source", "interviewer"));
+            log.info("Interview {}: the interviewer found the last answer was not in English", scheduleId);
+        } catch (Exception e) {
+            log.warn("Could not mark the last answer of interview {} as not in English", scheduleId, e);
+        }
     }
 
     private static String capitalise(String value) {

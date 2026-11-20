@@ -205,4 +205,16 @@ class InterviewReplyParserTest {
         assertThat(reply.topic()).isEqualTo("Technical Skills");
         assertThat(reply.spokenText()).isEqualTo("What does @RestController do?");
     }
+
+    @Test
+    @DisplayName("[NOT_ENGLISH] is read and never spoken, in any of its spellings")
+    void parsesNotEnglish() {
+        ParsedInterviewReply reply = parser.parse("[SCORE:0] [NOT_ENGLISH] [REPHRASE] I can only assess answers in "
+                + "English. Could you answer that again in English?");
+        assertThat(reply.notEnglish()).isTrue();
+        assertThat(reply.turnKind()).isEqualTo(TurnKind.REPHRASE);
+        assertThat(reply.spokenText()).startsWith("I can only assess answers in English.");
+        assertThat(parser.parse("[NOT IN ENGLISH] Please answer in English.").notEnglish()).isTrue();
+        assertThat(parser.parse("[SCORE:7] Good. Next?").notEnglish()).isFalse();
+    }
 }

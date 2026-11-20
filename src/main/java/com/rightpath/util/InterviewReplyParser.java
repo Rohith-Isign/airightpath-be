@@ -49,6 +49,13 @@ public class InterviewReplyParser {
             "\\[\\s*LEVEL\\s*:\\s*(BASIC|INTERMEDIATE|ADVANCED|EXPERT)\\s*\\]", Pattern.CASE_INSENSITIVE);
 
     /** {@code [MISMATCH]} — the code just submitted solves a different problem than the one asked. */
+    /**
+     * {@code [NOT_ENGLISH]} — the answer just given was not in English: another language, or one written out in English
+     * letters by speech-to-text. The interviewer can see that in the text even when the speech check could not.
+     */
+    private static final Pattern NOT_ENGLISH = Pattern.compile(
+            "\\[\\s*NOT[ _-]?(?:IN[ _-]?)?ENGLISH\\s*\\]", Pattern.CASE_INSENSITIVE);
+
     private static final Pattern MISMATCH = Pattern.compile(
             "\\[\\s*(MISMATCH|OFF[ _-]?TOPIC)\\s*\\]", Pattern.CASE_INSENSITIVE);
 
@@ -99,6 +106,7 @@ public class InterviewReplyParser {
         String level = firstGroup(LEVEL, reply);
         level = level == null ? null : level.trim().toUpperCase();
         boolean codeMismatch = MISMATCH.matcher(reply).find();
+        boolean notEnglish = NOT_ENGLISH.matcher(reply).find();
 
         // A reply tagged both ways is the model hedging. Rephrase is the stronger
         // signal — it says the question itself did not land — so it wins, and
@@ -118,11 +126,12 @@ public class InterviewReplyParser {
         spoken = SKILL.matcher(spoken).replaceAll("");
         spoken = LEVEL.matcher(spoken).replaceAll("");
         spoken = MISMATCH.matcher(spoken).replaceAll("");
+        spoken = NOT_ENGLISH.matcher(spoken).replaceAll("");
         spoken = FOLLOW_UP.matcher(spoken).replaceAll("");
         spoken = REPHRASE.matcher(spoken).replaceAll("");
         spoken = promoteCodingTag(spoken);
 
-        return new ParsedInterviewReply(spoken, score, kind, topic, closing, level, codeMismatch, skill);
+        return new ParsedInterviewReply(spoken, score, kind, topic, closing, level, codeMismatch, skill, notEnglish);
     }
 
     /**

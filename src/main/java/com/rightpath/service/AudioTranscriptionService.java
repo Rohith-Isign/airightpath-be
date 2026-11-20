@@ -51,6 +51,11 @@ public class AudioTranscriptionService {
         return "lang-name:" + scheduleId;
     }
 
+    /** Set once the candidate has been warned during the answer being recorded, so the warning is not repeated. */
+    public static String languageWarnedKey(Long scheduleId) {
+        return "lang-warned:" + scheduleId;
+    }
+
     /**
      * Whether a detection result is really another language. Two conditions, because detection on a few seconds of
      * accented English sometimes names another language (that is why transcription is pinned to English): the
@@ -116,6 +121,12 @@ public class AudioTranscriptionService {
                         sharedState.set(languageNameKey(scheduleId), language.get()[0], LAST_PUBLISHED_TTL);
                         log.info("Chunk {} for schedule {} was spoken in {}, not English", chunkIndex, scheduleId,
                                 language.get()[0]);
+                        // Told while they are still speaking, once per answer, so they can switch to English
+                        // before they finish rather than find out afterwards.
+                        if (sharedState.setIfAbsent(languageWarnedKey(scheduleId), "1", LAST_PUBLISHED_TTL)) {
+                            messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/language-warning",
+                                    Map.of("language", language.get()[0], "live", true));
+                        }
                     }
                 }
             } catch (Exception e) {

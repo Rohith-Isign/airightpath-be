@@ -33,24 +33,31 @@ public record ParsedInterviewReply(
         boolean closing,
         String level,
         boolean codeMismatch,
-        String skill) {
+        String skill,
+        boolean notEnglish) {
+
+    /** A reply that does not flag the answer as non-English: every caller from before the flag. */
+    public ParsedInterviewReply(String spokenText, Integer answerScore, TurnKind turnKind, String topic,
+            boolean closing, String level, boolean codeMismatch, String skill) {
+        this(spokenText, answerScore, turnKind, topic, closing, level, codeMismatch, skill, false);
+    }
 
     /** A reply that names no skill: every caller from before skills were tagged. */
     public ParsedInterviewReply(String spokenText, Integer answerScore, TurnKind turnKind, String topic,
             boolean closing, String level, boolean codeMismatch) {
-        this(spokenText, answerScore, turnKind, topic, closing, level, codeMismatch, null);
+        this(spokenText, answerScore, turnKind, topic, closing, level, codeMismatch, null, false);
     }
 
     /** A reply that flags no mismatch: every caller that predates the flag. */
     public ParsedInterviewReply(String spokenText, Integer answerScore, TurnKind turnKind, String topic,
             boolean closing, String level) {
-        this(spokenText, answerScore, turnKind, topic, closing, level, false, null);
+        this(spokenText, answerScore, turnKind, topic, closing, level, false, null, false);
     }
 
     /** A reply with no level: every caller that predates levels, and any model that does not give one. */
     public ParsedInterviewReply(String spokenText, Integer answerScore, TurnKind turnKind, String topic,
             boolean closing) {
-        this(spokenText, answerScore, turnKind, topic, closing, null, false, null);
+        this(spokenText, answerScore, turnKind, topic, closing, null, false, null, false);
     }
 
     /** True when the model said which level this question is at. */
