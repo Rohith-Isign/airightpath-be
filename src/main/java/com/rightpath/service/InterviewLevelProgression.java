@@ -92,6 +92,14 @@ public class InterviewLevelProgression {
      * model did not label.</p>
      */
     public Map<String, SkillState> compute(List<VoiceConversationEntry> entries) {
+        return compute(entries, List.of());
+    }
+
+    /**
+     * As above, with the job's required skills: a tagged skill is counted under the job's own name for it ("python 3"
+     * under "Python"), so the same skill is never tracked twice under two spellings.
+     */
+    public Map<String, SkillState> compute(List<VoiceConversationEntry> entries, List<String> required) {
         Map<String, SkillState> skills = new LinkedHashMap<>();
         String topic = null;
         String skill = null;
@@ -107,7 +115,8 @@ public class InterviewLevelProgression {
                 boolean followUp = entry.getTurnKind() != null
                         && entry.getTurnKind() != com.rightpath.enums.TurnKind.NEW_QUESTION;
                 if (entry.getSkill() != null && !entry.getSkill().isBlank()) {
-                    skill = entry.getSkill().trim();
+                    String named = canonical(entry.getSkill(), required);
+                    skill = named != null ? named : entry.getSkill().trim();
                 } else if (!followUp) {
                     skill = null;
                 }
@@ -159,7 +168,12 @@ public class InterviewLevelProgression {
      * finished. Null when nothing has been rated with a skill and level yet.
      */
     public String buildDirective(List<VoiceConversationEntry> entries) {
-        Map<String, SkillState> skills = compute(entries);
+        return buildDirective(entries, List.of());
+    }
+
+    /** As above, counting each skill under the job's own name for it. */
+    public String buildDirective(List<VoiceConversationEntry> entries, List<String> required) {
+        Map<String, SkillState> skills = compute(entries, required);
         if (skills.isEmpty()) {
             return null;
         }
@@ -189,6 +203,151 @@ public class InterviewLevelProgression {
                 .append("reply is not counted above: if you rate it ").append(passScore)
                 .append(" or more, ask that skill one level higher next; below ").append(passScore)
                 .append(", stay at the same level or move to another skill. Tag every question's [LEVEL] to match.");
+        return sb.toString();
+    }
+
+    // ---------------------------------------------------------------- sequence and completion
+
+    private static final java.util.regex.Pattern CODING = java.util.regex.Pattern.compile(
+            "^\\s*\\[\\s*CODING\\s*\\]", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * The job's own name for a tagged skill, or null when it is none of the job's skills. Matched ignoring case and
+     * punctuation, and either way round, so "Numpy" is "NumPy" and "Python programming" is "Python".
+     */
+    public static String canonical(String tagged, List<String> required) {
+        if (tagged == null || tagged.isBlank() || required == null || required.isEmpty()) {
+            return null;
+        }
+        String t = squash(tagged);
+        for (String skill : required) {
+            if (squash(skill).equals(t)) {
+                return skill;
+            }
+        }
+        for (String skill : required) {
+            String s = squash(skill);
+            if (!s.isEmpty() && (t.contains(s) || s.contains(t))) {
+                return skill;
+            }
+        }
+        return null;
+    }
+
+    private static String squash(String value) {
+        return value.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9+#]", "");
+    }
+
+    /**
+     * The skill to ask about now: the one already in progress, until it is finished or stopped; then the next required
+     * skill not yet started. One skill at a time, all its levels, before the next.
+     */
+    String currentSkill(List<VoiceConversationEntry> entries, List<String> required, Map<String, SkillState> states) {
+        String lastAsked = null;
+        for (VoiceConversationEntry entry : entries) {
+            if (entry.getRole() == ConversationRole.INTERVIEWER && entry.getSkill() != null) {
+                String named = canonical(entry.getSkill(), required);
+                if (named != null) {
+                    lastAsked = named;
+                }
+            }
+        }
+        if (lastAsked != null && !isDone(states.get(lastAsked))) {
+            return lastAsked;
+        }
+        return required.stream().filter(s -> !isDone(states.get(s))).filter(s -> !states.containsKey(s))
+                .findFirst()
+                .orElseGet(() -> required.stream().filter(s -> !isDone(states.get(s))).findFirst().orElse(null));
+    }
+
+    private static boolean isDone(SkillState state) {
+        return state != null && (state.finished || state.stopped);
+    }
+
+    /** Required skills not yet finished or stopped: what still has to be assessed before the interview may close. */
+    public List<String> unfinished(List<VoiceConversationEntry> entries, List<String> required) {
+        Map<String, SkillState> states = compute(entries, required);
+        return required.stream().filter(s -> !isDone(states.get(s))).toList();
+    }
+
+    /**
+     * Distinct coding tasks asked and answered. A coding question re-asked or followed up (a correction or recovery
+     * attempt) is not a new task, so it does not count again.
+     */
+    public static int distinctCodingTasks(List<VoiceConversationEntry> entries) {
+        int count = 0;
+        boolean open = false;
+        for (VoiceConversationEntry entry : entries) {
+            if (entry.getRole() == ConversationRole.INTERVIEWER) {
+                boolean coding = entry.getContent() != null && CODING.matcher(entry.getContent()).find();
+                boolean fresh = entry.getTurnKind() == null
+                        || entry.getTurnKind() == com.rightpath.enums.TurnKind.NEW_QUESTION;
+                open = coding && fresh;
+            } else if (open && entry.getRole() == ConversationRole.CANDIDATE) {
+                boolean skipped = entry.getContent() != null && SKIPPED_CONTENT.equals(entry.getContent().trim());
+                if (!skipped) {
+                    count++;
+                }
+                open = false;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * What is still missing before the interview may close, in words for the interviewer, or null when it is complete:
+     * every required skill finished or stopped, and the coding tasks done.
+     */
+    public String completionGap(List<VoiceConversationEntry> entries, List<String> required, int minCodingTasks) {
+        List<String> open = unfinished(entries, required);
+        int coding = distinctCodingTasks(entries);
+        if (open.isEmpty() && coding >= minCodingTasks) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder("The assessment is not complete, so do NOT close the interview yet.");
+        if (!open.isEmpty()) {
+            sb.append(" Skills still to be taken through their levels (until they reach Expert or stop): ")
+                    .append(String.join(", ", open)).append('.');
+        }
+        if (coding < minCodingTasks) {
+            sb.append(" Distinct coding tasks done: ").append(coding).append(" of the ").append(minCodingTasks)
+                    .append(" needed; a re-asked or corrected task does not count again.");
+        }
+        sb.append(" Ask the next question on what is missing now, with all its tags.");
+        return sb.toString();
+    }
+
+    /**
+     * The order instruction given every turn: which skill to ask about now, which come after it, and that no skill
+     * outside the job's list may be used. Null when the job lists no skills.
+     */
+    public String buildSequenceDirective(List<VoiceConversationEntry> entries, List<String> required) {
+        if (required == null || required.isEmpty()) {
+            return null;
+        }
+        Map<String, SkillState> states = compute(entries, required);
+        String current = currentSkill(entries, required, states);
+        StringBuilder sb = new StringBuilder("ASSESSMENT SEQUENCE — decided by the system; follow it exactly.\n")
+                .append("The job's skills are: ").append(String.join(", ", required))
+                .append(". Tag [SKILL] with one of these names only. Never assess a skill or domain outside this list ")
+                .append("(scoring categories such as Logical Reasoning are not skills to interview on).\n");
+        if (current == null) {
+            sb.append("Every skill has been taken as far as the candidate can go. Complete any coding requirement, ")
+                    .append("then close.");
+            return sb.toString();
+        }
+        SkillState state = states.get(current);
+        sb.append("Ask your next question on ").append(current).append(" at ")
+                .append(state == null ? "BASIC" : state.currentLevel())
+                .append(". Stay on ").append(current)
+                .append(" until it reaches Expert or stops at a level; only then move to the next skill. ")
+                .append("A follow-up must test a different competency at that level, never the same question again.");
+        List<String> after = required.stream().filter(s -> !s.equals(current)).filter(s -> !isDone(states.get(s)))
+                .toList();
+        if (!after.isEmpty()) {
+            sb.append("\nStill to come, in this order unless the resume shows a later one is the candidate's stronger ")
+                    .append("skill: ").append(String.join(", ", after)).append('.');
+        }
         return sb.toString();
     }
 }

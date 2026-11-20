@@ -234,6 +234,11 @@ public class InterviewEvaluationService {
             if (entry.getRole() == ConversationRole.CANDIDATE && entry.getAnswerScore() != null) {
                 transcript.append("[Rated at the time: ").append(entry.getAnswerScore()).append("/10]\n");
             }
+            // A reviewer's correction replaces the rating at the time; both stay on record.
+            if (entry.getRole() == ConversationRole.CANDIDATE && entry.getReviewedScore() != null) {
+                transcript.append("[Reviewer changed this to ").append(entry.getReviewedScore()).append("/10: ")
+                        .append(entry.getReviewNote() == null ? "" : entry.getReviewNote()).append("]\n");
+            }
             if (entry.getRole() == ConversationRole.CANDIDATE && Boolean.TRUE.equals(entry.getCodeMismatch())) {
                 transcript.append("[MISMATCH: this code solves a different problem than the one asked. It earns no ")
                         .append("credit for that question.]\n");
@@ -270,6 +275,12 @@ public class InterviewEvaluationService {
         if (Math.abs(modelOverall - result.getOverallScore()) >= 1.0) {
             log.info("Schedule {}: the model's overall score {} was replaced by the weighted area score {}",
                     scheduleId, modelOverall, result.getOverallScore());
+        }
+
+        // The skill report covers the job's skills and nothing else: each under the job's own name, and every one of
+        // them present, a skill nobody asked about shown as not assessed rather than missing or scored zero.
+        if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
+            alignSkillsToJob(result, requiredSkills(schedule.getJobPrefix()));
         }
 
         // Measured against everything the interview should have covered, not only what it reached.
@@ -512,6 +523,8 @@ public class InterviewEvaluationService {
                 mostly incorrect or very shallow answers; 0-2 for no relevant answer. A skipped question is a missing
                 answer, not a wrong one: never invent evidence for a category that was not asked about, and say in
                 its feedback that it was not covered.
+                IMPORTANT: Where an answer carries "[Reviewer changed this to n/10: reason]", a person has reviewed it:
+                use THEIR score and reason for that answer, not the rating at the time, everywhere it counts.
                 IMPORTANT: Answers carry "[Rated at the time: n/10]" from the interviewer. Treat those as strong
                 evidence: a category's score should sit close to the ratings of the answers that bear on it, and move
                 away from them only for a reason you state in its feedback.
@@ -737,6 +750,45 @@ public class InterviewEvaluationService {
     /** What the candidate earned out of 100: the scope score where there is one, otherwise the overall score. */
     static double earnedOutOf100(VoiceEvaluationResult result) {
         return result.getScopeScore() != null ? result.getScopeScore() : result.getOverallScore() * 10;
+    }
+
+    /** The job's required skills as it lists them; empty when there are none or they cannot be read. */
+    private List<String> requiredSkills(String jobPrefix) {
+        try {
+            String skills = placeholderResolver.resolveJobPlaceholders("{{skills}}", jobPrefix);
+            return skills == null || skills.isBlank() || skills.contains("{{") ? List.of()
+                    : com.rightpath.util.SkillMatcher.parseSkills(skills);
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    /**
+     * Keeps the per-skill scores to the job's skills, under the job's names, and adds any required skill the grader
+     * left out as not assessed. A skill that is none of the job's (a scoring category, or a topic such as "Data
+     * Cleaning") is dropped from the skill report; it still counts through its category.
+     */
+    static void alignSkillsToJob(VoiceEvaluationResult result, List<String> required) {
+        if (required == null || required.isEmpty() || result.getSkillScores() == null) {
+            return;
+        }
+        java.util.Map<String, VoiceEvaluationResult.SkillScore> byName = new java.util.LinkedHashMap<>();
+        for (VoiceEvaluationResult.SkillScore score : result.getSkillScores()) {
+            String named = InterviewLevelProgression.canonical(score.getSkill(), required);
+            if (named == null || byName.containsKey(named)) {
+                continue;
+            }
+            score.setSkill(named);
+            byName.put(named, score);
+        }
+        List<VoiceEvaluationResult.SkillScore> aligned = new ArrayList<>();
+        for (String skill : required) {
+            aligned.add(byName.getOrDefault(skill, VoiceEvaluationResult.SkillScore.builder()
+                    .skill(skill).score(0).highestLevel("NONE").questionNumbers(List.of())
+                    .feedback("Not assessed: no question in this interview tested this skill.")
+                    .assessed(false).build()));
+        }
+        result.setSkillScores(aligned);
     }
 
     /** Keeps a stated confidence inside 0..1 — models do return 85 for "85%". */

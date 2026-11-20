@@ -35,6 +35,10 @@ import com.rightpath.entity.VoiceConversationEntry;
  * @param codeOutput             what it printed when last run
  * @param answerScore            the interviewer's 0-10 read on a candidate turn
  * @param answerCorrect          whether that score met the pass mark when it was given, or null if not rated
+ * @param reviewedScore          a reviewer's score for the answer, when they changed the AI's; the AI's is kept
+ * @param reviewNote             why the reviewer changed it
+ * @param reviewedBy             who changed it
+ * @param reviewedAt             when it was changed
  * @param codeMismatch           true when the submitted code solved a different problem than the one asked
  * @param topic                  the category an interviewer turn was asking about
  * @param skill                  the specific skill an interviewer turn tested, such as "Spring Boot"
@@ -58,6 +62,10 @@ public record VoiceConversationEntryDTO(
         String codeOutput,
         Integer answerScore,
         Boolean answerCorrect,
+        Integer reviewedScore,
+        String reviewNote,
+        String reviewedBy,
+        LocalDateTime reviewedAt,
         Boolean codeMismatch,
         String topic,
         String skill,
@@ -89,6 +97,10 @@ public record VoiceConversationEntryDTO(
                 entry.getCodeOutput(),
                 entry.getAnswerScore(),
                 entry.getAnswerCorrect(),
+                entry.getReviewedScore(),
+                entry.getReviewNote(),
+                entry.getReviewedBy(),
+                entry.getReviewedAt(),
                 entry.getCodeMismatch(),
                 entry.getTopic(),
                 entry.getSkill(),

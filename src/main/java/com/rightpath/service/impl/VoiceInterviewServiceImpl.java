@@ -96,6 +96,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     @org.springframework.beans.factory.annotation.Value("${interview.early-stop.max-average:3.0}")
     private double earlyStopMaxAverage = 3.0;
 
+    /** Distinct coding tasks an interview must include before it may close (re-asked tasks do not count again). */
+    @org.springframework.beans.factory.annotation.Value("${interview.coding.min-tasks:2}")
+    private int minCodingTasks = 2;
+
     /** Put in front of an answer that was not spoken in English, for the interviewer, the grader and the reviewer. */
     static final String NOT_IN_ENGLISH = "[NOT IN ENGLISH";
 
@@ -672,6 +676,27 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 }
             }
 
+            // The completion gate (technical round). The interview may not close, or move to its closing question,
+            // until every required skill has been taken through its levels (to Expert, or until it stopped) and the
+            // distinct coding tasks are done. It closed before with skills and coding still untested. Not applied
+            // when the interview is ending for poor performance or the question budget is nearly spent.
+            boolean wantsToClose = (parsed.closing() || isClosingQuestion(parsed.spokenText()))
+                    && !ceilingHit && !closingAsked && !moreQuestionsWelcome;
+            boolean stoppingEarly = sharedState != null && sharedState.get("early-stop:" + scheduleId).isPresent();
+            if (wantsToClose && !stoppingEarly && levelProgression != null && turnsLeft > 2
+                    && current.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
+                String gap = levelProgression.completionGap(
+                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId),
+                        contextService.requiredSkills(current), minCodingTasks);
+                if (gap != null) {
+                    ParsedInterviewReply continued = askToContinue(current, gap);
+                    if (continued != null) {
+                        parsed = continued;
+                        finished = false;
+                    }
+                }
+            }
+
             // The interview is about to end, and the candidate's last words from the interviewer must be a goodbye. A
             // forced end (question ceiling) or a reply that closed while still asking something would otherwise show
             // the candidate the "interview finished" screen under an unanswered question.
@@ -707,7 +732,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         .content(spoken)
                         .topic(turn.hasTopic() ? turn.topic() : null)
                         .level(levelOf(turn))
-                        .skill(levelOf(turn) == null && turn.closing() ? null : turn.skill())
+                        .skill(levelOf(turn) == null && turn.closing() ? null
+                                : contextService.canonicalSkill(s, turn.skill()))
                         .turnKind(turn.turnKind())
                         .build());
 
@@ -1395,6 +1421,25 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         }
         return new ParsedInterviewReply(text, score, original.turnKind(), original.topic(), true, original.level(),
                 original.codeMismatch());
+    }
+
+    /**
+     * Asks once for the next question instead of a close, saying what the assessment still lacks. Null when the model
+     * still closes: it is not asked again, so this can never loop.
+     */
+    private ParsedInterviewReply askToContinue(CandidateInterviewSchedule schedule, String gap) {
+        try {
+            log.info("Holding the close on interview {}: {}", schedule.getId(), gap);
+            String reply = openAiStreamingService.chatCompletion(contextService.buildContextMessages(schedule, gap));
+            if (reply == null || reply.isBlank()) {
+                return null;
+            }
+            ParsedInterviewReply parsed = replyParser.parse(reply);
+            return parsed.closing() || isClosingQuestion(parsed.spokenText()) ? null : parsed;
+        } catch (Exception e) {
+            log.warn("Could not continue interview {} past an early close", schedule.getId(), e);
+            return null;
+        }
     }
 
     private ParsedInterviewReply askForOutstandingTopic(CandidateInterviewSchedule schedule) {

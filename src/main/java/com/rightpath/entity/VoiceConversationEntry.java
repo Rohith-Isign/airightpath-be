@@ -92,6 +92,21 @@ public class VoiceConversationEntry {
     private Boolean answerCorrect;
 
     /**
+     * A reviewer's score for this answer, 0-10, when they disagreed with the AI's. The AI's own {@link #answerScore}
+     * is never overwritten, so the original assessment stays on record beside the change. The grader uses this score
+     * on the next re-evaluation. Null when no reviewer has changed it.
+     */
+    private Integer reviewedScore;
+
+    /** Why the reviewer changed the score. Required with a score. */
+    @Column(length = 1000)
+    private String reviewNote;
+
+    /** Who changed it, and when. */
+    private String reviewedBy;
+    private java.time.LocalDateTime reviewedAt;
+
+    /**
      * Set on a CANDIDATE turn whose submitted code solved a different problem than the one asked (a prime check
      * sent for a palindrome question). Such an answer is scored 0 and earns no credit; the flag says why, to the
      * candidate at the time, to the grader and to the reviewer. Null otherwise.

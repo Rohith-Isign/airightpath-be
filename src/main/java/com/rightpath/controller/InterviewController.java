@@ -198,6 +198,56 @@ public class InterviewController {
 		return ResponseEntity.ok(getResultDetail(id).getBody());
 	}
 
+	@Autowired
+	private com.rightpath.repository.VoiceConversationEntryRepository entryRepository;
+
+	/**
+	 * A reviewer's score for one answer, with the reason, before the result is finalised.
+	 *
+	 * <p>For an answer the AI scored wrongly, a partial or corrected coding submission, or an inconsistency. The AI's
+	 * own score is kept as it was, so the trail shows both; the reviewer's score is what the next re-evaluation grades
+	 * from. A score of null clears the review.</p>
+	 */
+	@org.springframework.web.bind.annotation.PutMapping("/results/{id}/answers/{entryId}/review")
+	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
+	public ResponseEntity<?> reviewAnswer(@PathVariable Long id, @PathVariable Long entryId,
+			@RequestBody Map<String, Object> body, Authentication authentication) {
+		var entry = entryRepository.findById(entryId).orElse(null);
+		if (entry == null || entry.getInterviewSchedule() == null || !id.equals(entry.getInterviewSchedule().getId())
+				|| entry.getRole() != com.rightpath.enums.ConversationRole.CANDIDATE) {
+			return ResponseEntity.badRequest().body(Map.of("message", "That answer is not part of this interview."));
+		}
+		Object raw = body.get("score");
+		if (raw == null) {
+			entry.setReviewedScore(null);
+			entry.setReviewNote(null);
+			entry.setReviewedBy(null);
+			entry.setReviewedAt(null);
+		} else {
+			int score;
+			try {
+				score = Integer.parseInt(String.valueOf(raw));
+			} catch (NumberFormatException e) {
+				return ResponseEntity.badRequest().body(Map.of("message", "The score must be a whole number from 0 to 10."));
+			}
+			String note = body.get("note") == null ? "" : String.valueOf(body.get("note")).trim();
+			if (score < 0 || score > 10) {
+				return ResponseEntity.badRequest().body(Map.of("message", "The score must be from 0 to 10."));
+			}
+			if (note.length() < 3) {
+				return ResponseEntity.badRequest().body(Map.of("message", "Say why the score is being changed."));
+			}
+			entry.setReviewedScore(score);
+			entry.setReviewNote(note.length() > 1000 ? note.substring(0, 1000) : note);
+			entry.setReviewedBy(authentication.getName());
+			entry.setReviewedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
+		}
+		entryRepository.save(entry);
+		log.info("Answer {} of interview {} reviewed by {}: {}", entryId, id, authentication.getName(),
+				entry.getReviewedScore());
+		return ResponseEntity.ok(VoiceConversationEntryDTO.from(entry));
+	}
+
 	/** Puts a removed result back. The counterpart to {@link #deleteResult}. */
 	@PostMapping("/results/{id}/restore")
 	@PreAuthorize("hasAuthority('INTERVIEW_RESULT_DELETE')")

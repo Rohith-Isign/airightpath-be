@@ -96,26 +96,18 @@ public class InterviewContextService {
             messages.add(Map.of("role", "system", "content", coverageStatus));
         }
 
-        // The skills to tag questions with, named as the job names them, so the skill-wise report and the level
-        // progression line up with the job description rather than with whatever the model calls them.
+        // The order to assess in, and each skill's level, decided by the server (technical round only): one of the
+        // job's own skills at a time, Basic to Expert, before the next. The interviewer used to interleave skills and
+        // bring in domains the job never listed.
         if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
-            try {
-                String skills = placeholderResolver.resolveJobPlaceholders("{{skills}}", schedule.getJobPrefix());
-                if (skills != null && !skills.isBlank() && !skills.contains("{{")) {
-                    messages.add(Map.of("role", "system", "content",
-                            "SKILLS FOR [SKILL] TAGS — the job's required skills: " + skills.trim()
-                                    + ". Use these names exactly. A skill on the resume that is not listed may be "
-                                    + "used only if the role needs it."));
-                }
-            } catch (Exception e) {
-                log.debug("No skill list for job {}", schedule.getJobPrefix(), e);
+            List<VoiceConversationEntry> history = entryRepository
+                    .findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId());
+            List<String> required = requiredSkills(schedule);
+            String sequence = levelProgression.buildSequenceDirective(history, required);
+            if (sequence != null) {
+                messages.add(Map.of("role", "system", "content", sequence));
             }
-        }
-
-        // Which level each skill is at, decided by the server from the ratings so far (technical round only).
-        if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
-            String levels = levelProgression.buildDirective(
-                    entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()));
+            String levels = levelProgression.buildDirective(history, required);
             if (levels != null) {
                 messages.add(Map.of("role", "system", "content", levels));
             }
@@ -156,6 +148,29 @@ public class InterviewContextService {
         }
 
         return messages;
+    }
+
+    /** The job's required skills, as the job lists them. Empty when the job lists none or it cannot be read. */
+    public List<String> requiredSkills(CandidateInterviewSchedule schedule) {
+        try {
+            String skills = placeholderResolver.resolveJobPlaceholders("{{skills}}", schedule.getJobPrefix());
+            if (skills == null || skills.isBlank() || skills.contains("{{")) {
+                return List.of();
+            }
+            return com.rightpath.util.SkillMatcher.parseSkills(skills);
+        } catch (Exception e) {
+            log.debug("No skill list for job {}", schedule.getJobPrefix(), e);
+            return List.of();
+        }
+    }
+
+    /** A tagged skill under the job's own name for it; kept as tagged when it matches none of the job's skills. */
+    public String canonicalSkill(CandidateInterviewSchedule schedule, String tagged) {
+        if (tagged == null || tagged.isBlank()) {
+            return null;
+        }
+        String named = InterviewLevelProgression.canonical(tagged, requiredSkills(schedule));
+        return named != null ? named : tagged.trim();
     }
 
     /**
