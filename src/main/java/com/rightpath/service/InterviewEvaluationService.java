@@ -451,6 +451,7 @@ public class InterviewEvaluationService {
                     "expectedConcepts": [{"concept": "<a concept this interview should have tested>", "area": "<AREA>", "status": "<CORRECT | PARTIAL | INCORRECT | NOT_ASKED>", "questionNumbers": [<questions that tested it>]}],
                     "questionAreas": [{"questionNumber": <n>, "area": "<AREA>"}],
                     "answerNotes": [{"questionNumber": <n>, "gotRight": "<what the answer got right>", "missed": "<what cost it the missing marks>"}],
+                    "improvementPlan": [{"skill": "<skill or area>", "gap": "<what fell short in this interview>", "action": "<what to study and practise to close it>", "priority": "<HIGH | MEDIUM | LOW>"}],
                     "verdict": "<3-4 sentences, as a senior interviewer to the hiring manager>",
                     "observedSeniority": "<Fresher | Junior | Mid-level | Senior | Lead> (job asks for <experience>)",
                     "notCovered": ["<what the job needs that was never tested>"],
@@ -497,6 +498,15 @@ public class InterviewEvaluationService {
                 exceptions"), never just "lacked depth". A full-marks answer has an empty "missed"; a skipped or
                 unanswered one has an empty "gotRight" and "missed" says it was not answered. Explain the rating the
                 answer was given at the time; if you disagree with it, say so in "missed".
+                IMPORTANT: "improvementPlan" says where and how the candidate can improve, as 3 to 6 concrete steps,
+                most important first. Each names the skill or area, the gap this interview showed (cite the question
+                where there is one, e.g. "Q7: could not explain overfitting beyond the definition"), and an action
+                specific enough to follow: the exact topics to study and a practice task (e.g. "Study bias-variance
+                trade-off, regularisation (L1/L2) and cross-validation; train a model on a small dataset and compare
+                train and validation error with and without regularisation"). Cover the weakest required skills, the
+                depth gaps and the most important areas never tested. HIGH is a gap that matters most for this role.
+                No general advice ("practise more", "improve communication") and nothing the candidate already did
+                well.
                 IMPORTANT — THIS INTERVIEW ONLY. You are grading one interview with one candidate. Use only the job,
                 the plan and the transcript given here; never draw on any other candidate, interview or conversation,
                 and never credit something the candidate did not say in this transcript.
@@ -992,7 +1002,25 @@ public class InterviewEvaluationService {
                 }
             }
 
+            List<VoiceEvaluationResult.ImprovementItem> improvementPlan = new ArrayList<>();
+            if (node.path("improvementPlan").isArray()) {
+                for (JsonNode i : node.path("improvementPlan")) {
+                    String action = textOrNull(i, "action");
+                    if (action == null || action.isBlank()) {
+                        continue;
+                    }
+                    String priority = textOrNull(i, "priority");
+                    priority = priority == null ? "MEDIUM" : priority.trim().toUpperCase();
+                    if (!List.of("HIGH", "MEDIUM", "LOW").contains(priority)) {
+                        priority = "MEDIUM";
+                    }
+                    improvementPlan.add(new VoiceEvaluationResult.ImprovementItem(
+                            textOrNull(i, "skill"), textOrNull(i, "gap"), action.trim(), priority));
+                }
+            }
+
             return VoiceEvaluationResult.builder()
+                    .improvementPlan(improvementPlan)
                     .answerNotes(answerNotes)
                     .skillScores(skillScores)
                     .verdict(textOrNull(node, "verdict"))

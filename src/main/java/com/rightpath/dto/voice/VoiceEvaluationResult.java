@@ -101,6 +101,27 @@ public class VoiceEvaluationResult {
      */
     private List<AnswerNote> answerNotes;
 
+    /**
+     * Where to improve, as concrete next steps: for each weak or untested area, what fell short in this interview and
+     * exactly what to study or practise, most important first. Built from the evidence, not general advice.
+     */
+    private List<ImprovementItem> improvementPlan;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ImprovementItem {
+        /** The skill or area it is about. */
+        private String skill;
+        /** What fell short in this interview, with the question it showed in where there is one. */
+        private String gap;
+        /** What to do about it: the topics to study and the practice that would close the gap. */
+        private String action;
+        /** HIGH, MEDIUM or LOW: how much it matters for this role. */
+        private String priority;
+    }
+
     @Data
     @Builder
     @NoArgsConstructor
