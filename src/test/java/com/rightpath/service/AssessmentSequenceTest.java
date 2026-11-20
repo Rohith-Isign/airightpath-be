@@ -54,6 +54,16 @@ class AssessmentSequenceTest {
         answer(2);
         ask("Python", "INTERMEDIATE", "q", TurnKind.NEW_QUESTION);
         answer(3); // two misses: Python stops at Intermediate
+
+        // Python is a coding skill: it reached Basic and Intermediate, so it owes a coding task at each before the
+        // interview moves on.
+        assertThat(progression.buildSequenceDirective(entries, JOB))
+                .contains("Python has reached its last level, but it still owes a coding task at BASIC and INTERMEDIATE");
+
+        ask("Python", "BASIC", "[CODING] Write a function", TurnKind.NEW_QUESTION);
+        answer(6);
+        ask("Python", "INTERMEDIATE", "[CODING] Write another", TurnKind.NEW_QUESTION);
+        answer(5);
         assertThat(progression.buildSequenceDirective(entries, JOB))
                 .contains("Ask your next question on Machine Learning at BASIC");
     }
@@ -65,6 +75,36 @@ class AssessmentSequenceTest {
         answer(8);
         String gap = progression.completionGap(entries, JOB, 2);
         assertThat(gap).contains("Machine Learning").contains("NumPy").contains("RAG").contains("coding tasks done: 0");
+    }
+
+    @Test
+    @DisplayName("coding is required only for coding skills, and only at the levels they reached")
+    void codingPerSkillAndLevel() {
+        assertThat(progression.isCodingSkill("NumPy")).isTrue();
+        assertThat(progression.isCodingSkill("Machine Learning")).isFalse();
+        assertThat(progression.isCodingSkill("RAG")).isFalse();
+
+        ask("NumPy", "BASIC", "q", TurnKind.NEW_QUESTION);
+        answer(8);
+        assertThat(progression.codingOwed(entries, JOB, "NumPy")).containsExactly("BASIC");
+        assertThat(progression.completionGap(entries, JOB, 0)).contains("NumPy at BASIC");
+
+        ask("Machine Learning", "BASIC", "q", TurnKind.NEW_QUESTION);
+        answer(8);
+        assertThat(progression.codingOwed(entries, JOB, "Machine Learning")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("competencies already tested for a skill are listed, once each")
+    void competencies() {
+        entries.add(VoiceConversationEntry.builder().role(ConversationRole.INTERVIEWER).content("q")
+                .skill("python").competency("List comprehensions").level("BASIC").build());
+        entries.add(VoiceConversationEntry.builder().role(ConversationRole.INTERVIEWER).content("q")
+                .skill("Python").competency("list comprehensions").level("BASIC").build());
+        entries.add(VoiceConversationEntry.builder().role(ConversationRole.INTERVIEWER).content("q")
+                .skill("Python").competency("Decorators").level("INTERMEDIATE").build());
+        assertThat(InterviewLevelProgression.competenciesTested(entries, JOB, "Python"))
+                .containsExactly("List comprehensions", "Decorators");
     }
 
     @Test

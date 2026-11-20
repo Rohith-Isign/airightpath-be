@@ -650,6 +650,13 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 parsed = askForDifferentProblem(current, parsed, turnPrompt);
             }
 
+            // A new question tests something not yet tested for its skill. Asking about the same competency again,
+            // reworded, was counted as new coverage when it showed nothing new.
+            if (!parsed.closing() && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)
+                    && repeatsCompetency(current, parsed)) {
+                parsed = askForDifferentCompetency(current, parsed, turnPrompt);
+            }
+
             // Closes when the model says it is done, or when the budget is
             // spent. The ceiling is enforced here rather than trusted to the
             // prompt: an interview that never ends is worse than one cut short.
@@ -734,6 +741,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         .level(levelOf(turn))
                         .skill(levelOf(turn) == null && turn.closing() ? null
                                 : contextService.canonicalSkill(s, turn.skill()))
+                        .competency(levelOf(turn) == null ? null : turn.competency())
                         .turnKind(turn.turnKind())
                         .build());
 
@@ -910,6 +918,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     .topic(parsed.hasTopic() ? parsed.topic() : null)
                     .level(levelOf(parsed))
                     .skill(parsed.closing() ? null : parsed.skill())
+                    .competency(levelOf(parsed) == null ? null : parsed.competency())
                     .turnKind(parsed.turnKind())
                     .build());
             schedule.incrementQuestionsAsked();
@@ -1292,7 +1301,9 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     return new ParsedInterviewReply(retry.spokenText(), score, retry.turnKind(), topic, false,
                             retry.level() != null ? retry.level() : original.level(),
                             original.codeMismatch() || retry.codeMismatch(),
-                            retry.skill() != null ? retry.skill() : original.skill());
+                            retry.skill() != null ? retry.skill() : original.skill(),
+                            original.notEnglish() || retry.notEnglish(),
+                            retry.competency() != null ? retry.competency() : original.competency());
                 }
             }
         } catch (Exception e) {
@@ -1373,13 +1384,60 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                             retry.topic() != null ? retry.topic() : original.topic(), retry.closing(),
                             retry.level() != null ? retry.level() : original.level(),
                             original.codeMismatch() || retry.codeMismatch(),
-                            retry.skill() != null ? retry.skill() : original.skill());
+                            retry.skill() != null ? retry.skill() : original.skill(),
+                            original.notEnglish() || retry.notEnglish(),
+                            retry.competency() != null ? retry.competency() : original.competency());
                 }
             }
         } catch (Exception e) {
             log.warn("Could not replace a repeated coding problem in interview {}", schedule.getId(), e);
         }
         log.warn("Interview {} asked a coding problem again after it was answered", schedule.getId());
+        return original;
+    }
+
+    /** Whether this question's competency was already tested for the same skill in this interview. */
+    private boolean repeatsCompetency(CandidateInterviewSchedule schedule, ParsedInterviewReply reply) {
+        if (reply.competency() == null || reply.skill() == null) {
+            return false;
+        }
+        java.util.List<String> required = contextService.requiredSkills(schedule);
+        String skill = contextService.canonicalSkill(schedule, reply.skill());
+        String wanted = reply.competency().toLowerCase().replaceAll("[^a-z0-9+#]", "");
+        if (wanted.isEmpty()) {
+            return false;
+        }
+        return com.rightpath.service.InterviewLevelProgression.competenciesTested(
+                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()),
+                        required.isEmpty() ? java.util.List.of(skill) : required, skill)
+                .stream()
+                .anyMatch(c -> c.toLowerCase().replaceAll("[^a-z0-9+#]", "").equals(wanted));
+    }
+
+    /** Asks once for a question on a different competency; the original stands if the second try repeats too. */
+    private ParsedInterviewReply askForDifferentCompetency(CandidateInterviewSchedule schedule,
+            ParsedInterviewReply original, String turnPrompt) {
+        try {
+            String reply = openAiStreamingService.chatCompletion(contextService.buildContextMessages(schedule,
+                    turnPrompt + "\n\nYour question tests \"" + original.competency() + "\", which was already tested "
+                            + "for " + original.skill() + ". Keep your [SCORE] for the last answer and ask a question "
+                            + "on a DIFFERENT competency of " + original.skill() + " at the same level, with all its "
+                            + "tags. Do not reword the earlier question."));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply retry = replyParser.parse(reply);
+                if (!retry.closing() && !repeatsCompetency(schedule, retry)) {
+                    Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
+                    return new ParsedInterviewReply(retry.spokenText(), score, TurnKind.NEW_QUESTION,
+                            retry.topic() != null ? retry.topic() : original.topic(), false,
+                            retry.level() != null ? retry.level() : original.level(),
+                            original.codeMismatch() || retry.codeMismatch(),
+                            retry.skill() != null ? retry.skill() : original.skill(),
+                            original.notEnglish() || retry.notEnglish(), retry.competency());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not replace a repeated competency in interview {}", schedule.getId(), e);
+        }
         return original;
     }
 
@@ -1420,7 +1478,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             log.warn("Could not get a farewell for interview {}", schedule.getId(), e);
         }
         return new ParsedInterviewReply(text, score, original.turnKind(), original.topic(), true, original.level(),
-                original.codeMismatch());
+                original.codeMismatch(), original.skill(), original.notEnglish(), original.competency());
     }
 
     /**

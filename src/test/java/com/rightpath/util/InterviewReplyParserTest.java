@@ -217,4 +217,14 @@ class InterviewReplyParserTest {
         assertThat(parser.parse("[NOT IN ENGLISH] Please answer in English.").notEnglish()).isTrue();
         assertThat(parser.parse("[SCORE:7] Good. Next?").notEnglish()).isFalse();
     }
+
+    @Test
+    @DisplayName("[COMPETENCY] is read and never spoken")
+    void parsesCompetency() {
+        ParsedInterviewReply reply = parser.parse(
+                "[SCORE:6] [TOPIC:Technical Skills] [SKILL:Python] [LEVEL:BASIC] [COMPETENCY:list comprehensions] "
+                        + "How would you build a list of squares?");
+        assertThat(reply.competency()).isEqualTo("list comprehensions");
+        assertThat(reply.spokenText()).isEqualTo("How would you build a list of squares?");
+    }
 }

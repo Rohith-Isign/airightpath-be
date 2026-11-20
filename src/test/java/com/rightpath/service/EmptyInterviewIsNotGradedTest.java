@@ -100,6 +100,8 @@ class EmptyInterviewIsNotGradedTest {
         VoiceEvaluationResult result = service.evaluateInterview(SCHEDULE_ID);
 
         verify(openAi, never()).chatCompletion(anyList());
+        verify(openAi, never()).chatCompletion(anyList(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyDouble(), org.mockito.ArgumentMatchers.anyBoolean());
         assertEquals(0, result.getOverallScore(), "an unanswered interview has no score");
         assertTrue(result.getCategoryScores().isEmpty(), "and no per-area scores to show");
         assertTrue(result.getSummary().toLowerCase().contains("not assessable"),
@@ -136,6 +138,8 @@ class EmptyInterviewIsNotGradedTest {
         service.evaluateInterview(SCHEDULE_ID);
 
         verify(openAi, never()).chatCompletion(anyList());
+        verify(openAi, never()).chatCompletion(anyList(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyDouble(), org.mockito.ArgumentMatchers.anyBoolean());
         assertEquals(InterviewResult.PENDING, schedule.getInterviewResult());
     }
 

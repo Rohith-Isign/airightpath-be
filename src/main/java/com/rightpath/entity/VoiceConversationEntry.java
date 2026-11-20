@@ -133,6 +133,13 @@ public class VoiceConversationEntry {
     private String skill;
 
     /**
+     * What within the skill an INTERVIEWER question tests ("list comprehensions", "overfitting"), as the interviewer
+     * named it. Lets the report show which competencies were covered and stops the same one being tested twice.
+     */
+    @Column(length = 120)
+    private String competency;
+
+    /**
      * How deep this INTERVIEWER question goes: BASIC, INTERMEDIATE, ADVANCED or EXPERT. Set on the technical
      * round only, and null on a behavioural question, on a turn the model did not label, and on every CANDIDATE
      * row and every turn recorded before levels were asked for. The column is added by the schema update, nullable.

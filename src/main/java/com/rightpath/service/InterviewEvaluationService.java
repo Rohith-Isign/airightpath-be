@@ -82,6 +82,16 @@ public class InterviewEvaluationService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private CandidateNameResolver nameResolver;
 
+    /** Output limit for the grading call. gpt-4o allows up to 16384; the grading JSON needs several thousand. */
+    @org.springframework.beans.factory.annotation.Value("${openai.evaluation.max-tokens:12000}")
+    private int evaluationMaxTokens = 12000;
+
+    /** Why the last call to the model failed, for the message, when it said. */
+    private String reasonSuffix() {
+        String reason = openAiStreamingService.lastChatFailure();
+        return reason == null || reason.isBlank() ? "" : " (" + reason + ")";
+    }
+
     /** What a reply that could not be read is recorded as. Never stored: it is retried instead. */
     private static final String UNABLE_TO_EVALUATE = "UNABLE_TO_EVALUATE";
 
@@ -224,6 +234,7 @@ public class InterviewEvaluationService {
             String speaker = switch (entry.getRole()) {
                 case INTERVIEWER -> schedule.getInterviewerName() + " (Question " + (++questionNumber)
                         + (entry.getSkill() != null ? " · skill: " + entry.getSkill() : "")
+                        + (entry.getCompetency() != null ? " · competency: " + entry.getCompetency() : "")
                         + (entry.getLevel() != null ? " · level: " + entry.getLevel() : "") + ")";
                 case CANDIDATE -> "Candidate";
                 case SYSTEM -> "System";
@@ -256,16 +267,21 @@ public class InterviewEvaluationService {
                 Map.of("role", "user", "content", prompt)
         );
 
-        String evaluationJson = openAiStreamingService.chatCompletion(messages);
+        // A long JSON reply: its own output limit, a low temperature for consistent grading, and JSON mode so the
+        // reply is one complete object. Under the shared 2000-token limit it was cut off and could not be read.
+        String evaluationJson = openAiStreamingService.chatCompletion(messages, evaluationMaxTokens, 0.2, true);
         if (evaluationJson == null || evaluationJson.isBlank()) {
-            throw new IllegalStateException("The model returned no evaluation for schedule " + scheduleId);
+            throw new IllegalStateException("The AI evaluation could not be completed"
+                    + reasonSuffix() + ". Please try Re-evaluate again in a minute.");
         }
 
         // Parse evaluation. A reply that cannot be read is an error to retry, never a result to store: stored, it
         // was served from cache as an empty evaluation from then on.
         VoiceEvaluationResult result = parseEvaluation(evaluationJson);
         if (UNABLE_TO_EVALUATE.equals(result.getRecommendation())) {
-            throw new IllegalStateException("The model's evaluation for schedule " + scheduleId + " could not be read");
+            log.error("Schedule {}: the evaluation reply could not be read{}", scheduleId, reasonSuffix());
+            throw new IllegalStateException("The AI evaluation came back incomplete" + reasonSuffix()
+                    + ". Please try Re-evaluate again in a minute.");
         }
 
         // The overall follows from the area scores and the configured weights, rather than being a separate number

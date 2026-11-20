@@ -1,0 +1,5 @@
+# The image needs one file: the Dockerfile copies only target/rightpath.jar. Without this file the whole project
+# (source, .git, target/classes, the .original jar) was sent to Docker on every build, about 150 MB each time.
+# If the Dockerfile ever COPYs anything else, add it below with a "!" line.
+*
+!target/rightpath.jar

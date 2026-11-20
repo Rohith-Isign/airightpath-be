@@ -244,6 +244,19 @@ public class OpenAiStreamingService {
     }
 
     public String chatCompletion(List<Map<String, String>> messages) {
+        return chatCompletion(messages, 2000, 0.7, false);
+    }
+
+    /**
+     * A chat completion with its own output limit, temperature and, optionally, JSON mode.
+     *
+     * <p>The interview grading asks for a long JSON document (scores, notes on every answer, the expected concepts,
+     * per-skill results, the improvement plan). Under the 2000-token limit every other call uses, it was cut off
+     * mid-JSON, could not be read, and the interview was left with no result — on re-evaluation too. JSON mode makes
+     * OpenAI return a complete JSON object; a reply still cut off at the limit is logged as such.</p>
+     */
+    public String chatCompletion(List<Map<String, String>> messages, int maxTokens, double temperature,
+            boolean jsonMode) {
         lastChatFailure = null;
         // Said plainly, once per call. An empty key sends a request OpenAI
         // refuses, the refusal is swallowed below, and the candidate is told only
@@ -259,8 +272,11 @@ public class OpenAiStreamingService {
             Map<String, Object> requestBody = new LinkedHashMap<>();
             requestBody.put("model", model);
             requestBody.put("messages", messages);
-            requestBody.put("temperature", 0.7);
-            requestBody.put("max_tokens", 2000);
+            requestBody.put("temperature", temperature);
+            requestBody.put("max_tokens", maxTokens);
+            if (jsonMode) {
+                requestBody.put("response_format", Map.of("type", "json_object"));
+            }
 
             String json = objectMapper.writeValueAsString(requestBody);
             Request request = new Request.Builder()
@@ -284,6 +300,11 @@ public class OpenAiStreamingService {
                     return "";
                 }
                 JsonNode node = objectMapper.readTree(responseBody);
+                if ("length".equals(node.path("choices").path(0).path("finish_reason").asText())) {
+                    log.error("Chat completion was cut off at the {}-token output limit; the reply is incomplete",
+                            maxTokens);
+                    lastChatFailure = "the reply was cut off at the output limit";
+                }
                 return node.path("choices").path(0).path("message").path("content").asText();
             }
         } catch (Exception e) {

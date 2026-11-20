@@ -42,6 +42,7 @@ import com.rightpath.entity.VoiceConversationEntry;
  * @param codeMismatch           true when the submitted code solved a different problem than the one asked
  * @param topic                  the category an interviewer turn was asking about
  * @param skill                  the specific skill an interviewer turn tested, such as "Spring Boot"
+ * @param competency             what within the skill an interviewer turn tested
  * @param level                  BASIC, INTERMEDIATE, ADVANCED or EXPERT for a technical-round question, else null
  * @param turnKind               NEW_QUESTION, FOLLOW_UP or REPHRASE
  * @param injectionSuspected     set on a candidate turn that tried to instruct the model
@@ -69,6 +70,7 @@ public record VoiceConversationEntryDTO(
         Boolean codeMismatch,
         String topic,
         String skill,
+        String competency,
         String level,
         String turnKind,
         Boolean injectionSuspected,
@@ -104,6 +106,7 @@ public record VoiceConversationEntryDTO(
                 entry.getCodeMismatch(),
                 entry.getTopic(),
                 entry.getSkill(),
+                entry.getCompetency(),
                 entry.getLevel(),
                 entry.getTurnKind() != null ? entry.getTurnKind().name() : null,
                 entry.getInjectionSuspected(),

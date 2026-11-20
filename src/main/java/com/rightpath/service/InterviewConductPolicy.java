@@ -366,8 +366,13 @@ public class InterviewConductPolicy {
                 Skills question is about one named skill, and a Programming problem uses that skill's language or a \
                 language-neutral one.
 
-                Example: [SCORE:7] [TOPIC:Technical Skills] [SKILL:Spring Boot] [LEVEL:INTERMEDIATE] How would you \
-                handle validation errors consistently across a set of REST endpoints?""";
+                Competency. Also put [COMPETENCY:name] on every question: the specific thing within the skill it \
+                tests, in a few words (for example "list comprehensions", "overfitting", "transaction rollback"). Each \
+                new question tests a competency not yet tested for that skill; a follow-up goes deeper on the same one.
+
+                Example: [SCORE:7] [TOPIC:Technical Skills] [SKILL:Spring Boot] [LEVEL:INTERMEDIATE] \
+                [COMPETENCY:validation error handling] How would you handle validation errors consistently across a \
+                set of REST endpoints?""";
     }
 
     private String tagProtocol() {
