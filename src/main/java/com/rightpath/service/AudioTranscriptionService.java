@@ -51,6 +51,27 @@ public class AudioTranscriptionService {
         return "lang-name:" + scheduleId;
     }
 
+    /**
+     * Which answer a language check belongs to. Moved on each time an answer is processed, so a check that finishes
+     * after its answer was sent is not counted against the next one.
+     */
+    public static String languageGenerationKey(Long scheduleId) {
+        return "lang-gen:" + scheduleId;
+    }
+
+    /**
+     * Language checks run here, never on the transcription threads and never on the JVM's shared pool. They used to
+     * hold each chunk's transcript back until they finished, on a pool that can be a single thread on a small server;
+     * under load transcripts arrived late, the page stopped waiting and submitted an answer with words missing or
+     * none at all, and the interviewer said it had not caught anything.
+     */
+    private static final java.util.concurrent.ExecutorService LANGUAGE_CHECKS =
+            java.util.concurrent.Executors.newFixedThreadPool(4, runnable -> {
+                Thread thread = new Thread(runnable, "language-check");
+                thread.setDaemon(true);
+                return thread;
+            });
+
     /** Set once the candidate has been warned during the answer being recorded, so the warning is not repeated. */
     public static String languageWarnedKey(Long scheduleId) {
         return "lang-warned:" + scheduleId;
@@ -96,6 +117,30 @@ public class AudioTranscriptionService {
         return "last-transcript:" + scheduleId;
     }
 
+    /**
+     * Counts one chunk's language towards the answer it belongs to, and warns the candidate the first time another
+     * language is heard. Ignored when the answer has already been sent (the generation has moved on).
+     */
+    private void countLanguage(Long scheduleId, int chunkIndex, String generation,
+            java.util.Optional<String[]> language) {
+        if (language.isEmpty()
+                || !generation.equals(sharedState.get(languageGenerationKey(scheduleId)).orElse("0"))) {
+            return;
+        }
+        sharedState.increment(languageTotalKey(scheduleId), LAST_PUBLISHED_TTL);
+        if (!looksForeign(language.get()[0], language.get()[1])) {
+            return;
+        }
+        sharedState.increment(languageForeignKey(scheduleId), LAST_PUBLISHED_TTL);
+        sharedState.set(languageNameKey(scheduleId), language.get()[0], LAST_PUBLISHED_TTL);
+        log.info("Chunk {} for schedule {} was spoken in {}, not English", chunkIndex, scheduleId, language.get()[0]);
+        // Told while they are still speaking, once per answer, so they can switch to English before they finish.
+        if (sharedState.setIfAbsent(languageWarnedKey(scheduleId), "1", LAST_PUBLISHED_TTL)) {
+            messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/language-warning",
+                    Map.of("language", language.get()[0], "live", true));
+        }
+    }
+
     @Async("transcriptionExecutor")
     public void transcribeAsync(Long scheduleId, byte[] audioData, int chunkIndex) {
         log.info("Transcribing chunk {} for schedule {} ({} bytes)", chunkIndex, scheduleId, audioData.length);
@@ -105,32 +150,25 @@ public class AudioTranscriptionService {
             String hint = nameResolver == null ? null : nameResolver.forInterview(scheduleId)
                     .map(name -> "The speaker's name is " + name + ".")
                     .orElse(null);
-            // What was really spoken, asked at the same time as the transcription so it adds no wait.
-            java.util.concurrent.CompletableFuture<java.util.Optional<String[]>> detected = detectLanguage
-                    ? java.util.concurrent.CompletableFuture.supplyAsync(
-                            () -> openAiStreamingService.detectLanguage(audioData, filename))
-                    : java.util.concurrent.CompletableFuture.completedFuture(java.util.Optional.empty());
+            // What was really spoken: checked alongside, on its own threads, and never waited for. The transcript
+            // is published as soon as it is ready; the check counts towards the answer when it finishes.
+            if (detectLanguage) {
+                String generation = sharedState.get(languageGenerationKey(scheduleId)).orElse("0");
+                java.util.concurrent.CompletableFuture
+                        .supplyAsync(() -> openAiStreamingService.detectLanguage(audioData, filename), LANGUAGE_CHECKS)
+                        .thenAccept(language -> countLanguage(scheduleId, chunkIndex, generation, language))
+                        .exceptionally(e -> {
+                            log.debug("No language check for chunk {} of schedule {}", chunkIndex, scheduleId, e);
+                            return null;
+                        });
+            }
             TranscriptionResult result = openAiStreamingService.transcribe(audioData, filename, hint);
-            // Counted before the chunk is reported done, so the answer is never submitted ahead of its count.
-            try {
-                java.util.Optional<String[]> language = detected.get(20, java.util.concurrent.TimeUnit.SECONDS);
-                if (language.isPresent() && result.getText() != null && !result.getText().isBlank()) {
-                    sharedState.increment(languageTotalKey(scheduleId), LAST_PUBLISHED_TTL);
-                    if (looksForeign(language.get()[0], language.get()[1])) {
-                        sharedState.increment(languageForeignKey(scheduleId), LAST_PUBLISHED_TTL);
-                        sharedState.set(languageNameKey(scheduleId), language.get()[0], LAST_PUBLISHED_TTL);
-                        log.info("Chunk {} for schedule {} was spoken in {}, not English", chunkIndex, scheduleId,
-                                language.get()[0]);
-                        // Told while they are still speaking, once per answer, so they can switch to English
-                        // before they finish rather than find out afterwards.
-                        if (sharedState.setIfAbsent(languageWarnedKey(scheduleId), "1", LAST_PUBLISHED_TTL)) {
-                            messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/language-warning",
-                                    Map.of("language", language.get()[0], "live", true));
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                log.debug("No language check for chunk {} of schedule {}", chunkIndex, scheduleId, e);
+            // The speech model sometimes says its hint back on a short or quiet chunk ("The speaker's name is
+            // Sai."), which is not something the candidate said.
+            if (hint != null && result.getText() != null && result.getText().contains("speaker's name is")) {
+                result = new TranscriptionResult(
+                        result.getText().replaceAll("(?i)the speaker's name is [^.]*\\.?", "").trim(),
+                        result.getDuration(), result.getWords());
             }
 
             String comparable = result.getText() == null ? "" : TranscriptionSanitizer.comparable(result.getText());

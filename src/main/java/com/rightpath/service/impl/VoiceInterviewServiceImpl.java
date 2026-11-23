@@ -526,6 +526,11 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     @Override
     public void processVoiceAnswer(Long scheduleId, VoiceAnswerRequest request) {
         boolean skipped = request.isSkipped();
+        // A record of answers that reach the server with nothing in them, for when a candidate says they were not heard.
+        if (!skipped && (request.getTranscript() == null || request.getTranscript().isBlank())
+                && (request.getCodeContent() == null || request.getCodeContent().isBlank())) {
+            log.warn("Interview {}: an answer arrived with no transcript and no code", scheduleId);
+        }
         
         // --- Phase 1: Save candidate answer (same as before) ---
         CandidateInterviewSchedule schedule = transactionTemplate.execute(status -> {
@@ -669,7 +674,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             if (reply == null || reply.isBlank()) {
                 log.error("Empty reply from the model for schedule {}", scheduleId);
                 sendResponseComplete(scheduleId,
-                        "Sorry, I did not catch that. Could you answer again?", false);
+                        // Said honestly: this is the interviewer failing to reply, not the candidate's speech going
+                        // unheard. "I did not catch that" made candidates think their microphone had failed.
+                        "Sorry, I had a technical problem on my side and could not process that. "
+                                + "Could you please give your answer again?", false);
                 return;
             }
 
@@ -679,6 +687,20 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // off some problems, and the candidate is then left guessing the input and output they must handle.
             if (isCodingQuestion(parsed) && !hasExamples(parsed.spokenText())) {
                 parsed = askForExamples(current, parsed, turnPrompt);
+            }
+
+            // A request to fix the code just submitted is a coding turn, whatever tags the model put on it: the
+            // notepad has to open, with the candidate's code put back in it, and it is a correction of the same
+            // task rather than a new one. It came back untagged, the notepad never opened, and the candidate had
+            // nowhere to correct their code.
+            if (!parsed.closing() && asksToCorrectCode(parsed.spokenText()) && lastAnswerHadCode(scheduleId)) {
+                String text = CODING_OPENING.matcher(parsed.spokenText()).find()
+                        ? parsed.spokenText()
+                        : InterviewConductPolicy.CODING_TAG + " " + parsed.spokenText();
+                TurnKind kind = parsed.turnKind() == TurnKind.NEW_QUESTION ? TurnKind.FOLLOW_UP : parsed.turnKind();
+                parsed = new ParsedInterviewReply(text, parsed.answerScore(), kind, parsed.topic(), false,
+                        parsed.level(), parsed.codeMismatch(), parsed.skill(), parsed.notEnglish(),
+                        parsed.competency());
             }
 
             // A coding problem is asked once. Once an answer to it has been submitted, it is rated and the interview
@@ -1001,6 +1023,9 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         sharedState.delete(AudioTranscriptionServiceKeys.foreign(scheduleId));
         sharedState.delete(AudioTranscriptionServiceKeys.name(scheduleId));
         sharedState.delete(com.rightpath.service.AudioTranscriptionService.languageWarnedKey(scheduleId));
+        // Language checks still running for the answer just sent are not counted against the next one.
+        sharedState.increment(com.rightpath.service.AudioTranscriptionService.languageGenerationKey(scheduleId),
+                java.time.Duration.ofHours(3));
     }
 
     /**
@@ -1401,6 +1426,38 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         return original;
     }
 
+    /** Wordings that ask the candidate to fix the code they have just written. */
+    private static final java.util.regex.Pattern CORRECT_CODE = java.util.regex.Pattern.compile(
+            "\\b(fix|correct|update|modify|change|rewrite|revise|improve|debug|adjust)\\b[^.?!\\n]{0,60}"
+                    + "\\b(code|function|solution|implementation|logic|program|loop|method|query)\\b",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** Whether a reply asks the candidate to fix their code ("could you correct your function?"). */
+    static boolean asksToCorrectCode(String text) {
+        return text != null && CORRECT_CODE.matcher(text).find();
+    }
+
+    /** Whether the candidate's latest answer included code. */
+    private boolean lastAnswerHadCode(Long scheduleId) {
+        return entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId).stream()
+                .filter(e -> e.getRole() == ConversationRole.CANDIDATE)
+                .reduce((first, second) -> second)
+                .map(e -> e.getCodeContent() != null && !e.getCodeContent().isBlank())
+                .orElse(false);
+    }
+
+    /** Whether the interviewer's latest question was itself a correction of a coding task. */
+    private static boolean lastQuestionWasCorrection(List<VoiceConversationEntry> entries) {
+        for (int i = entries.size() - 1; i >= 0; i--) {
+            VoiceConversationEntry entry = entries.get(i);
+            if (entry.getRole() == ConversationRole.INTERVIEWER) {
+                return entry.getContent() != null && CODING_OPENING.matcher(entry.getContent()).find()
+                        && entry.getTurnKind() != null && entry.getTurnKind() != TurnKind.NEW_QUESTION;
+            }
+        }
+        return false;
+    }
+
     /**
      * Whether this coding question is one already asked in this interview. A re-ask is allowed only when the
      * candidate has not yet sent any code for it (they could not see the notepad), so it is not a repeat.
@@ -1417,6 +1474,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 .map(e -> e.getCodeContent() != null && !e.getCodeContent().isBlank())
                 .orElse(false);
         if (reply.turnKind() == TurnKind.REPHRASE && !answeredWithCode) {
+            return false;
+        }
+        // One correction of the code just submitted is allowed; a second one on the same task is a repeat.
+        if (reply.turnKind() != TurnKind.NEW_QUESTION && answeredWithCode && !lastQuestionWasCorrection(entries)) {
             return false;
         }
         return entries.stream()

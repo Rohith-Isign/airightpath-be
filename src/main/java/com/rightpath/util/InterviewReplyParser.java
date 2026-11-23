@@ -79,9 +79,12 @@ public class InterviewReplyParser {
     private static final Pattern OTHER_TYPE_TAG = Pattern.compile(
             "\\[\\s*(THEORY|NON-TECH)\\s*\\]", Pattern.CASE_INSENSITIVE);
 
-    /** An instruction to write or implement code: a verb, then within a short span what is to be written. */
+    /**
+     * An instruction to write, implement or correct code: a verb, then within a short span what is to be written.
+     * "Fix", "correct" and the like are included, so a request to correct submitted code opens the notepad too.
+     */
     private static final Pattern ASKS_FOR_CODE = Pattern.compile(
-            "\\b(write|implement|code up|create|develop)\\b[^.?!\\n]{0,60}"
+            "\\b(write|implement|code up|create|develop|fix|correct|rewrite|debug)\\b[^.?!\\n]{0,60}"
                     + "\\b(function|program|method|class|script|query|algorithm|snippet|code)\\b",
             Pattern.CASE_INSENSITIVE);
 
