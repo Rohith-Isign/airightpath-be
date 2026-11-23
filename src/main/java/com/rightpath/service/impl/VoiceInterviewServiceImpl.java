@@ -297,6 +297,24 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * from it, and a {@code [CODING]} buried after the greeting is text the
      * candidate reads rather than a signal the client acts on.</p>
      */
+    /** The opening question when the generated one is not an introduction. */
+    static final String INTRODUCTION_QUESTION = "To start, could you please introduce yourself? Tell me about your "
+            + "background, what you have studied or worked on, and the projects you are most proud of.";
+
+    /** Whether a question asks the candidate to introduce themselves, rather than starting on a technical topic. */
+    static boolean asksForIntroduction(String question) {
+        if (question == null || question.isBlank()) {
+            return false;
+        }
+        String text = question.toLowerCase(java.util.Locale.ROOT);
+        if (CODING_OPENING.matcher(question).find()) {
+            return false;
+        }
+        return text.contains("introduce yourself") || text.contains("introduction")
+                || text.contains("about yourself") || text.contains("tell me about you")
+                || text.contains("your background") || text.contains("walk me through your");
+    }
+
     private String mergeWelcomeWithQuestion(String welcome, String question) {
         // The server's welcome is the only greeting. If the model greeted too, take that off so it is not said twice.
         question = com.rightpath.util.GreetingStripper.strip(question);
@@ -424,6 +442,15 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         // greeting is merged into speech rather than into a tag block.
         ParsedInterviewReply parsedFirst = replyParser.parse(generatedQuestion.trim());
 
+        // Every interview opens with the candidate introducing themselves. The model was told so, but a later rule
+        // ("ask the next skill at Basic") reached it on the first turn too and it opened on a technical question. The
+        // opening is checked here, and replaced with the standard one if it is not an introduction.
+        if (!asksForIntroduction(parsedFirst.spokenText())) {
+            log.info("Interview {}: the first question was not an introduction; using the standard opening",
+                    schedule.getId());
+            parsedFirst = new ParsedInterviewReply(INTRODUCTION_QUESTION, null, TurnKind.NEW_QUESTION, null, false);
+        }
+
         // The greeting is the one fixed line in the interview. Merged into the
         // first message so the candidate hears it before the question, rather
         // than being greeted by a question.
@@ -435,8 +462,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 .interviewSchedule(schedule)
                 .role(ConversationRole.INTERVIEWER)
                 .content(firstQuestionClean)
-                .topic(parsedFirst.topic())
-                // The opening asks for an introduction, not a technical answer: it has no level.
+                // The opening asks for an introduction, not a technical answer: no category, skill or level.
+                .topic(null)
                 .level(null)
                 .turnKind(TurnKind.NEW_QUESTION)
                 .build();
@@ -594,13 +621,21 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // it from the prompt alone, and it would answer the candidate's question and then carry on with another
             // interview question, or the server would end the interview on the question ceiling in the middle of one.
             boolean closingAsked = closingQuestionAlreadyAsked(scheduleId);
+            // This reply answers the closing question, not an interview question: it is never scored.
+            boolean answeringClosing = closingAsked;
             // The candidate may ask up to three things at the close. While they are still asking, and under the
             // limit, the interviewer answers and invites the next one; the final thank-you comes when they have
             // none left, or on the third.
             boolean moreQuestionsWelcome = closingAsked && !skipped
                     && looksLikeAQuestion(request.getTranscript())
                     && candidateRepliesToClosing(scheduleId) < MAX_CLOSING_QUESTIONS;
-            if (moreQuestionsWelcome) {
+            // "Yes" to "do you have any questions?" is not a question yet: they are about to ask one. It used to
+            // count as "no questions" and the interview ended on the goodbye. Now they are invited to go ahead.
+            boolean inviteQuestion = closingAsked && !skipped && !moreQuestionsWelcome
+                    && saysTheyHaveAQuestion(request.getTranscript())
+                    && candidateRepliesToClosing(scheduleId) < MAX_CLOSING_QUESTIONS;
+            if (moreQuestionsWelcome || inviteQuestion) {
+                moreQuestionsWelcome = true;
                 closingAsked = false;
             }
             int turnsLeft = template.effectiveMax() - current.getTotalQuestionsAsked();
@@ -626,8 +661,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 }
                 turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
             }
-            String reply = openAiStreamingService.chatCompletion(
-                    contextService.buildContextMessages(current, turnPrompt));
+            // The invitation is a fixed line, worded so the next reply is still read as part of the close.
+            String reply = inviteQuestion
+                    ? INVITE_QUESTION
+                    : openAiStreamingService.chatCompletion(contextService.buildContextMessages(current, turnPrompt));
 
             if (reply == null || reply.isBlank()) {
                 log.error("Empty reply from the model for schedule {}", scheduleId);
@@ -725,12 +762,19 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 // belongs rather than off the question that followed.
                 // The interviewer found the answer was not in English, including another language written out in
                 // English letters, which the speech check cannot see. Marked, scored 0, and the candidate is told.
-                if (turn.notEnglish() && !skipped) {
+                // An answer that is plainly English is not marked otherwise, whatever the tag says: the flag was
+                // put on an off-topic English answer and it scored 0 for "not answered in English".
+                boolean notEnglish = turn.notEnglish() && !looksEnglish(request.getTranscript());
+                if (turn.notEnglish() && !notEnglish) {
+                    log.info("Interview {}: the not-English flag was ignored on an answer that is in English", scheduleId);
+                }
+                if (notEnglish && !skipped && !answeringClosing) {
                     markLastAnswerNotEnglish(s.getId());
                 }
-                if ((turn.hasScore() || turn.codeMismatch() || turn.notEnglish()) && !skipped) {
+                // Replies to the closing question ("yes", "no questions") are not answers to grade.
+                if ((turn.hasScore() || turn.codeMismatch() || notEnglish) && !skipped && !answeringClosing) {
                     mismatchFlagged.set(applyScoreToLastAnswer(s.getId(),
-                            turn.notEnglish() ? Integer.valueOf(0) : turn.answerScore(), turn.codeMismatch()));
+                            notEnglish ? Integer.valueOf(0) : turn.answerScore(), turn.codeMismatch()));
                 }
 
                 entryRepository.save(VoiceConversationEntry.builder()
@@ -1172,6 +1216,51 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     + "in general terms (no salary, offers or how the interview went). Then ask whether they have any "
                     + "other questions for us. Do NOT ask an interview question, do NOT start a new topic, do not "
                     + "end the interview in this reply and do not include [INTERVIEW_COMPLETE].";
+
+    /** Said when the candidate answers "yes" to the closing question without asking yet. */
+    static final String INVITE_QUESTION = "Of course, please go ahead. Anything you would like to ask about the role "
+            + "or the process, I'm happy to answer.";
+
+    /**
+     * Whether a reply to "do you have any questions?" means "yes, I do" without the question itself: a short yes,
+     * not a no, and not already a question (that is answered directly).
+     */
+    static boolean saysTheyHaveAQuestion(String transcript) {
+        if (transcript == null || transcript.isBlank()) {
+            return false;
+        }
+        String text = transcript.trim().toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z' ]", " ")
+                .replaceAll("\\s+", " ").trim();
+        if (text.isEmpty() || text.split(" ").length > 15
+                || text.matches("^(no|nope|nothing|not really|none|i don'?t|i do not|that'?s all|no thanks).*")) {
+            return false;
+        }
+        return text.matches("^(yes|yeah|yep|yup|ya|yah|sure|ok yes|okay yes|haan|ha|i do|i have|i've got|i got|one "
+                + "question|a question|a few questions|few questions|actually yes|yes i do|yes i have).*");
+    }
+
+    private static final java.util.Set<String> ENGLISH_WORDS = java.util.Set.of(
+            "the", "a", "an", "is", "are", "was", "were", "be", "to", "of", "and", "in", "on", "for", "with", "it",
+            "that", "this", "as", "by", "we", "you", "i", "my", "our", "can", "used", "use", "which", "from", "or",
+            "have", "has", "will", "would", "what", "how", "when", "where", "so", "but", "not", "do", "does", "they",
+            "there", "then", "if", "at", "into", "about", "like", "also", "its", "their", "easily");
+
+    /**
+     * Whether an answer is plainly English: enough of its words are common English words. Another language written
+     * out in English letters ("nenu project lo work chesanu") has almost none, so it is still caught.
+     */
+    static boolean looksEnglish(String transcript) {
+        if (transcript == null) {
+            return false;
+        }
+        String[] words = transcript.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z' ]", " ").trim()
+                .split("\\s+");
+        if (words.length < 4) {
+            return false;
+        }
+        long common = java.util.Arrays.stream(words).filter(ENGLISH_WORDS::contains).count();
+        return common * 4 >= words.length;
+    }
 
     private static final String FINAL_REPLY_DIRECTIVE =
             "The candidate has replied to your closing question, so this is your FINAL reply. If they asked "

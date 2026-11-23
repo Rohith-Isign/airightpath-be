@@ -99,7 +99,10 @@ public class InterviewContextService {
         // The order to assess in, and each skill's level, decided by the server (technical round only): one of the
         // job's own skills at a time, Basic to Expert, before the next. The interviewer used to interleave skills and
         // bring in domains the job never listed.
-        if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
+        // Not on the opening turn: the interview starts with the candidate's introduction, and an instruction to ask
+        // the next skill at Basic made the first question a technical one.
+        if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL
+                && schedule.getTotalQuestionsAsked() > 0) {
             List<VoiceConversationEntry> history = entryRepository
                     .findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId());
             List<String> required = requiredSkills(schedule);
