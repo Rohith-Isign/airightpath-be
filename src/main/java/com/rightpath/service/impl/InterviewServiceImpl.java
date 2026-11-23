@@ -266,6 +266,7 @@ public class InterviewServiceImpl implements InterviewService {
 	        LocalDateTime deadlineTime, LocalDate questionsFromDate, LocalDate questionsToDate) {
 
 	    requireDeadline(deadlineTime);
+	    requireStartNotPast(assignedAt);
 
 	    JobApplicationForCandidate application = jobAppRepo.findByJobPost_JobPrefixAndUser_Email(jobPrefix, email)
 	            .orElseThrow(() -> new ResourceNotFoundException("Application not found"));
@@ -299,6 +300,20 @@ public class InterviewServiceImpl implements InterviewService {
 	private static void requireDeadline(LocalDateTime deadlineTime) {
 		if (deadlineTime == null) {
 			throw new IllegalArgumentException("Date and time is required to assign an interview");
+		}
+	}
+
+	/** How far before now a start may be: the form defaults to "now", and it takes a minute or two to fill in. */
+	private static final long START_GRACE_MINUTES = 5;
+
+	/**
+	 * A new interview cannot open in the past: the start has to be now or later. Without this an admin could pick
+	 * 14:05 at 17:06 and the booking went through, already open for hours before anyone was told.
+	 */
+	private void requireStartNotPast(LocalDateTime opens) {
+		if (opens != null && opens.isBefore(businessSchedule.now().minusMinutes(START_GRACE_MINUTES))) {
+			throw new IllegalArgumentException(
+					"The interview start time is in the past. Choose the current time or a later one.");
 		}
 	}
 
@@ -341,6 +356,7 @@ public class InterviewServiceImpl implements InterviewService {
 	    }
 	    requireDeadline(deadlineTime);
 	    requireWindow(assignedAt, deadlineTime);
+	    requireStartNotPast(assignedAt);
 
 	    List<CandidateInterviewSchedule> schedules = new ArrayList<>();
 	    // Kept so the invitation can address the candidate by name and quote the
@@ -457,6 +473,11 @@ public class InterviewServiceImpl implements InterviewService {
 			throw new IllegalArgumentException("The interview start time is required");
 		}
 		requireWindow(assignedAt, deadlineTime);
+		// Keeping the start it already had is fine even once that has passed (only the end is being moved); a
+		// different start has to be now or later.
+		if (!assignedAt.equals(schedule.getAssignedAt())) {
+			requireStartNotPast(assignedAt);
+		}
 		if (!deadlineTime.isAfter(businessSchedule.now())) {
 			throw new IllegalArgumentException("The new end time has already passed");
 		}
