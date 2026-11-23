@@ -716,6 +716,16 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 parsed = askForDifferentCompetency(current, parsed, turnPrompt);
             }
 
+            // Was the answer just given not in English? Either the speech check found it (the answer was saved
+            // marked), or the interviewer saw it in the text and the text is not plainly English. Decided once
+            // here, so the spoken notice, the score and the on-screen alert all agree.
+            boolean answerNotEnglish = !skipped && !answeringClosing
+                    && (lastAnswerMarkedNotEnglish(scheduleId)
+                            || (parsed.notEnglish() && !looksEnglish(request.getTranscript())));
+            if (answerNotEnglish && !parsed.closing()) {
+                parsed = withEnglishNotice(parsed);
+            }
+
             // Closes when the model says it is done, or when the budget is
             // spent. The ceiling is enforced here rather than trusted to the
             // prompt: an interview that never ends is worse than one cut short.
@@ -786,7 +796,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 // English letters, which the speech check cannot see. Marked, scored 0, and the candidate is told.
                 // An answer that is plainly English is not marked otherwise, whatever the tag says: the flag was
                 // put on an off-topic English answer and it scored 0 for "not answered in English".
-                boolean notEnglish = turn.notEnglish() && !looksEnglish(request.getTranscript());
+                boolean notEnglish = answerNotEnglish;
                 if (turn.notEnglish() && !notEnglish) {
                     log.info("Interview {}: the not-English flag was ignored on an answer that is in English", scheduleId);
                 }
@@ -840,7 +850,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             });
 
             sendResponseComplete(scheduleId, spoken, finished, parsed.closing() ? "ai_closed" : "question_limit",
-                    turn.turnKind(), mismatchFlagged.get());
+                    turn.turnKind(), mismatchFlagged.get(), answerNotEnglish);
 
             if (!isCodeExplanation(spoken)) {
                 textToSpeechService.generateAndStreamTTS(scheduleId, stripQuestionTypeTags(spoken));
@@ -1426,6 +1436,33 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         return original;
     }
 
+    /** Said first, every time an answer was not in English, before the interviewer re-asks the question. */
+    static final String ENGLISH_NOTICE = "You are speaking in another language, but this interview can only be done "
+            + "in English, so this answer won't be evaluated. Please answer in English.";
+
+    /** The reply with the English notice in front (after the coding tag, if any), unless it already says so. */
+    static ParsedInterviewReply withEnglishNotice(ParsedInterviewReply reply) {
+        String text = reply.spokenText() == null ? "" : reply.spokenText();
+        if (text.toLowerCase(java.util.Locale.ROOT).contains("won't be evaluated")) {
+            return reply;
+        }
+        java.util.regex.Matcher coding = CODING_OPENING.matcher(text);
+        String noticed = coding.find()
+                ? text.substring(0, coding.end()) + " " + ENGLISH_NOTICE + " " + text.substring(coding.end()).trim()
+                : ENGLISH_NOTICE + " " + text;
+        return new ParsedInterviewReply(noticed.trim(), reply.answerScore(), reply.turnKind(), reply.topic(),
+                reply.closing(), reply.level(), reply.codeMismatch(), reply.skill(), true, reply.competency());
+    }
+
+    /** Whether the answer just saved was marked by the speech check as not in English. */
+    private boolean lastAnswerMarkedNotEnglish(Long scheduleId) {
+        return entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId).stream()
+                .filter(e -> e.getRole() == ConversationRole.CANDIDATE)
+                .reduce((first, second) -> second)
+                .map(e -> e.getContent() != null && e.getContent().startsWith(NOT_IN_ENGLISH))
+                .orElse(false);
+    }
+
     /** Wordings that ask the candidate to fix the code they have just written. */
     private static final java.util.regex.Pattern CORRECT_CODE = java.util.regex.Pattern.compile(
             "\\b(fix|correct|update|modify|change|rewrite|revise|improve|debug|adjust)\\b[^.?!\\n]{0,60}"
@@ -1859,7 +1896,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * candidate's last code back in the notepad when they are asked to fix it, instead of a blank page.
      */
     private void sendResponseComplete(Long scheduleId, String response, boolean isComplete, String endReason,
-            com.rightpath.enums.TurnKind turnKind, boolean codeMismatch) {
+            com.rightpath.enums.TurnKind turnKind, boolean codeMismatch, boolean notEnglish) {
         CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
                 .orElseThrow(() -> new ResourceNotFoundException("Schedule not found: " + scheduleId));
         Map<String, Object> message = new HashMap<>();
@@ -1872,6 +1909,11 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         message.put("terminated", false);
         if (turnKind != null) {
             message.put("turnKind", turnKind.name());
+        }
+        if (notEnglish) {
+            // Carried on the reply itself, so the "please answer in English" alert shows with the interviewer's words
+            // and cannot be missed the way a separate message could be.
+            message.put("notEnglish", true);
         }
         if (codeMismatch) {
             // The candidate is told their last code did not answer the question, so they are not left thinking it

@@ -37,4 +37,21 @@ class ClosingRepliesTest {
                 .isTrue();
         assertThat(VoiceInterviewServiceImpl.looksEnglish("nenu aa project lo backend work chesanu andi")).isFalse();
     }
+
+    @Test
+    @DisplayName("a non-English answer gets the fixed notice first, after the coding tag, and only once")
+    void englishNotice() {
+        com.rightpath.dto.voice.ParsedInterviewReply reply = new com.rightpath.dto.voice.ParsedInterviewReply(
+                "Could you explain closures again?", 0, com.rightpath.enums.TurnKind.REPHRASE, null, false);
+        String spoken = VoiceInterviewServiceImpl.withEnglishNotice(reply).spokenText();
+        assertThat(spoken).startsWith(VoiceInterviewServiceImpl.ENGLISH_NOTICE).endsWith("closures again?");
+
+        com.rightpath.dto.voice.ParsedInterviewReply coding = new com.rightpath.dto.voice.ParsedInterviewReply(
+                "[CODING] Write the function again.", 0, com.rightpath.enums.TurnKind.REPHRASE, null, false);
+        assertThat(VoiceInterviewServiceImpl.withEnglishNotice(coding).spokenText())
+                .startsWith("[CODING] " + VoiceInterviewServiceImpl.ENGLISH_NOTICE);
+
+        assertThat(VoiceInterviewServiceImpl.withEnglishNotice(VoiceInterviewServiceImpl.withEnglishNotice(reply))
+                .spokenText()).isEqualTo(spoken);
+    }
 }
