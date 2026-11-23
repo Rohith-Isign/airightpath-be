@@ -22,6 +22,13 @@ class AssessmentSequenceTest {
     private static final List<String> JOB = List.of("Python", "Machine Learning", "NumPy", "RAG");
 
     private final InterviewLevelProgression progression = new InterviewLevelProgression();
+
+    {
+        // Pinned to the settings these were written for: one correct answer per level, and coding only for skills
+        // written as code. The defaults (two answers, coding for every skill) are tested in PlanEnforcementTest.
+        progression.setPassesToAdvance(1);
+        progression.setCodingSkills(InterviewLevelProgression.DEFAULT_CODING_SKILLS);
+    }
     private final List<VoiceConversationEntry> entries = new ArrayList<>();
 
     private void ask(String skill, String level, String content, TurnKind kind) {

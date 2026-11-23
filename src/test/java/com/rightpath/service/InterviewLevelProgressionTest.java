@@ -19,6 +19,11 @@ import com.rightpath.enums.ConversationRole;
 class InterviewLevelProgressionTest {
 
     private final InterviewLevelProgression progression = new InterviewLevelProgression();
+
+    {
+        // These pin the one-answer rule they were written for; the default is now two (see AssessmentSequenceTest).
+        progression.setPassesToAdvance(1);
+    }
     private final List<VoiceConversationEntry> entries = new ArrayList<>();
 
     private void ask(String topic, String level) {

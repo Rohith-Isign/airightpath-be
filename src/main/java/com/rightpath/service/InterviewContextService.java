@@ -153,8 +153,61 @@ public class InterviewContextService {
         return messages;
     }
 
-    /** The job's required skills, as the job lists them. Empty when the job lists none or it cannot be read. */
+    /** Skill order per interview, worked out once the introduction is in: reading the résumé is not free. */
+    private final java.util.Map<Long, List<String>> skillOrder = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * The job's required skills, in the order to assess them: those the résumé or the introduction shows first ("mapped"),
+     * then the rest ("unmapped"), each group in the job's own order. RAG, on neither, came up last or not at all because
+     * the order used to be the job's list alone. Before the introduction the job's order is used.
+     */
     public List<String> requiredSkills(CandidateInterviewSchedule schedule) {
+        List<String> cached = skillOrder.get(schedule.getId());
+        if (cached != null) {
+            return cached;
+        }
+        List<String> jobSkills = jobSkills(schedule);
+        if (jobSkills.isEmpty()) {
+            return jobSkills;
+        }
+        List<VoiceConversationEntry> history = entryRepository
+                .findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId());
+        String introduction = history.stream()
+                .filter(e -> e.getRole() == com.rightpath.enums.ConversationRole.CANDIDATE)
+                .map(VoiceConversationEntry::getContent)
+                .findFirst()
+                .orElse(null);
+        if (introduction == null) {
+            return jobSkills;
+        }
+        String profile = introduction;
+        try {
+            profile += " " + placeholderResolver.resolveAllInterviewPlaceholders("{{resumeSummary}}",
+                    schedule.getJobPrefix(), schedule.getEmail(), schedule.getInterviewerName(),
+                    schedule.getEffectiveRound());
+        } catch (Exception e) {
+            log.debug("No résumé to order skills by for interview {}", schedule.getId(), e);
+        }
+        String text = profile.toLowerCase(java.util.Locale.ROOT);
+        String squashed = text.replaceAll("[^a-z0-9+#]", "");
+        List<String> mapped = new java.util.ArrayList<>();
+        List<String> unmapped = new java.util.ArrayList<>();
+        for (String skill : jobSkills) {
+            String s = skill.toLowerCase(java.util.Locale.ROOT);
+            String sq = s.replaceAll("[^a-z0-9+#]", "");
+            boolean shown = text.contains(s) || (sq.length() >= 3 && squashed.contains(sq));
+            (shown ? mapped : unmapped).add(skill);
+        }
+        List<String> ordered = new java.util.ArrayList<>(mapped);
+        ordered.addAll(unmapped);
+        List<String> result = List.copyOf(ordered);
+        skillOrder.put(schedule.getId(), result);
+        log.info("Interview {}: skill order {} (on the résumé or introduction: {})", schedule.getId(), result, mapped);
+        return result;
+    }
+
+    /** The job's required skills as the job lists them. Empty when there are none or they cannot be read. */
+    private List<String> jobSkills(CandidateInterviewSchedule schedule) {
         try {
             String skills = placeholderResolver.resolveJobPlaceholders("{{skills}}", schedule.getJobPrefix());
             if (skills == null || skills.isBlank() || skills.contains("{{")) {

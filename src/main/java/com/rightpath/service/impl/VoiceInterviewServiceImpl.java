@@ -716,6 +716,23 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 parsed = askForDifferentCompetency(current, parsed, turnPrompt);
             }
 
+            // The question has to be the one the assessment plan calls for: the skill in progress until it is
+            // complete, a new skill at Basic, and the coding task where one is owed. The plan was only an
+            // instruction, and the interviewer left Python half-assessed and started Machine Learning at
+            // Intermediate. Checked here, and sent back once if it does not match.
+            if (current.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL
+                    && levelProgression != null && !parsed.closing() && !isClosingQuestion(parsed.spokenText())
+                    && !moreQuestionsWelcome && !closingAsked && current.getTotalQuestionsAsked() > 1
+                    && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)) {
+                java.util.List<String> required = contextService.requiredSkills(current);
+                com.rightpath.service.InterviewLevelProgression.Expected expected =
+                        levelProgression.expectedNext(historyWithScore(scheduleId, parsed.answerScore()), required);
+                String problem = planMismatch(expected, parsed, required);
+                if (problem != null) {
+                    parsed = askToFollowPlan(current, parsed, turnPrompt, problem, expected, required);
+                }
+            }
+
             // Was the answer just given not in English? Either the speech check found it (the answer was saved
             // marked), or the interviewer saw it in the text and the text is not plainly English. Decided once
             // here, so the spoken notice, the score and the on-screen alert all agree.
@@ -1433,6 +1450,83 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         } catch (Exception e) {
             log.warn("Could not get examples for the coding question of interview {}", schedule.getId(), e);
         }
+        return original;
+    }
+
+    /**
+     * The conversation so far with the rating this reply gives the last answer put on it, so the plan counts that
+     * answer: its score arrives in the same reply as the next question, and without it the plan lagged an answer.
+     */
+    private java.util.List<VoiceConversationEntry> historyWithScore(Long scheduleId, Integer score) {
+        java.util.List<VoiceConversationEntry> history =
+                new java.util.ArrayList<>(entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId));
+        if (score == null) {
+            return history;
+        }
+        for (int i = history.size() - 1; i >= 0; i--) {
+            VoiceConversationEntry entry = history.get(i);
+            if (entry.getRole() == ConversationRole.CANDIDATE) {
+                if (entry.getAnswerScore() == null) {
+                    history.set(i, VoiceConversationEntry.builder().role(ConversationRole.CANDIDATE)
+                            .content(entry.getContent()).codeContent(entry.getCodeContent()).answerScore(score)
+                            .build());
+                }
+                break;
+            }
+        }
+        return history;
+    }
+
+    /** What is wrong with a question against the plan, in words for the interviewer; null when it matches. */
+    static String planMismatch(com.rightpath.service.InterviewLevelProgression.Expected expected,
+            ParsedInterviewReply reply, java.util.List<String> required) {
+        if (expected == null) {
+            return null;
+        }
+        java.util.List<String> problems = new java.util.ArrayList<>();
+        String skill = com.rightpath.service.InterviewLevelProgression.canonical(reply.skill(), required);
+        if (!expected.skill().equals(skill)) {
+            problems.add("it is on " + (reply.skill() == null ? "no named skill" : reply.skill())
+                    + ", but the skill in progress is " + expected.skill());
+        }
+        if (!expected.level().equals(reply.level())) {
+            problems.add("it is at " + (reply.level() == null ? "no level" : reply.level())
+                    + ", but " + expected.skill() + " is to be asked at " + expected.level());
+        }
+        if (expected.coding() && !isCodingQuestion(reply)) {
+            problems.add(expected.skill() + " owes its coding task at " + expected.level() + ", and this is not one");
+        }
+        return problems.isEmpty() ? null : String.join("; ", problems);
+    }
+
+    /** Asks once for the question the plan calls for; the original stands if the second try does not match either. */
+    private ParsedInterviewReply askToFollowPlan(CandidateInterviewSchedule schedule, ParsedInterviewReply original,
+            String turnPrompt, String problem,
+            com.rightpath.service.InterviewLevelProgression.Expected expected, java.util.List<String> required) {
+        try {
+            log.info("Interview {}: question sent back, {}", schedule.getId(), problem);
+            String directive = "Your question does not follow the assessment plan: " + problem + ". Keep your [SCORE] "
+                    + "for the last answer, acknowledge it briefly, and ask your next question on " + expected.skill()
+                    + " at " + expected.level()
+                    + (expected.coding() ? ", as a coding task ([CODING] with a Task type line and two examples)" : "")
+                    + ", tagged [SKILL:" + expected.skill() + "] [LEVEL:" + expected.level() + "] with its [TOPIC] and "
+                    + "[COMPETENCY].";
+            String reply = openAiStreamingService.chatCompletion(
+                    contextService.buildContextMessages(schedule, turnPrompt + "\n\n" + directive));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply retry = replyParser.parse(reply);
+                if (!retry.closing() && planMismatch(expected, retry, required) == null) {
+                    Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
+                    return new ParsedInterviewReply(retry.spokenText(), score, TurnKind.NEW_QUESTION,
+                            retry.topic() != null ? retry.topic() : original.topic(), false, retry.level(),
+                            original.codeMismatch() || retry.codeMismatch(), retry.skill(),
+                            original.notEnglish() || retry.notEnglish(), retry.competency());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not bring interview {} back to its plan", schedule.getId(), e);
+        }
+        log.warn("Interview {}: the question still did not follow the plan after one retry", schedule.getId());
         return original;
     }
 

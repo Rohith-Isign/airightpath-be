@@ -42,8 +42,17 @@ public class InterviewLevelProgression {
     @Value("${interview.answer.pass-score:6}")
     private int passScore = 6;
 
-    @Value("${interview.level.passes-to-advance:1}")
-    private int passesToAdvance = 1;
+    /**
+     * Correct answers needed at a level before the skill moves up. Two: one good answer moved a skill up a level, so a
+     * level was judged on a single question. For a coding skill one of the two is its coding task.
+     */
+    @Value("${interview.level.passes-to-advance:2}")
+    private int passesToAdvance = 2;
+
+    /** For tests. */
+    void setPassesToAdvance(int passes) {
+        this.passesToAdvance = passes;
+    }
 
     @Value("${interview.level.misses-to-stop:2}")
     private int missesToStop = 2;
@@ -124,7 +133,8 @@ public class InterviewLevelProgression {
                 level = entry.getLevel();
                 continue;
             }
-            if (entry.getRole() != ConversationRole.CANDIDATE || topic == null || level == null) {
+            // A skill tag is enough: a question the model filed under no scoring category still counts for its skill.
+            if (entry.getRole() != ConversationRole.CANDIDATE || (topic == null && skill == null) || level == null) {
                 continue;
             }
             boolean skipped = entry.getContent() != null && SKIPPED_CONTENT.equals(entry.getContent().trim());
@@ -221,8 +231,21 @@ public class InterviewLevelProgression {
      * Which of the job's skills are coding skills, by name: a skill whose name contains one of these needs coding
      * tasks. Conceptual skills (Machine Learning, RAG, system design) are assessed by questions alone.
      */
-    @Value("${interview.coding.skills:" + DEFAULT_CODING_SKILLS + "}")
-    private String codingSkills = DEFAULT_CODING_SKILLS;
+    @Value("${interview.coding.skills:*}")
+    private String codingSkills = "*";
+
+    /**
+     * Skills that never need a coding task, when every skill does ("*" above): soft skills, which have nothing to
+     * write. A conceptual technical skill (Machine Learning, RAG) still gets one, in a fitting form: the logic, or a
+     * sketch of the design.
+     */
+    @Value("${interview.coding.exclude-skills:communication,soft skill,leadership,teamwork,presentation,english,behavio}")
+    private String codingExcluded = "communication,soft skill,leadership,teamwork,presentation,english,behavio";
+
+    /** For tests: which skills need coding, as the setting gives them. */
+    void setCodingSkills(String skills) {
+        this.codingSkills = skills;
+    }
 
     /** The levels at which a coding skill must have its own coding task, once the skill reaches them. */
     @Value("${interview.coding.levels:BASIC,INTERMEDIATE}")
@@ -261,6 +284,15 @@ public class InterviewLevelProgression {
             return false;
         }
         String s = squash(skill);
+        for (String keyword : codingExcluded.split(",")) {
+            String k = squash(keyword);
+            if (k.length() >= 2 && s.contains(k)) {
+                return false;
+            }
+        }
+        if ("*".equals(codingSkills.trim())) {
+            return true;
+        }
         for (String keyword : codingSkills.split(",")) {
             String k = squash(keyword);
             if (k.length() >= 2 && s.contains(k)) {
@@ -374,6 +406,32 @@ public class InterviewLevelProgression {
                         .orElse(null));
     }
 
+    /** What the next new question must be: its skill, its level, and whether it has to be a coding task. */
+    public record Expected(String skill, String level, boolean coding) {
+    }
+
+    /**
+     * The next question the plan calls for, or null when every skill is complete. The skill in progress stays until it
+     * is complete; a new skill starts at Basic; and a coding skill's coding task at a level comes as soon as the level
+     * has had its first question, so each level has one.
+     */
+    public Expected expectedNext(List<VoiceConversationEntry> entries, List<String> required) {
+        if (required == null || required.isEmpty()) {
+            return null;
+        }
+        Map<String, SkillState> states = compute(entries, required);
+        String current = currentSkill(entries, required, states);
+        if (current == null) {
+            return null;
+        }
+        List<String> owed = codingOwed(entries, required, current);
+        if (!owed.isEmpty()) {
+            return new Expected(current, owed.get(0), true);
+        }
+        SkillState state = states.get(current);
+        return new Expected(current, state == null ? "BASIC" : state.currentLevel(), false);
+    }
+
     /** Required skills whose levels are not yet done: what still has to be assessed before the interview may close. */
     public List<String> unfinished(List<VoiceConversationEntry> entries, List<String> required) {
         Map<String, SkillState> states = compute(entries, required);
@@ -461,6 +519,15 @@ public class InterviewLevelProgression {
         }
         SkillState state = states.get(current);
         List<String> owed = codingOwed(entries, required, current);
+        Expected next = expectedNext(entries, required);
+        if (next != null) {
+            sb.append("YOUR NEXT NEW QUESTION: ").append(next.skill()).append(" at ").append(next.level())
+                    .append(next.coding() ? ", as a coding task ([CODING], with its Task type)" : "")
+                    .append(". Tag it [SKILL:").append(next.skill()).append("] [LEVEL:").append(next.level())
+                    .append("]. A question that does not match is sent back.\n")
+                    .append("A level is passed after ").append(passesToAdvance)
+                    .append(" correct answers at it; a new skill always starts at BASIC.\n");
+        }
         if (isDone(state) && !owed.isEmpty()) {
             sb.append(current).append(" has reached its last level, but it still owes a coding task at ")
                     .append(String.join(" and ", owed)).append(". Give that coding task now ([CODING], [SKILL:")
