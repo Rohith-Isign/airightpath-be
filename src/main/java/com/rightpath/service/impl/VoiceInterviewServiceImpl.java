@@ -297,6 +297,53 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * from it, and a {@code [CODING]} buried after the greeting is text the
      * candidate reads rather than a signal the client acts on.</p>
      */
+    /** Fewer words than this, in answer to "introduce yourself", is a greeting, not an introduction. */
+    static final int INTRODUCTION_MIN_WORDS = 20;
+
+    /** How many times a too-short introduction is asked for again before the interview moves on. */
+    static final int INTRODUCTION_MAX_REASKS = 2;
+
+    static final List<String> INTRODUCTION_REASKS = List.of(
+            "[REPHRASE] [THEORY] Thank you. Before we get into the technical questions, I would like to know you a "
+                    + "little better. Could you please introduce yourself properly: what you have studied, the work "
+                    + "or internships you have done, and one or two projects you have built, with the technologies "
+                    + "you used?",
+            "[REPHRASE] [THEORY] I would still like to hear a bit more about you before we begin. A few sentences is "
+                    + "enough: tell me about your background, what you have worked on, and the project you are most "
+                    + "proud of.");
+
+    /** Words in a spoken answer, counting only those with a letter in them. */
+    static int wordCount(String text) {
+        if (text == null || text.isBlank()) {
+            return 0;
+        }
+        return (int) java.util.Arrays.stream(text.trim().split("\\s+"))
+                .filter(word -> word.codePoints().anyMatch(Character::isLetter))
+                .count();
+    }
+
+    /**
+     * The introduction asked again, when the answer to it was too short to be one ("hello", a name, or nothing), and
+     * it has been asked again fewer than {@link #INTRODUCTION_MAX_REASKS} times. Null otherwise.
+     */
+    private String introductionReask(Long scheduleId, String answer) {
+        java.util.List<VoiceConversationEntry> history = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(
+                scheduleId);
+        java.util.List<VoiceConversationEntry> asked = history.stream()
+                .filter(e -> e.getRole() == ConversationRole.INTERVIEWER).toList();
+        if (asked.isEmpty() || InterviewContextService.questionsAfterIntroduction(history) > 0
+                || !asksForIntroduction(asked.get(asked.size() - 1).getContent())) {
+            return null;
+        }
+        int reasked = asked.size() - 1;
+        if (reasked >= INTRODUCTION_MAX_REASKS || wordCount(answer) >= INTRODUCTION_MIN_WORDS) {
+            return null;
+        }
+        log.info("Interview {}: the introduction was {} word(s); asking for it again ({} of {})", scheduleId,
+                wordCount(answer), reasked + 1, INTRODUCTION_MAX_REASKS);
+        return INTRODUCTION_REASKS.get(Math.min(reasked, INTRODUCTION_REASKS.size() - 1));
+    }
+
     /** The opening question when the generated one is not an introduction. */
     static final String INTRODUCTION_QUESTION = "To start, could you please introduce yourself? Tell me about your "
             + "background, what you have studied or worked on, and the projects you are most proud of.";
@@ -666,8 +713,13 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 }
                 turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
             }
+            // A greeting is not an introduction. "Hello" sent as the answer to "introduce yourself" was taken as one
+            // and the interview went straight on; the introduction is now asked again, up to twice.
+            String introductionReask = skipped || !closingAsked && !moreQuestionsWelcome
+                    ? introductionReask(scheduleId, skipped ? "" : request.getTranscript()) : null;
             // The invitation is a fixed line, worded so the next reply is still read as part of the close.
-            String reply = inviteQuestion
+            String reply = introductionReask != null ? introductionReask
+                    : inviteQuestion
                     ? INVITE_QUESTION
                     : openAiStreamingService.chatCompletion(contextService.buildContextMessages(current, turnPrompt));
 
@@ -716,6 +768,28 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 parsed = askForDifferentCompetency(current, parsed, turnPrompt);
             }
 
+            // The same question again, by its wording, under whatever competency name. The interviewer sees only the
+            // last few exchanges word for word, and asked questions again that had dropped out of its view.
+            if (introductionReask == null && !inviteQuestion && !parsed.closing()
+                    && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)) {
+                String earlier = InterviewContextService.repeatedQuestion(
+                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId), parsed.spokenText());
+                if (earlier != null) {
+                    parsed = askForUnaskedQuestion(current, parsed, turnPrompt, earlier);
+                }
+            }
+
+            // The resume questions come first and check the resume; they do not count towards a skill's levels, so
+            // whatever skill or level the model put on one is taken off.
+            boolean resumeQuestion = introductionReask == null && !inviteQuestion && !parsed.closing()
+                    && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)
+                    && contextService.inResumePhase(current);
+            if (resumeQuestion && (parsed.level() != null || parsed.skill() != null)) {
+                parsed = new ParsedInterviewReply(parsed.spokenText(), parsed.answerScore(), parsed.turnKind(),
+                        parsed.topic(), false, null, parsed.codeMismatch(), null, parsed.notEnglish(),
+                        parsed.competency());
+            }
+
             // The question has to be the one the assessment plan calls for: the skill in progress until it is
             // complete, a new skill at Basic, and the coding task where one is owed. The plan was only an
             // instruction, and the interviewer left Python half-assessed and started Machine Learning at
@@ -723,6 +797,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             if (current.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL
                     && levelProgression != null && !parsed.closing() && !isClosingQuestion(parsed.spokenText())
                     && !moreQuestionsWelcome && !closingAsked && current.getTotalQuestionsAsked() > 1
+                    && !resumeQuestion && introductionReask == null && !contextService.inResumePhase(current)
                     && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)) {
                 java.util.List<String> required = contextService.requiredSkills(current);
                 com.rightpath.service.InterviewLevelProgression.Expected expected =
@@ -1742,6 +1817,36 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         required.isEmpty() ? java.util.List.of(skill) : required, skill)
                 .stream()
                 .anyMatch(c -> c.toLowerCase().replaceAll("[^a-z0-9+#]", "").equals(wanted));
+    }
+
+    /** Asks once for a question not asked before; the original stands if the second try repeats too. */
+    private ParsedInterviewReply askForUnaskedQuestion(CandidateInterviewSchedule schedule,
+            ParsedInterviewReply original, String turnPrompt, String earlier) {
+        try {
+            log.info("Interview {}: question sent back, it repeats an earlier one", schedule.getId());
+            String reply = openAiStreamingService.chatCompletion(contextService.buildContextMessages(schedule,
+                    turnPrompt + "\n\nYour question repeats one already asked in this interview: \"" + earlier
+                            + "\". Keep your [SCORE] for the last answer and ask a question that tests something no "
+                            + "earlier question did, on the same skill and at the same level, with all its tags. Do "
+                            + "not reword the earlier question."));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply retry = replyParser.parse(reply);
+                if (!retry.closing() && InterviewContextService.repeatedQuestion(
+                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()),
+                        retry.spokenText()) == null) {
+                    Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
+                    return new ParsedInterviewReply(retry.spokenText(), score, TurnKind.NEW_QUESTION,
+                            retry.topic() != null ? retry.topic() : original.topic(), false,
+                            retry.level() != null ? retry.level() : original.level(),
+                            original.codeMismatch() || retry.codeMismatch(),
+                            retry.skill() != null ? retry.skill() : original.skill(),
+                            original.notEnglish() || retry.notEnglish(), retry.competency());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not replace a repeated question in interview {}", schedule.getId(), e);
+        }
+        return original;
     }
 
     /** Asks once for a question on a different competency; the original stands if the second try repeats too. */

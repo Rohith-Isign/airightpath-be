@@ -38,6 +38,160 @@ public class InterviewContextService {
     @Value("${interview.context-window-size:4}")
     private int contextWindowSize;
 
+    /**
+     * New questions on the candidate's resume (their projects and experience, against the job) asked right after the
+     * introduction and before the skill-by-skill assessment begins. Technical round only.
+     */
+    @Value("${interview.resume-questions:3}")
+    private int resumeQuestions = 3;
+
+    /** For tests. */
+    void setResumeQuestions(int count) {
+        this.resumeQuestions = count;
+    }
+
+    /**
+     * New questions asked after the introduction: interviewer turns that start a new question, not counting the
+     * opening one, follow-ups, rephrases (a re-asked introduction included) or the closing.
+     */
+    public static int questionsAfterIntroduction(List<VoiceConversationEntry> history) {
+        int count = 0;
+        boolean first = true;
+        for (VoiceConversationEntry entry : history) {
+            if (entry.getRole() != com.rightpath.enums.ConversationRole.INTERVIEWER) {
+                continue;
+            }
+            if (first) {
+                first = false;
+                continue;
+            }
+            if (entry.getTurnKind() == null || entry.getTurnKind() == com.rightpath.enums.TurnKind.NEW_QUESTION) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Whether the next new question belongs to the resume phase: the introduction has been asked and fewer than
+     * {@link #resumeQuestions} resume questions have followed it. Technical round only.
+     */
+    public boolean inResumePhase(CandidateInterviewSchedule schedule) {
+        if (schedule.getEffectiveRound() != com.rightpath.enums.InterviewRound.L2_TECHNICAL || resumeQuestions <= 0) {
+            return false;
+        }
+        List<VoiceConversationEntry> history = entryRepository
+                .findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId());
+        boolean introAsked = history.stream()
+                .anyMatch(e -> e.getRole() == com.rightpath.enums.ConversationRole.INTERVIEWER);
+        return introAsked && questionsAfterIntroduction(history) < resumeQuestions;
+    }
+
+    /** The instruction for a resume-phase question. */
+    String resumeDirective(int asked) {
+        return "RESUME QUESTIONS — question " + (asked + 1) + " of " + resumeQuestions + ", before the skill-by-skill "
+                + "assessment begins. Read the CANDIDATE RESUME, the candidate's introduction and the JOB. Ask about "
+                + "the candidate's own work: a specific project, internship or role from the resume, chosen because "
+                + "it uses this job's required skills or matches what the job will have them do. Ask what they "
+                + "personally built, why they made a key choice, a problem they hit and how they solved it, or how it "
+                + "was tested or deployed. Each resume question is on a DIFFERENT project or experience, the most "
+                + "relevant to this job first. If the resume is empty, ask about the work they described in their "
+                + "introduction. One question, spoken ([THEORY]); for these questions only, give [TOPIC] and "
+                + "[COMPETENCY:<the project or experience>] but no [SKILL] and no [LEVEL]: they check the resume and "
+                + "do not count towards any skill's levels. Do not start the skill assessment yet.";
+    }
+
+    /**
+     * Every question asked so far, so none is asked twice. The model sees only the last few exchanges word for word
+     * and the rest as a summary, and it asked questions again that had dropped out of its view.
+     */
+    static String askedQuestionsList(List<VoiceConversationEntry> history) {
+        List<String> asked = new ArrayList<>();
+        boolean first = true;
+        for (VoiceConversationEntry entry : history) {
+            if (entry.getRole() != com.rightpath.enums.ConversationRole.INTERVIEWER) {
+                continue;
+            }
+            if (first) {
+                first = false;
+                continue;
+            }
+            if (entry.getTurnKind() != null && entry.getTurnKind() != com.rightpath.enums.TurnKind.NEW_QUESTION) {
+                continue;
+            }
+            String question = questionPart(entry.getContent());
+            if (question.isBlank()) {
+                continue;
+            }
+            if (question.length() > 160) {
+                question = question.substring(0, 157) + "...";
+            }
+            String label = entry.getSkill() == null ? "" : "[" + entry.getSkill()
+                    + (entry.getLevel() == null ? "" : " " + entry.getLevel()) + "] ";
+            asked.add((asked.size() + 1) + ". " + label + question);
+        }
+        if (asked.isEmpty()) {
+            return null;
+        }
+        List<String> shown = asked.size() > 80 ? asked.subList(asked.size() - 80, asked.size()) : asked;
+        return "QUESTIONS ALREADY ASKED IN THIS INTERVIEW (never ask any of these again, reworded or not; each new "
+                + "question must test something none of these did):\n" + String.join("\n", shown);
+    }
+
+    /** The question itself, without tags or the acknowledgement of the previous answer before it. */
+    public static String questionPart(String content) {
+        if (content == null) {
+            return "";
+        }
+        String text = content.replaceAll("\\[[A-Z_]+(?::[^\\]]*)?]", " ").trim();
+        int split = text.lastIndexOf("\n\n");
+        if (split > 0 && split < text.length() - 10) {
+            text = text.substring(split).trim();
+        }
+        return text.replaceAll("\\s+", " ").trim();
+    }
+
+    private static final java.util.Set<String> STOP_WORDS = java.util.Set.of("the", "and", "you", "your", "how",
+            "what", "would", "could", "can", "does", "with", "for", "that", "this", "are", "about", "use", "using",
+            "explain", "describe", "tell", "when", "which", "why", "into", "from", "have", "its", "it's", "they",
+            "them", "their", "will", "should", "please", "let", "let's", "now", "also", "some", "any", "one", "way",
+            "ways", "example", "give", "between", "there", "these", "those", "work", "works");
+
+    private static java.util.Set<String> keyWords(String text) {
+        java.util.Set<String> words = new java.util.HashSet<>();
+        for (String w : text.toLowerCase(java.util.Locale.ROOT).split("[^a-z0-9+#]+")) {
+            if (w.length() >= 3 && !STOP_WORDS.contains(w)) {
+                words.add(w);
+            }
+        }
+        return words;
+    }
+
+    /** How alike two questions are, 0 to 1, by the words that carry their meaning. */
+    public static double similarity(String a, String b) {
+        java.util.Set<String> x = keyWords(questionPart(a));
+        java.util.Set<String> y = keyWords(questionPart(b));
+        if (x.size() < 3 || y.size() < 3) {
+            return 0;
+        }
+        java.util.Set<String> both = new java.util.HashSet<>(x);
+        both.retainAll(y);
+        java.util.Set<String> either = new java.util.HashSet<>(x);
+        either.addAll(y);
+        return (double) both.size() / either.size();
+    }
+
+    /** An earlier question this one repeats (by its wording), or null. Follow-ups and rephrases are not checked. */
+    public static String repeatedQuestion(List<VoiceConversationEntry> history, String question) {
+        for (VoiceConversationEntry entry : history) {
+            if (entry.getRole() == com.rightpath.enums.ConversationRole.INTERVIEWER
+                    && similarity(entry.getContent(), question) >= 0.6) {
+                return questionPart(entry.getContent());
+            }
+        }
+        return null;
+    }
+
     public InterviewContextService(VoiceConversationEntryRepository entryRepository,
                                    OpenAiStreamingService openAiStreamingService,
                                    JobPromptService jobPromptService,
@@ -101,19 +255,30 @@ public class InterviewContextService {
         // bring in domains the job never listed.
         // Not on the opening turn: the interview starts with the candidate's introduction, and an instruction to ask
         // the next skill at Basic made the first question a technical one.
+        List<VoiceConversationEntry> history = entryRepository
+                .findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId());
         if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL
                 && schedule.getTotalQuestionsAsked() > 0) {
-            List<VoiceConversationEntry> history = entryRepository
-                    .findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId());
-            List<String> required = requiredSkills(schedule);
-            String sequence = levelProgression.buildSequenceDirective(history, required);
-            if (sequence != null) {
-                messages.add(Map.of("role", "system", "content", sequence));
+            if (inResumePhase(schedule)) {
+                // The resume first: a few questions on the candidate's own projects against the job, then the skills.
+                messages.add(Map.of("role", "system", "content", resumeDirective(questionsAfterIntroduction(history))));
+            } else {
+                List<String> required = requiredSkills(schedule);
+                String sequence = levelProgression.buildSequenceDirective(history, required);
+                if (sequence != null) {
+                    messages.add(Map.of("role", "system", "content", sequence));
+                }
+                String levels = levelProgression.buildDirective(history, required);
+                if (levels != null) {
+                    messages.add(Map.of("role", "system", "content", levels));
+                }
             }
-            String levels = levelProgression.buildDirective(history, required);
-            if (levels != null) {
-                messages.add(Map.of("role", "system", "content", levels));
-            }
+        }
+
+        // Every question asked so far, whatever has dropped out of the verbatim window below.
+        String asked = askedQuestionsList(history);
+        if (asked != null) {
+            messages.add(Map.of("role", "system", "content", asked));
         }
 
         // Add running summary if exists
