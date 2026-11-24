@@ -145,6 +145,9 @@ public class AudioTranscriptionService {
     public void transcribeAsync(Long scheduleId, byte[] audioData, int chunkIndex) {
         log.info("Transcribing chunk {} for schedule {} ({} bytes)", chunkIndex, scheduleId, audioData.length);
 
+        // What this chunk's English transcript held; the language check waits for it (see below). Left empty for a
+        // chunk that was dropped or failed, so its language is never counted.
+        java.util.concurrent.CompletableFuture<String> heard = new java.util.concurrent.CompletableFuture<>();
         try {
             String filename = String.format("chunk_%d.webm", chunkIndex);
             String hint = nameResolver == null ? null : nameResolver.forInterview(scheduleId)
@@ -154,9 +157,20 @@ public class AudioTranscriptionService {
             // is published as soon as it is ready; the check counts towards the answer when it finishes.
             if (detectLanguage) {
                 String generation = sharedState.get(languageGenerationKey(scheduleId)).orElse("0");
+                // Counted only once this chunk's own transcript is known, and only when it held real words. On
+                // silence or a muted microphone the unpinned check invents a sentence, often in Telugu or Hindi
+                // script, and a candidate in a silent room was told they had not answered in English.
                 java.util.concurrent.CompletableFuture
                         .supplyAsync(() -> openAiStreamingService.detectLanguage(audioData, filename), LANGUAGE_CHECKS)
-                        .thenAccept(language -> countLanguage(scheduleId, chunkIndex, generation, language))
+                        .thenCombine(heard, (language, words) -> {
+                            if (hasSpeech(words)) {
+                                countLanguage(scheduleId, chunkIndex, generation, language);
+                            } else if (language.isPresent()) {
+                                log.info("Ignored the language check for chunk {} of schedule {}: no words in it "
+                                        + "(it guessed {})", chunkIndex, scheduleId, language.get()[0]);
+                            }
+                            return null;
+                        })
                         .exceptionally(e -> {
                             log.debug("No language check for chunk {} of schedule {}", chunkIndex, scheduleId, e);
                             return null;
@@ -180,6 +194,7 @@ public class AudioTranscriptionService {
             }
 
             if (result.getText() != null && !result.getText().isBlank()) {
+                heard.complete(result.getText());
                 sharedState.set(lastPublishedKey(scheduleId), comparable, LAST_PUBLISHED_TTL);
                 Map<String, Object> message = new HashMap<>();
                 message.put("text", result.getText());
@@ -211,7 +226,24 @@ public class AudioTranscriptionService {
                     errorMsg
             );
             publishDone(scheduleId, chunkIndex);
+        } finally {
+            heard.complete(""); // no effect when the transcript was already given
         }
+    }
+
+    /**
+     * Whether a chunk's English transcript holds something actually said: at least two words with letters in them.
+     * Silence comes back empty, or as one of the speech model's stock fillers, which are a word or two at most.
+     */
+    static boolean hasSpeech(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        String cleaned = text.replaceAll("(?i)\\b(thank you|thanks for watching)\\b[.!]?", " ").trim();
+        long words = java.util.Arrays.stream(cleaned.split("\\s+"))
+                .filter(word -> word.codePoints().anyMatch(Character::isLetter))
+                .count();
+        return words >= 2;
     }
 
     /**

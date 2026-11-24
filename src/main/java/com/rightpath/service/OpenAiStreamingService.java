@@ -352,6 +352,21 @@ public class OpenAiStreamingService {
                 JsonNode node = objectMapper.readTree(response.body().string());
                 String language = node.path("language").asText("");
                 String text = node.path("text").asText("");
+                // The model marks each stretch it thinks held no speech. When it says so of all of it, the language
+                // and text it gives are invented, so there is no answer here to judge.
+                JsonNode segments = node.path("segments");
+                if (segments.isArray() && !segments.isEmpty()) {
+                    boolean anySpeech = false;
+                    for (JsonNode segment : segments) {
+                        if (segment.path("no_speech_prob").asDouble(0) < 0.6) {
+                            anySpeech = true;
+                            break;
+                        }
+                    }
+                    if (!anySpeech) {
+                        return java.util.Optional.empty();
+                    }
+                }
                 return language.isBlank() ? java.util.Optional.empty()
                         : java.util.Optional.of(new String[] {language, text});
             }
