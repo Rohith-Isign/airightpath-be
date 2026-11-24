@@ -1485,7 +1485,14 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         }
         java.util.List<String> problems = new java.util.ArrayList<>();
         String skill = com.rightpath.service.InterviewLevelProgression.canonical(reply.skill(), required);
-        if (!expected.skill().equals(skill)) {
+        // The tag can say one skill while the question moves to another: "Let's shift our focus to machine learning
+        // now" went out tagged Python, so it passed as Python, a skip on it counted against Python, and the next
+        // question went "back" to Python. What the question says it moves to is checked as well as its tag.
+        String announced = announcedSkillSwitch(reply.spokenText(), required);
+        if (announced != null && !announced.equals(expected.skill())) {
+            problems.add("it moves on to " + announced + ", but the skill in progress is " + expected.skill()
+                    + (announced.equals(skill) ? "" : ", and its [SKILL] tag does not say " + announced));
+        } else if (!expected.skill().equals(skill)) {
             problems.add("it is on " + (reply.skill() == null ? "no named skill" : reply.skill())
                     + ", but the skill in progress is " + expected.skill());
         }
@@ -1497,6 +1504,39 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             problems.add(expected.skill() + " owes its coding task at " + expected.level() + ", and this is not one");
         }
         return problems.isEmpty() ? null : String.join("; ", problems);
+    }
+
+    /** "Let's shift our focus to …", "moving on to …", "now let's talk about …": the words that start a new skill. */
+    private static final String SWITCH_WORDS = "(?:shift|shifting|switch|switching|move|moving|turn|turning|go|going"
+            + "|transition|transitioning|change|changing|return|returning|back)\\b[^.?!\\n]{0,40}?\\b(?:to|onto|towards)\\b"
+            + "|\\blet'?s (?:talk|discuss|chat)(?: a bit| now)? about\\b|\\bnow,? (?:on|for|about)\\b";
+
+    /**
+     * The required skill a question says it is moving on to, by its own words, or null when it announces no switch.
+     * Only an announced switch counts: a Python question that happens to mention machine learning is still Python.
+     */
+    static String announcedSkillSwitch(String text, java.util.List<String> required) {
+        if (text == null || text.isBlank() || required == null || required.isEmpty()) {
+            return null;
+        }
+        String lower = text.toLowerCase(java.util.Locale.ROOT);
+        String found = null;
+        int foundAt = Integer.MAX_VALUE;
+        for (String skill : required) {
+            if (skill == null || skill.isBlank()) {
+                continue;
+            }
+            String name = java.util.regex.Pattern.quote(skill.trim().toLowerCase(java.util.Locale.ROOT));
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("(?:" + SWITCH_WORDS + ")[^.?!\\n]{0,25}?(?<![a-z0-9])" + name + "(?![a-z0-9])")
+                    .matcher(lower);
+            // The first switch the question announces is the one it makes.
+            if (m.find() && m.start() < foundAt) {
+                foundAt = m.start();
+                found = skill.trim();
+            }
+        }
+        return found;
     }
 
     /** Asks once for the question the plan calls for; the original stands if the second try does not match either. */
@@ -1527,6 +1567,15 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             log.warn("Could not bring interview {} back to its plan", schedule.getId(), e);
         }
         log.warn("Interview {}: the question still did not follow the plan after one retry", schedule.getId());
+        // It goes out as it is, but filed under the skill it really asks about, so the answer (or a skip) counts
+        // there and the next question does not swing back to the skill the tag wrongly named.
+        String announced = announcedSkillSwitch(original.spokenText(), required);
+        if (announced != null && !announced.equals(
+                com.rightpath.service.InterviewLevelProgression.canonical(original.skill(), required))) {
+            return new ParsedInterviewReply(original.spokenText(), original.answerScore(), original.turnKind(),
+                    original.topic(), original.closing(), original.level(), original.codeMismatch(), announced,
+                    original.notEnglish(), original.competency());
+        }
         return original;
     }
 
