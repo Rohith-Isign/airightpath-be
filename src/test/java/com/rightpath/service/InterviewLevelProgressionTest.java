@@ -61,20 +61,56 @@ class InterviewLevelProgressionTest {
     }
 
     @Test
-    @DisplayName("one slip keeps the level; a second answer that is not correct stops the skill there")
-    void twoMissesStop() {
+    @DisplayName("defaults: five questions a level, three correct to pass, the third miss stops the skill there")
+    void fiveQuestionsPerLevel() {
+        progression.setLevelRule(5, 0.6);
+        for (int i = 0; i < 4; i++) {
+            ask("Java", "BASIC");
+            answer(8);
+        }
+        // Four correct is not yet a passed level: each level is judged on all five of its questions.
+        assertThat(progression.compute(entries).get("Java").currentLevel()).isEqualTo("BASIC");
         ask("Java", "BASIC");
-        answer(8);
+        answer(3);
+        assertThat(progression.compute(entries).get("Java").currentLevel()).isEqualTo("INTERMEDIATE");
+
         ask("Java", "INTERMEDIATE");
         answer(4);
-        assertThat(progression.compute(entries).get("Java").isStopped()).isFalse();
-
         ask(null, "INTERMEDIATE"); // a follow-up stays on the skill last named
         skip();
+        assertThat(progression.compute(entries).get("Java").isStopped()).isFalse();
+        ask("Java", "INTERMEDIATE");
+        answer(5);
         InterviewLevelProgression.SkillState java = progression.compute(entries).get("Java");
         assertThat(java.isStopped()).isTrue();
         assertThat(java.currentLevel()).isEqualTo("INTERMEDIATE");
         assertThat(java.highestPassed()).isEqualTo("BASIC");
+    }
+
+    @Test
+    @DisplayName("the level demonstrated comes from the answers: Advanced and Expert answered well is Expert")
+    void demonstratedLevels() {
+        progression.setLevelRule(5, 0.6);
+        entries.add(VoiceConversationEntry.builder().role(ConversationRole.INTERVIEWER).content("q")
+                .skill("Machine Learning").level("BASIC").build());
+        answer(8);
+        for (String level : List.of("INTERMEDIATE", "INTERMEDIATE", "ADVANCED", "EXPERT")) {
+            entries.add(VoiceConversationEntry.builder().role(ConversationRole.INTERVIEWER).content("q")
+                    .skill("Machine Learning").level(level).build());
+            answer(level.equals("ADVANCED") ? 7 : 9);
+        }
+        entries.add(VoiceConversationEntry.builder().role(ConversationRole.INTERVIEWER).content("q")
+                .skill("SQL").level("BASIC").build());
+        answer(8);
+        entries.add(VoiceConversationEntry.builder().role(ConversationRole.INTERVIEWER).content("q")
+                .skill("SQL").level("INTERMEDIATE").build());
+        answer(3);
+        entries.add(VoiceConversationEntry.builder().role(ConversationRole.INTERVIEWER).content("q")
+                .skill("SQL").level("ADVANCED").build());
+        answer(9); // above a failed level: does not count
+
+        Map<String, String> levels = progression.demonstratedLevels(entries, List.of("Machine Learning", "SQL"));
+        assertThat(levels).containsEntry("Machine Learning", "EXPERT").containsEntry("SQL", "BASIC");
     }
 
     @Test
@@ -90,7 +126,8 @@ class InterviewLevelProgressionTest {
         Map<String, InterviewLevelProgression.SkillState> skills = progression.compute(entries);
         assertThat(skills.get("SQL").isFinished()).isTrue();
         assertThat(skills.get("AWS").currentLevel()).isEqualTo("BASIC");
-        assertThat(skills.get("AWS").isStopped()).isFalse();
+        // One question a level, all of it to be correct: the miss stops AWS at Basic, and SQL is untouched by it.
+        assertThat(skills.get("AWS").isStopped()).isTrue();
     }
 
     @Test

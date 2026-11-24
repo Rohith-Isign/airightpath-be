@@ -50,9 +50,13 @@ public class InterviewTemplateService {
     @Value("${interview.settings.paused:true}")
     private boolean settingsPaused = true;
 
-    /** While paused, the turn an interview is stopped at regardless, so it cannot run on for ever. */
-    @Value("${interview.settings.safety-cap:60}")
-    private int safetyCap = 60;
+    /**
+     * While paused, the turn an interview is stopped at regardless, so it cannot run on for ever. 150: with five
+     * questions at each of four levels, three skills taken all the way are 60 new questions before follow-ups and
+     * coding corrections, and 60 cut the last skill off.
+     */
+    @Value("${interview.settings.safety-cap:150}")
+    private int safetyCap = 150;
 
     @Value("${interview.questions.min:10}")
     private int defaultMinQuestions;

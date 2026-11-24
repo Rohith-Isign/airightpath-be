@@ -23,6 +23,11 @@ class PlanEnforcementTest {
     private static final List<String> JOB = List.of("Python", "Machine Learning", "RAG");
 
     private final InterviewLevelProgression progression = new InterviewLevelProgression();
+
+    {
+        // Two questions a level keeps these short; the five-question default is pinned in InterviewLevelProgressionTest.
+        progression.setLevelRule(2, 1.0);
+    }
     private final List<VoiceConversationEntry> entries = new ArrayList<>();
 
     private void ask(String skill, String level, boolean coding) {

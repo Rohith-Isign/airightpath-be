@@ -360,6 +360,10 @@ public class InterviewConductPolicy {
                 trade-offs under real constraints, design at scale. Only interview questions carry a level: put no \
                 [LEVEL] on the introduction, the closing "any questions for us" or a goodbye.
 
+                [SKILL], [LEVEL] and [COMPETENCY] always describe the NEW question in this message, never the answer \
+                you are rating with [SCORE]: when you rate a Python answer and then ask about Machine Learning, the \
+                tags say Machine Learning.
+
                 Skill. Also put [SKILL:name] on EVERY question: the one specific skill it tests, named exactly as in \
                 the job's required skills (for example Java, Spring Boot, SQL, React), or a skill from the resume that \
                 the role uses. [TOPIC] is the scoring category the question counts towards; [SKILL] is what it \

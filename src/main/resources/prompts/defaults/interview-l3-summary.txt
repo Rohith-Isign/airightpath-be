@@ -1,6 +1,16 @@
 Weight this evaluation toward working behaviour, not technical skill. A technical round
 has already been scored separately; do not re-score it here.
 
+HOW THE RESULT IS DECIDED
+The candidate is judged against how THIS ROLE needs the person to work, not against the questions that happened to be
+asked. List the role's behavioural requirements in expectedConcepts, from the job description and the experience
+level: what the person will do that depends on how they work (owning deliverables, working with stakeholders or
+clients, handling production pressure, mentoring, working in a team) and what {{experience}} expects of conduct.
+Mark the ones the role cannot do without as CORE. Mark each CORRECT (shown with a specific, owned example), PARTIAL
+(only a general or partial account), INCORRECT (deflected, generic after being asked for an example, or a poor
+account) or NOT_ASKED. The system works out the role fit from these marks, core ones counting double, and passes the
+candidate at 60% of the role. Never list technical skills here: they were assessed in L2.
+
 Score primarily on:
 - Specificity. A named, dated, concrete example counts; a general description of how they
   usually work does not.

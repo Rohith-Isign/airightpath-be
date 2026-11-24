@@ -139,6 +139,21 @@ public class VoiceEvaluationResult {
      */
     private Double scopeScore;
 
+    /** The share of the role's requirements, out of 100, a pass needs (the configured pass mark). */
+    private Double passMark;
+
+    /** Whether the numbers pass this candidate for the role: role fit at the pass mark and every core skill shown. */
+    private Boolean meetsPassMark;
+
+    /**
+     * Why the result is what it is, in a sentence or two a recruiter can repeat: the role fit against the pass mark,
+     * how many of the role's requirements were shown, and the core ones missing.
+     */
+    private String resultReason;
+
+    /** Required skills the role cannot do without that the candidate did not show at all (asked or not). */
+    private List<String> missingCoreSkills;
+
     /**
      * The verdict as a senior interviewer would give it to a hiring manager: what kind of candidate this is, how deep
      * they really are, and whether they are ready for this role, in a few plain sentences.
@@ -165,6 +180,15 @@ public class VoiceEvaluationResult {
         /** CORRECT, PARTIAL, INCORRECT or NOT_ASKED. */
         private String status;
         private List<Integer> questionNumbers;
+        /**
+         * What in the job this requirement comes from: SKILL (a required skill), RESPONSIBILITY (something the role
+         * does day to day) or EXPERIENCE (the depth the job's experience level calls for). Null on older results.
+         */
+        private String requirement;
+        /** The required skill it belongs to, as the job names it, when it belongs to one. */
+        private String skill;
+        /** CORE (the role cannot be done without it) or SUPPORTING. Core counts double. Null on older results. */
+        private String importance;
     }
 
     @Data

@@ -21,11 +21,12 @@ import com.rightpath.enums.ConversationRole;
  * <ul>
  *   <li>An answer is <b>correct</b> when it is rated at or above {@code interview.answer.pass-score} (default 6/10).
  *       A skipped question counts as not correct.</li>
- *   <li>A skill moves up a level after {@code interview.level.passes-to-advance} correct answers at its current level
- *       (default 1). Passing Expert finishes the skill.</li>
- *   <li>A skill stops at its current level after {@code interview.level.misses-to-stop} answers there that are not
- *       correct (default 2), so one slip does not end it but a skill the candidate plainly cannot take further is not
- *       pushed on. Stopping one skill never ends the interview.</li>
+ *   <li>Each level of each skill is asked {@code interview.level.questions-per-level} questions (default 5), and is
+ *       passed when {@code interview.level.pass-ratio} of them are correct (default 0.6, so 3 of 5). Then the skill
+ *       moves up; passing Expert finishes it.</li>
+ *   <li>A skill stops at its current level as soon as passing it is out of reach (the third answer there that is not
+ *       correct, at the defaults), so a level the candidate plainly cannot pass is not asked to the end. Stopping one
+ *       skill never ends the interview.</li>
  * </ul>
  *
  * <p>The result is given to the interviewer every turn as an instruction (see {@link #buildDirective}). The model
@@ -43,24 +44,43 @@ public class InterviewLevelProgression {
     private int passScore = 6;
 
     /**
-     * Correct answers needed at a level before the skill moves up. Two: one good answer moved a skill up a level, so a
-     * level was judged on a single question. For a coding skill one of the two is its coding task.
+     * Questions asked at each level of each skill before it is judged. Two or three per level was too little evidence
+     * for a level, or for the report built on it; five is the default, and up to ten can be set.
      */
-    @Value("${interview.level.passes-to-advance:2}")
-    private int passesToAdvance = 2;
+    @Value("${interview.level.questions-per-level:5}")
+    private int questionsPerLevel = 5;
 
-    /** For tests. */
+    /** The share of a level's questions that must be answered correctly to pass it: 0.6 is 3 of 5. */
+    @Value("${interview.level.pass-ratio:0.6}")
+    private double passRatio = 0.6;
+
+    /** For tests: a level of this many questions, every one of which must be correct. */
     void setPassesToAdvance(int passes) {
-        this.passesToAdvance = passes;
+        setLevelRule(passes, 1.0);
     }
 
-    @Value("${interview.level.misses-to-stop:2}")
-    private int missesToStop = 2;
+    /** For tests. */
+    void setLevelRule(int questions, double ratio) {
+        this.questionsPerLevel = questions;
+        this.passRatio = ratio;
+    }
+
+    /** Correct answers a level needs. */
+    int passesNeeded() {
+        return Math.max(1, (int) Math.ceil(Math.max(1, questionsPerLevel) * passRatio - 1e-9));
+    }
+
+    /** Answers at a level that may be wrong before passing it is out of reach, which stops the skill there. */
+    int missesAllowed() {
+        return Math.max(0, Math.max(1, questionsPerLevel) - passesNeeded());
+    }
 
     /** Where one skill stands. */
     public static final class SkillState {
         /** Index into {@link #LEVELS} of the level being asked now. */
         int current;
+        /** Questions answered (or skipped) at the current level, and how many of them correctly. */
+        int asked;
         int passes;
         int misses;
         boolean stopped;
@@ -145,33 +165,102 @@ public class InterviewLevelProgression {
             if (state.stopped || state.finished) {
                 continue;
             }
-            int asked = LEVELS.indexOf(level);
-            if (asked < state.current) {
+            int askedAt = LEVELS.indexOf(level);
+            if (askedAt < state.current) {
                 continue; // A question below the level already reached proves nothing new.
             }
             boolean correct = !skipped && entry.getAnswerScore() >= passScore;
-            if (correct) {
-                // A good answer to a question above the current level counts for that level, so a model that jumped
-                // ahead is not made to walk back down.
-                state.current = asked;
-                state.passes++;
-                state.misses = 0;
-                if (state.passes >= passesToAdvance) {
-                    if (state.current == LEVELS.size() - 1) {
-                        state.finished = true;
-                    } else {
-                        state.current++;
-                        state.passes = 0;
-                    }
+            if (askedAt > state.current) {
+                if (!correct) {
+                    continue; // The model jumped ahead and the answer missed: it says nothing about the level in hand.
                 }
+                // A good answer above the current level starts that level, so a model that jumped ahead is not made to
+                // walk back down.
+                state.current = askedAt;
+                state.asked = 0;
+                state.passes = 0;
+                state.misses = 0;
+            }
+            state.asked++;
+            if (correct) {
+                state.passes++;
             } else {
                 state.misses++;
-                if (state.misses >= missesToStop) {
-                    state.stopped = true;
+            }
+            // Each level is judged on its full set of questions; it stops early only once passing it is out of reach.
+            if (state.misses > missesAllowed()) {
+                state.stopped = true;
+            } else if (state.asked >= Math.max(1, questionsPerLevel) && state.passes >= passesNeeded()) {
+                if (state.current == LEVELS.size() - 1) {
+                    state.finished = true;
+                } else {
+                    state.current++;
+                    state.asked = 0;
+                    state.passes = 0;
+                    state.misses = 0;
                 }
             }
         }
         return skills;
+    }
+
+    /**
+     * The highest level of each skill the candidate actually demonstrated in the interview, from the answers as rated:
+     * a level counts when at least {@link #passRatio} of its answers were correct, and stops at the first level that was
+     * asked and not passed. NONE when not even the lowest level asked was passed. Only skills with rated, levelled
+     * answers appear.
+     *
+     * <p>This is what the report's level cards show, level by level, so the headline level is taken from it too: the
+     * grader's own pick ("Intermediate") sat above cards showing Advanced and Expert answered correctly.</p>
+     */
+    public Map<String, String> demonstratedLevels(List<VoiceConversationEntry> entries, List<String> required) {
+        Map<String, int[][]> counts = new LinkedHashMap<>(); // skill -> [level][correct, judged]
+        String skill = null;
+        String level = null;
+        for (VoiceConversationEntry entry : entries) {
+            if (entry.getRole() == ConversationRole.INTERVIEWER) {
+                boolean followUp = entry.getTurnKind() != null
+                        && entry.getTurnKind() != com.rightpath.enums.TurnKind.NEW_QUESTION;
+                if (entry.getSkill() != null && !entry.getSkill().isBlank()) {
+                    String named = canonical(entry.getSkill(), required);
+                    skill = named != null ? named : entry.getSkill().trim();
+                } else if (!followUp) {
+                    skill = null;
+                }
+                level = entry.getLevel();
+                continue;
+            }
+            if (entry.getRole() != ConversationRole.CANDIDATE || skill == null || level == null
+                    || !LEVELS.contains(level)) {
+                continue;
+            }
+            boolean skipped = entry.getContent() != null && SKIPPED_CONTENT.equals(entry.getContent().trim());
+            if (!skipped && entry.getAnswerScore() == null) {
+                continue;
+            }
+            int[] cell = counts.computeIfAbsent(skill, s -> new int[LEVELS.size()][2])[LEVELS.indexOf(level)];
+            if (!skipped && entry.getAnswerScore() >= passScore) {
+                cell[0]++;
+            }
+            cell[1]++;
+        }
+        Map<String, String> demonstrated = new LinkedHashMap<>();
+        counts.forEach((name, byLevel) -> {
+            String highest = "NONE";
+            for (int i = 0; i < LEVELS.size(); i++) {
+                int correct = byLevel[i][0];
+                int judged = byLevel[i][1];
+                if (judged == 0) {
+                    continue; // Not asked: a pass above it still counts, as the plan lets a skill jump ahead.
+                }
+                if (correct < judged * passRatio - 1e-9) {
+                    break;
+                }
+                highest = LEVELS.get(i);
+            }
+            demonstrated.put(name, highest);
+        });
+        return demonstrated;
     }
 
     /**
@@ -202,18 +291,24 @@ public class InterviewLevelProgression {
                         .append(passed == null ? "Basic not passed" : passed + " passed")
                         .append("). Finished: do not ask more about it; move to another skill.");
             } else {
-                sb.append("ask at ").append(state.currentLevel()).append(" next");
+                sb.append("ask at ").append(state.currentLevel()).append(" next (question ")
+                        .append(Math.min(state.asked + 1, Math.max(1, questionsPerLevel))).append(" of ")
+                        .append(Math.max(1, questionsPerLevel)).append(" at this level, ").append(state.passes)
+                        .append(" correct so far");
+                int missesLeft = missesAllowed() - state.misses;
                 if (state.misses > 0) {
-                    sb.append(" (one answer at this level was not correct; one more that is not ends this skill)");
+                    sb.append(missesLeft <= 0 ? "; one more that is not correct ends this skill"
+                            : "; " + (missesLeft + 1) + " more that are not correct end this skill");
                 }
-                sb.append('.');
+                sb.append(").");
             }
             sb.append('\n');
         });
         sb.append("Skills not listed have not been rated yet and start at BASIC. The answer you are rating in this ")
-                .append("reply is not counted above: if you rate it ").append(passScore)
-                .append(" or more, ask that skill one level higher next; below ").append(passScore)
-                .append(", stay at the same level or move to another skill. Tag every question's [LEVEL] to match.");
+                .append("reply is not counted above. Each level is ").append(Math.max(1, questionsPerLevel))
+                .append(" questions, each on a different competency; it is passed with ").append(passesNeeded())
+                .append(" or more correct, and only then does the skill go one level higher. Tag every question's ")
+                .append("[LEVEL] to match.");
         return sb.toString();
     }
 
@@ -525,8 +620,11 @@ public class InterviewLevelProgression {
                     .append(next.coding() ? ", as a coding task ([CODING], with its Task type)" : "")
                     .append(". Tag it [SKILL:").append(next.skill()).append("] [LEVEL:").append(next.level())
                     .append("]. A question that does not match is sent back.\n")
-                    .append("A level is passed after ").append(passesToAdvance)
-                    .append(" correct answers at it; a new skill always starts at BASIC.\n");
+                    .append("Each level of each skill is ").append(Math.max(1, questionsPerLevel))
+                    .append(" new questions (coding tasks included), each on a different competency. A level is ")
+                    .append("passed with ").append(passesNeeded()).append(" or more correct; more than ")
+                    .append(missesAllowed()).append(" not correct ends the skill at that level. A new skill always ")
+                    .append("starts at BASIC.\n");
         }
         if (isDone(state) && !owed.isEmpty()) {
             sb.append(current).append(" has reached its last level, but it still owes a coding task at ")
