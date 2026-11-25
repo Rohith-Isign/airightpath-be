@@ -128,6 +128,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
     @Autowired
     private com.rightpath.repository.JobApplicationForCandidateRepository jobAppRepo;
+
+    /** One browser tab at a time per interview. */
+    @Autowired(required = false)
+    private com.rightpath.service.ExamSessionLock examSessionLock;
     private final InterviewTopicCoverage topicCoverage;
     private final PromptInjectionGuard injectionGuard;
     private final InterviewTemplateService templateService;
@@ -393,13 +397,30 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     @Transactional
     public VoiceStartResponse startVoiceInterview(String jobPrefix, String email, Long fromDate, Long toDate,
             Long scheduleId) {
+        return startVoiceInterview(jobPrefix, email, fromDate, toDate, scheduleId, null);
+    }
+
+    @Override
+    @Transactional
+    public VoiceStartResponse startVoiceInterview(String jobPrefix, String email, Long fromDate, Long toDate,
+            Long scheduleId, String clientSessionId) {
         CandidateInterviewSchedule schedule = resolveSchedule(jobPrefix, email, scheduleId);
 
-        // This window becomes the only one that may run the interview. Any window that had it open is told it has
-        // been replaced, and its messages are refused from now on (VoiceInterviewWebSocketController).
-        String sessionId = java.util.UUID.randomUUID().toString();
+        // The tab's own session id, so a reload in the same tab is the same session; a new one otherwise.
+        String sessionId = com.rightpath.service.ExamSessionLock.isValidSessionId(clientSessionId)
+                ? clientSessionId : java.util.UUID.randomUUID().toString();
+        // One tab at a time. The interview could be started in two browsers and run in both: the second start now
+        // waits until the first tab has closed (it gives its lease back) or stopped renewing it.
+        if (examSessionLock != null
+                && !examSessionLock.claim(com.rightpath.service.ExamSessionLock.INTERVIEW, schedule.getId(), sessionId)) {
+            log.warn("Interview {} start refused: already open in another browser or tab", schedule.getId());
+            throw new IllegalStateException(com.rightpath.service.ExamSessionLock.OPEN_ELSEWHERE);
+        }
+
+        // This window becomes the only one that may run the interview. A window that had it open and has since gone
+        // quiet is told it has been replaced, and its messages are refused from now on.
         boolean takenOver = schedule.getAttemptStatus() == AttemptStatus.IN_PROGRESS
-                && schedule.getActiveSessionId() != null;
+                && schedule.getActiveSessionId() != null && !schedule.getActiveSessionId().equals(sessionId);
         schedule.setActiveSessionId(sessionId);
         scheduleRepo.save(schedule);
         if (takenOver) {

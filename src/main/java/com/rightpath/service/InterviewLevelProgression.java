@@ -213,6 +213,45 @@ public class InterviewLevelProgression {
      * <p>This is what the report's level cards show, level by level, so the headline level is taken from it too: the
      * grader's own pick ("Intermediate") sat above cards showing Advanced and Expert answered correctly.</p>
      */
+    /**
+     * Each skill's average answer rating, 0 to 10: the reviewer's rating where one was set, else the rating at the
+     * time, a skipped question counting 0. Only skills with rated answers appear.
+     */
+    public Map<String, Double> averageRatings(List<VoiceConversationEntry> entries, List<String> required) {
+        Map<String, double[]> sums = new LinkedHashMap<>(); // skill -> [total, count]
+        String skill = null;
+        boolean open = false;
+        for (VoiceConversationEntry entry : entries) {
+            if (entry.getRole() == ConversationRole.INTERVIEWER) {
+                boolean followUp = entry.getTurnKind() != null
+                        && entry.getTurnKind() != com.rightpath.enums.TurnKind.NEW_QUESTION;
+                if (entry.getSkill() != null && !entry.getSkill().isBlank()) {
+                    String named = canonical(entry.getSkill(), required);
+                    skill = named != null ? named : entry.getSkill().trim();
+                } else if (!followUp) {
+                    skill = null;
+                }
+                open = entry.getLevel() != null;
+                continue;
+            }
+            if (entry.getRole() != ConversationRole.CANDIDATE || skill == null || !open) {
+                continue;
+            }
+            open = false;
+            boolean skipped = entry.getContent() != null && SKIPPED_CONTENT.equals(entry.getContent().trim());
+            Integer score = entry.getReviewedScore() != null ? entry.getReviewedScore() : entry.getAnswerScore();
+            if (!skipped && score == null) {
+                continue;
+            }
+            double[] sum = sums.computeIfAbsent(skill, s -> new double[2]);
+            sum[0] += skipped ? 0 : score;
+            sum[1]++;
+        }
+        Map<String, Double> averages = new LinkedHashMap<>();
+        sums.forEach((name, sum) -> averages.put(name, sum[0] / sum[1]));
+        return averages;
+    }
+
     public Map<String, String> demonstratedLevels(List<VoiceConversationEntry> entries, List<String> required) {
         Map<String, int[][]> counts = new LinkedHashMap<>(); // skill -> [level][correct, judged]
         String skill = null;

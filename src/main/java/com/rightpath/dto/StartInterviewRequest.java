@@ -31,4 +31,7 @@ public class StartInterviewRequest {
 	 * most-recent fallback.</p>
 	 */
 	private Long scheduleId;
+
+	/** The browser tab's own session id, kept across a reload of that tab. Optional. */
+	private String sessionId;
 }

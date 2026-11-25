@@ -257,6 +257,15 @@ public class OpenAiStreamingService {
      */
     public String chatCompletion(List<Map<String, String>> messages, int maxTokens, double temperature,
             boolean jsonMode) {
+        return chatCompletion(messages, maxTokens, temperature, jsonMode, null);
+    }
+
+    /**
+     * As above, with a fixed seed: the same request then gets the same reply as far as OpenAI can make it. Used for
+     * grading, where the same interview re-evaluated must come back with the same result.
+     */
+    public String chatCompletion(List<Map<String, String>> messages, int maxTokens, double temperature,
+            boolean jsonMode, Integer seed) {
         lastChatFailure = null;
         // Said plainly, once per call. An empty key sends a request OpenAI
         // refuses, the refusal is swallowed below, and the candidate is told only
@@ -276,6 +285,9 @@ public class OpenAiStreamingService {
             requestBody.put("max_tokens", maxTokens);
             if (jsonMode) {
                 requestBody.put("response_format", Map.of("type", "json_object"));
+            }
+            if (seed != null) {
+                requestBody.put("seed", seed);
             }
 
             String json = objectMapper.writeValueAsString(requestBody);
@@ -373,6 +385,40 @@ public class OpenAiStreamingService {
         } catch (Exception e) {
             log.debug("Language detection failed for {}", filename, e);
             return java.util.Optional.empty();
+        }
+    }
+
+    /**
+     * Whether speech the language check took for another language really was that language, or English spoken with
+     * an accent that the speech model wrote out in that language's script.
+     *
+     * <p>Indian-accented English is regularly identified as Telugu or Hindi, and the unrestricted transcript then
+     * spells the English words in that script. Read as text, the two are easy to tell apart: real Telugu has Telugu
+     * grammar and words; transliterated English is English words, in English order, in Telugu letters. The English
+     * transcript of the same audio is given too. True when it was the other language. When the question cannot be
+     * asked, the detection stands, as it did before.</p>
+     */
+    public boolean confirmNotEnglish(String language, String nativeText, String englishText) {
+        String prompt = "A speech recognizer listened to part of a spoken job-interview answer.\n"
+                + "Left to choose the language, it decided it was " + language + " and wrote:\n<<<" + nativeText + ">>>\n"
+                + "Told the speech was English, it wrote:\n<<<" + (englishText == null ? "" : englishText) + ">>>\n\n"
+                + "Indian-accented English is often mistaken for an Indian language and written phonetically in that "
+                + "language's script: English words, in English word order, spelled in " + language + " letters. "
+                + "Was the speaker really speaking " + language + " (its own grammar and words, perhaps with a few "
+                + "English technical terms), or speaking English (perhaps accented, perhaps with a word or two of "
+                + language + ")? Reply with JSON only: {\"spoken\": \"english\"} or {\"spoken\": \"other\"}.";
+        try {
+            String reply = chatCompletion(List.of(
+                    Map.of("role", "system", "content", "You identify the language a person was speaking. JSON only."),
+                    Map.of("role", "user", "content", prompt)), 30, 0.0, true, 1);
+            if (reply == null || reply.isBlank()) {
+                return true;
+            }
+            String spoken = objectMapper.readTree(reply).path("spoken").asText("");
+            return !"english".equalsIgnoreCase(spoken.trim());
+        } catch (Exception e) {
+            log.debug("Could not confirm the language of a chunk; keeping the detection", e);
+            return true;
         }
     }
 
