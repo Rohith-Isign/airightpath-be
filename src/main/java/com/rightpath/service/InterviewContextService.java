@@ -264,7 +264,8 @@ public class InterviewContextService {
                 messages.add(Map.of("role", "system", "content", resumeDirective(questionsAfterIntroduction(history))));
             } else {
                 List<String> required = requiredSkills(schedule);
-                String sequence = levelProgression.buildSequenceDirective(history, required);
+                // Each skill gets a fair share of the question limit, so the first skills cannot use up the interview.
+                String sequence = levelProgression.buildSequenceDirective(history, required, template.effectiveMax());
                 if (sequence != null) {
                     messages.add(Map.of("role", "system", "content", sequence));
                 }

@@ -725,7 +725,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 turnPrompt += "\n\n" + FINAL_REPLY_DIRECTIVE;
             } else if (turnsLeft == 1) {
                 turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
-            } else if (!moreQuestionsWelcome && shouldStopEarly(scheduleId)) {
+            } else if (!moreQuestionsWelcome && shouldStopEarly(scheduleId) && everySkillStarted(current)) {
                 // The candidate is plainly not answering correctly. Carrying on only lengthens a result that is
                 // already clear, so the interview moves to its close, and is recorded as ended for that reason.
                 log.info("Interview {}: answers consistently below the mark; moving to close", scheduleId);
@@ -822,7 +822,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)) {
                 java.util.List<String> required = contextService.requiredSkills(current);
                 com.rightpath.service.InterviewLevelProgression.Expected expected =
-                        levelProgression.expectedNext(historyWithScore(scheduleId, parsed.answerScore()), required);
+                        levelProgression.expectedNext(historyWithScore(scheduleId, parsed.answerScore()), required,
+                                template.effectiveMax());
                 String problem = planMismatch(expected, parsed, required);
                 if (problem != null) {
                     parsed = askToFollowPlan(current, parsed, turnPrompt, problem, expected, required);
@@ -876,7 +877,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     && current.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
                 String gap = levelProgression.completionGap(
                         entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId),
-                        contextService.requiredSkills(current), minCodingTasks);
+                        contextService.requiredSkills(current), minCodingTasks, template.effectiveMax());
                 if (gap != null) {
                     ParsedInterviewReply continued = askToContinue(current, gap);
                     if (continued != null) {
@@ -1216,6 +1217,25 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * Whether the candidate has plainly stopped answering correctly: once enough answers are rated, the last few
      * average below the mark. Only rated, non-introduction answers count, so one bad question never ends anything.
      */
+    /**
+     * Whether every skill the job needs has been asked about at least once (technical round). Weak answers on one skill
+     * used to end the whole interview before the later skills were reached, so the report showed HTML and CSS as "not
+     * assessed" on a candidate who was never asked about them. The early stop now waits until each skill has had its
+     * turn; a weak skill still stops on its own after its misses.
+     */
+    private boolean everySkillStarted(CandidateInterviewSchedule schedule) {
+        if (levelProgression == null
+                || schedule.getEffectiveRound() != com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
+            return true;
+        }
+        java.util.List<String> required = contextService.requiredSkills(schedule);
+        if (required == null || required.isEmpty()) {
+            return true;
+        }
+        return levelProgression.notStarted(
+                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()), required).isEmpty();
+    }
+
     boolean shouldStopEarly(Long scheduleId) {
         if (!earlyStopEnabled) {
             return false;
