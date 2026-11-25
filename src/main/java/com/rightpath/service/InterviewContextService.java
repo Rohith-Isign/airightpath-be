@@ -261,6 +261,33 @@ public class InterviewContextService {
      * Build the message list for GPT, using rolling context window.
      * System prompt is fetched from DB (JobPrompt table).
      */
+    /** Questions an interview may run past its limit to cover JD skills (same setting the interview service reads). */
+    @org.springframework.beans.factory.annotation.Value("${interview.coverage.max-extra-questions:30}")
+    private int coverageExtraQuestions = 30;
+
+    /**
+     * The question budget the interviewer is told about. While JD skills are still uncovered (technical round), the
+     * limit is shown extended, as the server will in fact keep the interview going; told it was on its final reply, the
+     * interviewer said goodbye in the middle of the skills.
+     */
+    EffectiveInterviewTemplate extendedForCoverage(CandidateInterviewSchedule schedule,
+            EffectiveInterviewTemplate template) {
+        if (levelProgression == null || coverageExtraQuestions <= 0
+                || schedule.getEffectiveRound() != com.rightpath.enums.InterviewRound.L2_TECHNICAL
+                || schedule.getTotalQuestionsAsked() < template.effectiveMax() - 2) {
+            return template;
+        }
+        List<String> required = requiredSkills(schedule);
+        if (required == null || required.isEmpty() || levelProgression.unfinished(
+                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()), required,
+                template.effectiveMax()).isEmpty()) {
+            return template;
+        }
+        return new EffectiveInterviewTemplate(template.minQuestions(), template.maxQuestions() + coverageExtraQuestions,
+                template.baselineDifficulty(), template.adaptiveDifficulty(), template.configured(), template.paused(),
+                template.safetyCap() + coverageExtraQuestions);
+    }
+
     public List<Map<String, String>> buildContextMessages(CandidateInterviewSchedule schedule, String userMessage) {
         List<Map<String, String>> messages = new ArrayList<>();
 
@@ -272,7 +299,8 @@ public class InterviewContextService {
         // than only the first: the rolling context window below means an early
         // instruction can fall out of the conversation the model still sees.
         EffectiveInterviewTemplate template = templateService.resolve(schedule);
-        messages.add(Map.of("role", "system", "content", conductPolicy.asSystemMessage(schedule, template)));
+        messages.add(Map.of("role", "system", "content",
+                conductPolicy.asSystemMessage(schedule, extendedForCoverage(schedule, template))));
 
         // The same name as the welcome, every turn: it drifted to a misheard name or the one on the resume.
         messages.add(Map.of("role", "system", "content", nameResolver.namingRule(schedule.getId())));

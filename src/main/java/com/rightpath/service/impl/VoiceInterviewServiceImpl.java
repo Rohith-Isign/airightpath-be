@@ -96,6 +96,16 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     @org.springframework.beans.factory.annotation.Value("${interview.early-stop.max-average:3.0}")
     private double earlyStopMaxAverage = 3.0;
 
+    /**
+     * Questions the interview may run past its question limit to cover the JD skills it has not yet covered. A limit
+     * smaller than the job's skills need used to end the interview with skills never asked; this is the ceiling on that
+     * extension, so a misconfigured job still ends.
+     */
+    @org.springframework.beans.factory.annotation.Value("${interview.coverage.max-extra-questions:30}")
+    private int coverageExtraQuestions = 30;
+
+    private static final String COVERAGE_EXTENSION_SEPARATOR = System.lineSeparator() + System.lineSeparator();
+
     /** Distinct coding tasks an interview must include before it may close (re-asked tasks do not count again). */
     @org.springframework.beans.factory.annotation.Value("${interview.coding.min-tasks:2}")
     private int minCodingTasks = 2;
@@ -712,6 +722,16 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 closingAsked = false;
             }
             int turnsLeft = template.effectiveMax() - current.getTotalQuestionsAsked();
+            // The JD skills not yet covered (technical round): each must reach Expert, stop at a level, or have had its
+            // share of the questions before the interview may end. While any is left, the question limit, the closing
+            // question and the early stop all wait, up to the extension ceiling.
+            java.util.List<String> uncovered = uncoveredSkills(current, template);
+            boolean coverageOwed = !uncovered.isEmpty()
+                    && current.getTotalQuestionsAsked() < template.effectiveMax() + coverageExtraQuestions;
+            if (coverageOwed && turnsLeft <= 2) {
+                log.info("Interview {}: question limit near but skills not yet covered ({}); continuing", scheduleId,
+                        uncovered);
+            }
 
             String turnPrompt = contextService.buildNextQuestionPrompt(
                     current,
@@ -723,9 +743,14 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 turnPrompt += "\n\n" + CLOSING_ANSWER_DIRECTIVE;
             } else if (closingAsked) {
                 turnPrompt += "\n\n" + FINAL_REPLY_DIRECTIVE;
+            } else if (coverageOwed && turnsLeft <= 2) {
+                // The budget note says the questions are nearly spent; without this the interviewer tries to close.
+                turnPrompt += COVERAGE_EXTENSION_SEPARATOR + "QUESTION LIMIT EXTENDED: these JD skills are not yet "
+                        + "covered: " + String.join(", ", uncovered) + ". Do NOT close or ask the closing question. "
+                        + "Ask the next question the assessment sequence names.";
             } else if (turnsLeft == 1) {
                 turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
-            } else if (!moreQuestionsWelcome && shouldStopEarly(scheduleId) && everySkillStarted(current)) {
+            } else if (!moreQuestionsWelcome && !coverageOwed && shouldStopEarly(scheduleId)) {
                 // The candidate is plainly not answering correctly. Carrying on only lengthens a result that is
                 // already clear, so the interview moves to its close, and is recorded as ended for that reason.
                 log.info("Interview {}: answers consistently below the mark; moving to close", scheduleId);
@@ -851,7 +876,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // Closes when the model says it is done, or when the budget is
             // spent. The ceiling is enforced here rather than trusted to the
             // prompt: an interview that never ends is worse than one cut short.
-            boolean ceilingHit = conductPolicy.hasReachedCeiling(template, current.getTotalQuestionsAsked());
+            boolean ceilingHit = conductPolicy.hasReachedCeiling(template, current.getTotalQuestionsAsked())
+                    && !coverageOwed;
             // The candidate has answered the closing question, so this reply is the last one whatever the model says.
             boolean finished = !moreQuestionsWelcome && (parsed.closing() || ceilingHit || closingAsked);
 
@@ -881,7 +907,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             boolean wantsToClose = (parsed.closing() || isClosingQuestion(parsed.spokenText()))
                     && !ceilingHit && !closingAsked && !moreQuestionsWelcome;
             boolean stoppingEarly = sharedState != null && sharedState.get("early-stop:" + scheduleId).isPresent();
-            if (wantsToClose && !stoppingEarly && levelProgression != null && turnsLeft > 2
+            if (wantsToClose && !stoppingEarly && levelProgression != null && (turnsLeft > 2 || coverageOwed)
                     && current.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
                 String gap = levelProgression.completionGap(
                         entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId),
@@ -1233,22 +1259,25 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * average below the mark. Only rated, non-introduction answers count, so one bad question never ends anything.
      */
     /**
-     * Whether every skill the job needs has been asked about at least once (technical round). Weak answers on one skill
-     * used to end the whole interview before the later skills were reached, so the report showed HTML and CSS as "not
-     * assessed" on a candidate who was never asked about them. The early stop now waits until each skill has had its
-     * turn; a weak skill still stops on its own after its misses.
+     * The JD's required skills not yet covered, technical round only: a skill is covered once it has reached Expert,
+     * stopped at a level, or had its share of the question limit. Weak answers on one skill used to end the whole
+     * interview, and a question limit too small for the job ended it, before the later skills were reached; the
+     * report then showed them as "not assessed" on a candidate who was never asked about them.
      */
-    private boolean everySkillStarted(CandidateInterviewSchedule schedule) {
+    private java.util.List<String> uncoveredSkills(CandidateInterviewSchedule schedule,
+            EffectiveInterviewTemplate template) {
         if (levelProgression == null
-                || schedule.getEffectiveRound() != com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
-            return true;
+                || schedule.getEffectiveRound() != com.rightpath.enums.InterviewRound.L2_TECHNICAL
+                || contextService.inResumePhase(schedule)) {
+            return java.util.List.of();
         }
         java.util.List<String> required = contextService.requiredSkills(schedule);
         if (required == null || required.isEmpty()) {
-            return true;
+            return java.util.List.of();
         }
-        return levelProgression.notStarted(
-                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()), required).isEmpty();
+        return levelProgression.unfinished(
+                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()), required,
+                template.effectiveMax());
     }
 
     boolean shouldStopEarly(Long scheduleId) {
