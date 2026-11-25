@@ -66,6 +66,14 @@ public final class ProctoringEventSeverity {
 			"screen_recording_started",
 			// More than one display: recorded for the reviewer, never charged.
 			"multiple_displays",
+			// The candidate corrected the text of an answer before it was sent. Allowed, and recorded with what
+			// was heard and what was sent so a reviewer can see a correction is not a different answer.
+			"transcript_edited",
+			// The candidate discarded a transcript that was not what they said and answered again (once per
+			// question). Allowed; recorded with what was heard.
+			"answer_rerecorded",
+			// The interview was opened in a second window and the first was closed. Recorded for the reviewer.
+			"interview_opened_elsewhere",
 			// What the browser did to the microphone. A fact about the device, never conduct.
 			"mic_processing",
 			// The phone's own recording, reported by the phone.

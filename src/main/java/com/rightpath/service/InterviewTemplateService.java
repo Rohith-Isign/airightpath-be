@@ -42,6 +42,22 @@ public class InterviewTemplateService {
 
     private final InterviewTemplateRepository templateRepository;
 
+    /**
+     * Switches the question limits and the difficulty setting off for the technical round, temporarily, to see how
+     * the interview runs when the interviewer decides how many questions to ask and the level progression decides
+     * depth. The saved values are kept and shown, and come back into force when this is set to false.
+     */
+    @Value("${interview.settings.paused:true}")
+    private boolean settingsPaused = true;
+
+    /**
+     * While paused, the turn an interview is stopped at regardless, so it cannot run on for ever. 150: with five
+     * questions at each of four levels, three skills taken all the way are 60 new questions before follow-ups and
+     * coding corrections, and 60 cut the last skill off.
+     */
+    @Value("${interview.settings.safety-cap:150}")
+    private int safetyCap = 150;
+
     @Value("${interview.questions.min:10}")
     private int defaultMinQuestions;
 
@@ -85,7 +101,9 @@ public class InterviewTemplateService {
             max = defaultMaxQuestions;
         }
 
-        return new EffectiveInterviewTemplate(min, max, difficulty, adaptive, stored.isPresent());
+        boolean paused = settingsPaused && InterviewRound.orDefault(round) == InterviewRound.L2_TECHNICAL;
+        return new EffectiveInterviewTemplate(min, max, difficulty, adaptive, stored.isPresent(), paused,
+                Math.max(safetyCap, max));
     }
 
     /** The stored row for a job's round, if it has one. */

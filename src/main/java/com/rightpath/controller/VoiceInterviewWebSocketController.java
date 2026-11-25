@@ -83,6 +83,30 @@ public class VoiceInterviewWebSocketController {
         return owned;
     }
 
+    /**
+     * Whether a message comes from the window that currently runs the interview.
+     *
+     * <p>Opening the interview gives the window an id and makes it the only one allowed (the newest wins). A message
+     * from any other window is refused, and that window is told again that it has been replaced so it closes itself.
+     * A message with no id at all is let through: it comes from a page loaded before this check existed, and
+     * refusing it would cut off an interview already under way.</p>
+     */
+    private boolean isActiveWindow(Long scheduleId, String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return true;
+        }
+        String active = scheduleRepo.findById(scheduleId)
+                .map(com.rightpath.entity.CandidateInterviewSchedule::getActiveSessionId)
+                .orElse(null);
+        if (active == null || active.equals(sessionId)) {
+            return true;
+        }
+        log.warn("Refused a message for interview {} from a window that has been replaced", scheduleId);
+        messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/session-replaced",
+                Map.of("sessionId", active));
+        return false;
+    }
+
     private void sendError(Long scheduleId, String message) {
         Map<String, Object> errorMsg = new HashMap<>();
         errorMsg.put("error", message);
@@ -100,6 +124,7 @@ public class VoiceInterviewWebSocketController {
     public void handleAudioChunk(@DestinationVariable Long scheduleId, @Payload Map<String, String> payload,
                                   SimpMessageHeaderAccessor headerAccessor) {
         if (!verifyOwnership(scheduleId, headerAccessor)) return;
+        if (!isActiveWindow(scheduleId, payload.get("sessionId"))) return;
 
         String base64Audio = payload.get("audio");
         if (base64Audio == null || base64Audio.isBlank()) {
@@ -132,6 +157,7 @@ public class VoiceInterviewWebSocketController {
     public void handleSubmitAnswer(@DestinationVariable Long scheduleId, @Payload VoiceAnswerRequest request,
                                     SimpMessageHeaderAccessor headerAccessor) {
         if (!verifyOwnership(scheduleId, headerAccessor)) return;
+        if (!isActiveWindow(scheduleId, request.getSessionId())) return;
 
         log.info("Received {} for schedule {}: {} chars",
                 request.isSkipped() ? "skipped question" : "answer submission",
@@ -163,6 +189,7 @@ public class VoiceInterviewWebSocketController {
     public void handleInterrupt(@DestinationVariable Long scheduleId, @Payload Map<String, String> payload,
                                  SimpMessageHeaderAccessor headerAccessor) {
         if (!verifyOwnership(scheduleId, headerAccessor)) return;
+        if (!isActiveWindow(scheduleId, payload.get("sessionId"))) return;
         log.info("Interrupt received for schedule {}: {}", scheduleId, payload.get("reason"));
     }
 
@@ -173,6 +200,8 @@ public class VoiceInterviewWebSocketController {
     public void handleProctoringEvent(@DestinationVariable Long scheduleId, @Payload Map<String, String> payload,
                                        SimpMessageHeaderAccessor headerAccessor) {
         if (!verifyOwnership(scheduleId, headerAccessor)) return;
+        // A replaced window's warnings are not the candidate's conduct in the interview that is running.
+        if (!isActiveWindow(scheduleId, payload.get("sessionId"))) return;
 
         String eventType = payload.get("type");
         String details = payload.get("details");

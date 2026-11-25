@@ -1,6 +1,16 @@
 Weight this evaluation toward working behaviour, not technical skill. A technical round
 has already been scored separately; do not re-score it here.
 
+HOW THE RESULT IS DECIDED
+The candidate is judged against how THIS ROLE needs the person to work, not against the questions that happened to be
+asked. List the role's behavioural requirements in expectedConcepts, from the job description and the experience
+level: what the person will do that depends on how they work (owning deliverables, working with stakeholders or
+clients, handling production pressure, mentoring, working in a team) and what {{experience}} expects of conduct.
+Mark the ones the role cannot do without as CORE. Mark each CORRECT (shown with a specific, owned example), PARTIAL
+(only a general or partial account), INCORRECT (deflected, generic after being asked for an example, or a poor
+account) or NOT_ASKED. The system works out the role fit from these marks, core ones counting double, and passes the
+candidate at 60% of the role. Never list technical skills here: they were assessed in L2.
+
 Score primarily on:
 - Specificity. A named, dated, concrete example counts; a general description of how they
   usually work does not.
@@ -29,8 +39,8 @@ candidates, and ownership of their own work from junior ones.
 How to score this round, in order of importance:
 1. Only score what was tested. A competency that no question reached (for example conflict,
    failure, ownership, motivation) is "not assessed", not a middling number. The overall score
-   is built from the assessed competencies alone, so a short interview that reached only part
-   of them scores lower overall.
+   is measured against every competency this round should cover, so one never reached earns
+   nothing and a short interview that reached only part of them scores lower overall.
 2. Specific, owned examples are the evidence. A named situation, what the candidate personally
    decided and did, the outcome and what changed afterwards. General statements about how they
    usually work are weak evidence.
@@ -38,3 +48,12 @@ How to score this round, in order of importance:
    strong; a deflected or generic one is a negative.
 4. Say what the candidate said or did, specifically, in each area's feedback, so a recruiter can
    see exactly why the score is what it is and decide whether to hire.
+
+JUDGE LIKE A SENIOR INTERVIEWER
+- Grade this interview only, from this transcript. Never draw on another candidate or interview.
+- Measure against what the role needs, not against the questions that happened to be asked: an area this interview
+  never reached is still open, and must be named as not covered, not quietly left out.
+- Separate what the candidate knows from how deep it goes. A correct but textbook answer that could not survive a
+  follow-up is shallow, and is not the same as real understanding.
+- End with the verdict a person would give the hiring manager: what kind of candidate this is, the level they actually
+  showed against the level the job asks for, what is still not covered, and what they would need.

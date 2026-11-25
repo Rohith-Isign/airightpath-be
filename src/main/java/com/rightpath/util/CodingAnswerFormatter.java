@@ -15,7 +15,11 @@ package com.rightpath.util;
  */
 public final class CodingAnswerFormatter {
 
-    private static final String NOT_RUN = "The candidate did not run this code.";
+    // The interview notepad has no compiler or run button, so "not run" is the normal case and says nothing about
+    // the candidate. The model is told so, and to judge the code by reading it (it may also be pseudocode or logic).
+    private static final String NOT_RUN = "The candidate did not run this code: the interview notepad has no "
+            + "compiler. Judge it by reading it and tracing the examples by hand. It may be pseudocode or "
+            + "step-by-step logic in any language; do not penalise that.";
 
     private CodingAnswerFormatter() {
     }

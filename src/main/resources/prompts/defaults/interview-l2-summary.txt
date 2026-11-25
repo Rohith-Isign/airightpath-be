@@ -1,43 +1,65 @@
-Weight this evaluation toward demonstrated engineering ability for {{jobTitle}}.
+Evaluate this L2 Technical Interview as the senior engineer deciding whether this candidate can do the job of
+{{jobTitle}}.
 
-Judge against the required skills: {{skills}}
+Required skills: {{skills}}
 Expected experience level: {{experience}}
+Job description: {{jobDescription}}
 
-Score primarily on:
-- Correctness of technical claims, not fluency in making them.
-- Depth under follow-up: whether a confident first answer survived being pushed on.
-- Resume claims: compare what the resume says with what the candidate could explain when
-  asked. A claim explained with specifics is strong evidence. A claim they could not explain
-  is a negative, however well it reads on paper.
-- Code submitted during the round: correctness first, then edge cases, then complexity,
-  then readability. Weigh submitted code above spoken description of code.
-- Debugging and trade-off reasoning: can they say why, not only what.
+HOW THE RESULT IS DECIDED
+The candidate is judged against what THIS ROLE needs, not against the questions that happened to be asked. You list
+the role's requirements, mark how the candidate did on each, and the system works out the role fit from your marks:
+core requirements count double, and the candidate passes at 60% of the role with every core skill shown at least in
+part. So the marks you give the requirements ARE the result: give them carefully and honestly.
 
-Discount:
-- Buzzword density and name-dropping of tools with no detail behind it.
-- Polish of delivery. A hesitant correct answer beats a smooth wrong one.
-- The closing questions the candidate asked at the end. They are not part of the score.
+1. LIST THE ROLE'S REQUIREMENTS (expectedConcepts)
+Read the job as a hiring manager would. List what a person must be able to do to be hired for it:
+- SKILL: for every required skill, what that skill needs at the depth THIS role uses it. For a data role, Python means
+  working with data structures, files and errors and writing clean functions; for a backend role, it means building
+  services. Name the skill.
+- RESPONSIBILITY: the main things the job description says the person will DO (build and deploy models, design
+  APIs, write production queries, debug live issues), each on its own.
+- EXPERIENCE: the depth {{experience}} calls for. A fresher needs correct fundamentals and simple application; two to
+  four years need practical implementation and debugging; senior needs design choices, trade-offs and failure
+  handling.
+Mark CORE what the role cannot be done without (the main skills and responsibilities), SUPPORTING the rest. Build the
+list from the job, the same way however the interview went; never shorten it to what was asked.
 
-Treat as significant negatives:
-- Confidently stated incorrect fundamentals.
-- Coding answers that were never made to work and were not reasoned about.
-- Contradicting an earlier answer without acknowledging it.
+2. MARK EACH REQUIREMENT FROM THE WHOLE TRANSCRIPT
+- CORRECT: shown well, at the depth the role needs. It may be shown by several answers together: a theory answer, a
+  coding task and a project the candidate explained.
+- PARTIAL: partly shown, or only at a shallower depth than the role needs (a correct definition where the role needs
+  it applied).
+- INCORRECT: asked and answered wrongly, skipped or not answered.
+- NOT_ASKED: the interview never reached it. It earns nothing, and is named as not covered.
 
-Calibrate to {{experience}}: do not penalise a mid-level candidate for lacking
-architecture ownership, and do not reward a senior one for fundamentals alone.
+3. WHAT COUNTS AS EVIDENCE, STRONGEST FIRST
+- Code and logic the candidate wrote: correct on the examples, edge cases handled, sensible complexity, readable.
+  It is read, never run: never count "not run" or "does not compile" against pseudocode or logic. A coding question
+  answered only by talking has not shown coding.
+- Depth under follow-up: a confident first answer that survived being pushed on. Can they say why, not only what?
+- Debugging and trade-off reasoning, and working a problem out aloud, including correcting their own mistake.
+- Resume claims explained with specifics. A claim they could not explain is a negative, however well it reads.
+- The ratings given at the time ("[Rated at the time: n/10]") are strong evidence; a skill's score sits close to the
+  ratings of its answers, and moves away only for a reason you state.
 
-How to score this round, in order of importance:
-1. Coding is the strongest evidence. Programming areas are scored only from code the candidate
-   actually wrote: whether it is correct on the examples, handles edge cases, has sensible time
-   and space complexity, and is readable. Several coding problems of rising difficulty tell more
-   than any amount of explanation. If no code was written, the programming areas are not
-   assessed: say so, do not guess a score.
-2. Technical depth. A correct answer that explains how and why is high; correct but shallow is
-   middle; vague, generic or wrong is low. Weigh the hardest question in an area most: a hard
-   problem failed is not offset by easy ones passed.
-3. Reasoning. Reward a candidate who works a problem out aloud, tests their own answer and
-   corrects a mistake. Do not reward a confident answer that is wrong.
-4. Coverage. Only score what was tested. An area no question reached is "not assessed", not a
-   middling number. The overall score is built from the assessed areas alone.
-5. Say what the candidate got right or wrong in each area, specifically, so a recruiter reading
-   it can see exactly why the score is what it is and judge whether to hire.
+Discount buzzwords and tool names with no detail behind them, and polish of delivery: a hesitant correct answer beats
+a smooth wrong one. The closing questions the candidate asked are not part of the score.
+Treat as significant negatives: confidently stated wrong fundamentals, coding logic that is wrong or misses obvious
+cases, and contradicting an earlier answer without acknowledging it.
+
+4. SKILL BY SKILL, ANSWER BY ANSWER
+- Score each required skill on its own, only from the questions labelled with it. A required skill nobody asked about
+  is not assessed, never a middling score.
+- For every answer, say what it got right and what cost it the missing marks, naming the actual concept ("did not
+  mention that the context manager closes the file on an exception"), never just "lacked depth".
+
+5. THE VERDICT AND THE GAPS, AGAINST THE ROLE
+- verdict: what kind of candidate this is, the level they actually showed against {{experience}}, which of the
+  role's core requirements they showed and which they did not, and whether they are ready for THIS role.
+- notCovered: each requirement never reached, with why the role needs it.
+- depthGaps: each requirement shown only shallowly, with the depth the role needs and what was missing.
+- improvementPlan: the role's most important gaps first, each with what to study and a practice task.
+Calibrate to {{experience}}: do not penalise a mid-level candidate for lacking architecture ownership, and do not
+reward a senior one for fundamentals alone.
+
+Grade this interview only, from this transcript. Never draw on another candidate or interview.

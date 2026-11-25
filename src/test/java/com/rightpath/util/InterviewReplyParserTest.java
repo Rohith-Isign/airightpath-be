@@ -165,4 +165,66 @@ class InterviewReplyParserTest {
                 parser.parse("[THEORY] Explain how you would write a class that is thread safe.").spokenText()
                         .startsWith("[CODING]"));
     }
+
+    @Test
+    @DisplayName("reads the level and keeps it out of the speech, with [CODING] still leading")
+    void parsesTheLevelTag() {
+        ParsedInterviewReply reply = parser.parse(
+                "[SCORE:7] [TOPIC:Programming] [LEVEL:intermediate] [CODING] Write the logic for a palindrome check.");
+
+        assertThat(reply.level()).isEqualTo("INTERMEDIATE");
+        assertThat(reply.hasLevel()).isTrue();
+        assertThat(reply.spokenText()).isEqualTo("[CODING] Write the logic for a palindrome check.");
+    }
+
+    @Test
+    @DisplayName("a reply with no level, or an unknown one, has none and the tag text is not left in the speech")
+    void missingOrUnknownLevelIsNull() {
+        assertThat(parser.parse("What is a foreign key?").level()).isNull();
+        ParsedInterviewReply reply = parser.parse("[LEVEL:GURU] What is a foreign key?");
+        assertThat(reply.level()).isNull();
+    }
+
+    @Test
+    @DisplayName("[MISMATCH] is read and never spoken; a reply without it flags nothing")
+    void parsesMismatch() {
+        ParsedInterviewReply reply = parser.parse(
+                "[SCORE:0] [TOPIC:Programming] [LEVEL:BASIC] [MISMATCH] That code checks for primes, not palindromes. "
+                        + "Let's move on.");
+        assertThat(reply.codeMismatch()).isTrue();
+        assertThat(reply.spokenText()).doesNotContain("MISMATCH").startsWith("That code checks");
+        assertThat(parser.parse("[SCORE:7] Good. Next question?").codeMismatch()).isFalse();
+    }
+
+    @Test
+    @DisplayName("[SKILL] is read and never spoken")
+    void parsesSkill() {
+        ParsedInterviewReply reply = parser.parse(
+                "[SCORE:6] [TOPIC:Technical Skills] [SKILL:Spring Boot] [LEVEL:BASIC] What does @RestController do?");
+        assertThat(reply.skill()).isEqualTo("Spring Boot");
+        assertThat(reply.topic()).isEqualTo("Technical Skills");
+        assertThat(reply.spokenText()).isEqualTo("What does @RestController do?");
+    }
+
+    @Test
+    @DisplayName("[NOT_ENGLISH] is read and never spoken, in any of its spellings")
+    void parsesNotEnglish() {
+        ParsedInterviewReply reply = parser.parse("[SCORE:0] [NOT_ENGLISH] [REPHRASE] I can only assess answers in "
+                + "English. Could you answer that again in English?");
+        assertThat(reply.notEnglish()).isTrue();
+        assertThat(reply.turnKind()).isEqualTo(TurnKind.REPHRASE);
+        assertThat(reply.spokenText()).startsWith("I can only assess answers in English.");
+        assertThat(parser.parse("[NOT IN ENGLISH] Please answer in English.").notEnglish()).isTrue();
+        assertThat(parser.parse("[SCORE:7] Good. Next?").notEnglish()).isFalse();
+    }
+
+    @Test
+    @DisplayName("[COMPETENCY] is read and never spoken")
+    void parsesCompetency() {
+        ParsedInterviewReply reply = parser.parse(
+                "[SCORE:6] [TOPIC:Technical Skills] [SKILL:Python] [LEVEL:BASIC] [COMPETENCY:list comprehensions] "
+                        + "How would you build a list of squares?");
+        assertThat(reply.competency()).isEqualTo("list comprehensions");
+        assertThat(reply.spokenText()).isEqualTo("How would you build a list of squares?");
+    }
 }

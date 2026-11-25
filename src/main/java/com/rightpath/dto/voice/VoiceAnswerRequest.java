@@ -28,6 +28,9 @@ public class VoiceAnswerRequest {
      */
     private String codeOutput;
 
+    /** The id the window was given when it opened the interview; an answer from a replaced window is refused. */
+    private String sessionId;
+
     @Data
     @NoArgsConstructor
     @AllArgsConstructor

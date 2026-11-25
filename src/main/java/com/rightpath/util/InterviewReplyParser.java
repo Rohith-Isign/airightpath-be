@@ -36,9 +36,32 @@ public class InterviewReplyParser {
     private static final Pattern SCORE = Pattern.compile(
             "\\[\\s*SCORE\\s*:\\s*(10|\\d)\\s*(?:/\\s*10\\s*)?\\]", Pattern.CASE_INSENSITIVE);
 
+    /** {@code [COMPETENCY:list comprehensions]} — what within the skill this question tests. */
+    private static final Pattern COMPETENCY = Pattern.compile(
+            "\\[\\s*COMPETENCY\\s*:\\s*([^\\]]{1,100})\\]", Pattern.CASE_INSENSITIVE);
+
+    /** {@code [SKILL:Spring Boot]} — the specific skill from the job this question tests. */
+    private static final Pattern SKILL = Pattern.compile(
+            "\\[\\s*SKILL\\s*:\\s*([^\\]]{1,60})\\]", Pattern.CASE_INSENSITIVE);
+
     /** {@code [TOPIC:Data Structures]} — which evaluation category this question is for. */
     private static final Pattern TOPIC = Pattern.compile(
             "\\[\\s*TOPIC\\s*:\\s*([^\\]]{1,60})\\]", Pattern.CASE_INSENSITIVE);
+
+    /** {@code [LEVEL:BASIC]} — how deep this question goes. Technical round only; absent elsewhere. */
+    private static final Pattern LEVEL = Pattern.compile(
+            "\\[\\s*LEVEL\\s*:\\s*(BASIC|INTERMEDIATE|ADVANCED|EXPERT)\\s*\\]", Pattern.CASE_INSENSITIVE);
+
+    /** {@code [MISMATCH]} — the code just submitted solves a different problem than the one asked. */
+    /**
+     * {@code [NOT_ENGLISH]} — the answer just given was not in English: another language, or one written out in English
+     * letters by speech-to-text. The interviewer can see that in the text even when the speech check could not.
+     */
+    private static final Pattern NOT_ENGLISH = Pattern.compile(
+            "\\[\\s*NOT[ _-]?(?:IN[ _-]?)?ENGLISH\\s*\\]", Pattern.CASE_INSENSITIVE);
+
+    private static final Pattern MISMATCH = Pattern.compile(
+            "\\[\\s*(MISMATCH|OFF[ _-]?TOPIC)\\s*\\]", Pattern.CASE_INSENSITIVE);
 
     /** {@code [FOLLOWUP]} — pressing on the question already asked. */
     private static final Pattern FOLLOW_UP = Pattern.compile(
@@ -56,9 +79,12 @@ public class InterviewReplyParser {
     private static final Pattern OTHER_TYPE_TAG = Pattern.compile(
             "\\[\\s*(THEORY|NON-TECH)\\s*\\]", Pattern.CASE_INSENSITIVE);
 
-    /** An instruction to write or implement code: a verb, then within a short span what is to be written. */
+    /**
+     * An instruction to write, implement or correct code: a verb, then within a short span what is to be written.
+     * "Fix", "correct" and the like are included, so a request to correct submitted code opens the notepad too.
+     */
     private static final Pattern ASKS_FOR_CODE = Pattern.compile(
-            "\\b(write|implement|code up|create|develop)\\b[^.?!\\n]{0,60}"
+            "\\b(write|implement|code up|create|develop|fix|correct|rewrite|debug)\\b[^.?!\\n]{0,60}"
                     + "\\b(function|program|method|class|script|query|algorithm|snippet|code)\\b",
             Pattern.CASE_INSENSITIVE);
 
@@ -82,6 +108,14 @@ public class InterviewReplyParser {
 
         Integer score = firstInt(SCORE, reply);
         String topic = firstGroup(TOPIC, reply);
+        String skill = firstGroup(SKILL, reply);
+        skill = skill == null || skill.isBlank() ? null : skill.trim();
+        String competency = firstGroup(COMPETENCY, reply);
+        competency = competency == null || competency.isBlank() ? null : competency.trim();
+        String level = firstGroup(LEVEL, reply);
+        level = level == null ? null : level.trim().toUpperCase();
+        boolean codeMismatch = MISMATCH.matcher(reply).find();
+        boolean notEnglish = NOT_ENGLISH.matcher(reply).find();
 
         // A reply tagged both ways is the model hedging. Rephrase is the stronger
         // signal — it says the question itself did not land — so it wins, and
@@ -98,11 +132,17 @@ public class InterviewReplyParser {
         String spoken = conductPolicy.stripCompletionMarker(reply);
         spoken = SCORE.matcher(spoken).replaceAll("");
         spoken = TOPIC.matcher(spoken).replaceAll("");
+        spoken = SKILL.matcher(spoken).replaceAll("");
+        spoken = COMPETENCY.matcher(spoken).replaceAll("");
+        spoken = LEVEL.matcher(spoken).replaceAll("");
+        spoken = MISMATCH.matcher(spoken).replaceAll("");
+        spoken = NOT_ENGLISH.matcher(spoken).replaceAll("");
         spoken = FOLLOW_UP.matcher(spoken).replaceAll("");
         spoken = REPHRASE.matcher(spoken).replaceAll("");
         spoken = promoteCodingTag(spoken);
 
-        return new ParsedInterviewReply(spoken, score, kind, topic, closing);
+        return new ParsedInterviewReply(spoken, score, kind, topic, closing, level, codeMismatch, skill, notEnglish,
+                competency);
     }
 
     /**

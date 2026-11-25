@@ -198,6 +198,56 @@ public class InterviewController {
 		return ResponseEntity.ok(getResultDetail(id).getBody());
 	}
 
+	@Autowired
+	private com.rightpath.repository.VoiceConversationEntryRepository entryRepository;
+
+	/**
+	 * A reviewer's score for one answer, with the reason, before the result is finalised.
+	 *
+	 * <p>For an answer the AI scored wrongly, a partial or corrected coding submission, or an inconsistency. The AI's
+	 * own score is kept as it was, so the trail shows both; the reviewer's score is what the next re-evaluation grades
+	 * from. A score of null clears the review.</p>
+	 */
+	@org.springframework.web.bind.annotation.PutMapping("/results/{id}/answers/{entryId}/review")
+	@PreAuthorize("hasAuthority('INTERVIEW_ASSIGN')")
+	public ResponseEntity<?> reviewAnswer(@PathVariable Long id, @PathVariable Long entryId,
+			@RequestBody Map<String, Object> body, Authentication authentication) {
+		var entry = entryRepository.findById(entryId).orElse(null);
+		if (entry == null || entry.getInterviewSchedule() == null || !id.equals(entry.getInterviewSchedule().getId())
+				|| entry.getRole() != com.rightpath.enums.ConversationRole.CANDIDATE) {
+			return ResponseEntity.badRequest().body(Map.of("message", "That answer is not part of this interview."));
+		}
+		Object raw = body.get("score");
+		if (raw == null) {
+			entry.setReviewedScore(null);
+			entry.setReviewNote(null);
+			entry.setReviewedBy(null);
+			entry.setReviewedAt(null);
+		} else {
+			int score;
+			try {
+				score = Integer.parseInt(String.valueOf(raw));
+			} catch (NumberFormatException e) {
+				return ResponseEntity.badRequest().body(Map.of("message", "The score must be a whole number from 0 to 10."));
+			}
+			String note = body.get("note") == null ? "" : String.valueOf(body.get("note")).trim();
+			if (score < 0 || score > 10) {
+				return ResponseEntity.badRequest().body(Map.of("message", "The score must be from 0 to 10."));
+			}
+			if (note.length() < 3) {
+				return ResponseEntity.badRequest().body(Map.of("message", "Say why the score is being changed."));
+			}
+			entry.setReviewedScore(score);
+			entry.setReviewNote(note.length() > 1000 ? note.substring(0, 1000) : note);
+			entry.setReviewedBy(authentication.getName());
+			entry.setReviewedAt(LocalDateTime.now(java.time.ZoneOffset.UTC));
+		}
+		entryRepository.save(entry);
+		log.info("Answer {} of interview {} reviewed by {}: {}", entryId, id, authentication.getName(),
+				entry.getReviewedScore());
+		return ResponseEntity.ok(VoiceConversationEntryDTO.from(entry));
+	}
+
 	/** Puts a removed result back. The counterpart to {@link #deleteResult}. */
 	@PostMapping("/results/{id}/restore")
 	@PreAuthorize("hasAuthority('INTERVIEW_RESULT_DELETE')")
@@ -362,7 +412,23 @@ public class InterviewController {
 	
 	@PostMapping("/voice/{id}/end")
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
-	public ResponseEntity<?> endVoiceInterview(@PathVariable Long id) {
+	public ResponseEntity<?> endVoiceInterview(@PathVariable Long id,
+			@RequestParam(value = "sessionId", required = false) String sessionId,
+			org.springframework.security.core.Authentication authentication) {
+		// Only the candidate the interview belongs to may end it. There was no check at all: any signed-in candidate
+		// could end anyone's interview by its id.
+		var owned = scheduleRepo.findByIdAndEmail(id, authentication.getName());
+		if (owned.isEmpty()) {
+			log.warn("End refused: interview {} is not assigned to {}", id, authentication.getName());
+			throw new org.springframework.security.access.AccessDeniedException(
+					"Interview " + id + " is not assigned to the authenticated candidate");
+		}
+		// And only from the window running it: a window another one has replaced must not end the interview there.
+		String active = owned.get().getActiveSessionId();
+		if (sessionId != null && !sessionId.isBlank() && active != null && !active.equals(sessionId)) {
+			log.warn("End refused for interview {}: sent from a window that has been replaced", id);
+			return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT).build();
+		}
 		log.info("Voice interview {} end requested", id);
 		voiceInterviewService.endVoiceInterview(id);
 		return ResponseEntity.ok().build();
@@ -497,11 +563,20 @@ public class InterviewController {
 	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
 	public ResponseEntity<Void> audioChunk(@PathVariable Long scheduleId, @RequestParam("audio") MultipartFile audio,
 			@RequestParam(value = "chunkIndex", defaultValue = "0") int chunkIndex,
+			@RequestParam(value = "sessionId", required = false) String sessionId,
 			org.springframework.security.core.Authentication authentication) throws java.io.IOException {
-		if (scheduleRepo.findByIdAndEmail(scheduleId, authentication.getName()).isEmpty()) {
+		var owned = scheduleRepo.findByIdAndEmail(scheduleId, authentication.getName());
+		if (owned.isEmpty()) {
 			log.warn("Audio chunk refused: interview {} is not assigned to {}", scheduleId, authentication.getName());
 			throw new org.springframework.security.access.AccessDeniedException(
 					"Interview " + scheduleId + " is not assigned to the authenticated candidate");
+		}
+		// Only the window that opened the interview last may answer. Audio from a window that has been replaced is
+		// refused, so two browsers cannot both feed answers into one interview. No id: a page from before the check.
+		String active = owned.get().getActiveSessionId();
+		if (sessionId != null && !sessionId.isBlank() && active != null && !active.equals(sessionId)) {
+			log.warn("Audio chunk refused for interview {}: sent from a window that has been replaced", scheduleId);
+			return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT).build();
 		}
 		if (audio.isEmpty()) {
 			throw new IllegalArgumentException("audio is required");

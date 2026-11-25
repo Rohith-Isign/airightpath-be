@@ -244,6 +244,19 @@ public class OpenAiStreamingService {
     }
 
     public String chatCompletion(List<Map<String, String>> messages) {
+        return chatCompletion(messages, 2000, 0.7, false);
+    }
+
+    /**
+     * A chat completion with its own output limit, temperature and, optionally, JSON mode.
+     *
+     * <p>The interview grading asks for a long JSON document (scores, notes on every answer, the expected concepts,
+     * per-skill results, the improvement plan). Under the 2000-token limit every other call uses, it was cut off
+     * mid-JSON, could not be read, and the interview was left with no result — on re-evaluation too. JSON mode makes
+     * OpenAI return a complete JSON object; a reply still cut off at the limit is logged as such.</p>
+     */
+    public String chatCompletion(List<Map<String, String>> messages, int maxTokens, double temperature,
+            boolean jsonMode) {
         lastChatFailure = null;
         // Said plainly, once per call. An empty key sends a request OpenAI
         // refuses, the refusal is swallowed below, and the candidate is told only
@@ -259,8 +272,11 @@ public class OpenAiStreamingService {
             Map<String, Object> requestBody = new LinkedHashMap<>();
             requestBody.put("model", model);
             requestBody.put("messages", messages);
-            requestBody.put("temperature", 0.7);
-            requestBody.put("max_tokens", 2000);
+            requestBody.put("temperature", temperature);
+            requestBody.put("max_tokens", maxTokens);
+            if (jsonMode) {
+                requestBody.put("response_format", Map.of("type", "json_object"));
+            }
 
             String json = objectMapper.writeValueAsString(requestBody);
             Request request = new Request.Builder()
@@ -284,6 +300,11 @@ public class OpenAiStreamingService {
                     return "";
                 }
                 JsonNode node = objectMapper.readTree(responseBody);
+                if ("length".equals(node.path("choices").path(0).path("finish_reason").asText())) {
+                    log.error("Chat completion was cut off at the {}-token output limit; the reply is incomplete",
+                            maxTokens);
+                    lastChatFailure = "the reply was cut off at the output limit";
+                }
                 return node.path("choices").path(0).path("message").path("content").asText();
             }
         } catch (Exception e) {
@@ -297,6 +318,69 @@ public class OpenAiStreamingService {
      * Transcribe audio using Whisper API with word-level timestamps.
      */
     public TranscriptionResult transcribe(byte[] audioData, String filename) {
+        return transcribe(audioData, filename, null);
+    }
+
+    /**
+     * What language a chunk of speech is really in, and the text in that language's own script.
+     *
+     * <p>Transcription is pinned to English for accuracy, and pinned like that Whisper translates other languages into
+     * English: an answer given in Telugu reached the interviewer as fluent English and was scored as one. This asks
+     * again with no language set, only to find out what was spoken. Empty when it cannot tell.</p>
+     */
+    public java.util.Optional<String[]> detectLanguage(byte[] audioData, String filename) {
+        if (audioData == null || audioData.length < MIN_AUDIO_BYTES) {
+            return java.util.Optional.empty();
+        }
+        try {
+            MultipartBody body = new MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("file", filename, RequestBody.create(audioData, MediaType.parse("audio/webm")))
+                    .addFormDataPart("model", whisperModel)
+                    .addFormDataPart("response_format", "verbose_json")
+                    .addFormDataPart("temperature", "0")
+                    .build();
+            Request request = new Request.Builder()
+                    .url(baseUrl + "/audio/transcriptions")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .post(body)
+                    .build();
+            try (Response response = httpClient.newCall(request).execute()) {
+                if (!response.isSuccessful() || response.body() == null) {
+                    return java.util.Optional.empty();
+                }
+                JsonNode node = objectMapper.readTree(response.body().string());
+                String language = node.path("language").asText("");
+                String text = node.path("text").asText("");
+                // The model marks each stretch it thinks held no speech. When it says so of all of it, the language
+                // and text it gives are invented, so there is no answer here to judge.
+                JsonNode segments = node.path("segments");
+                if (segments.isArray() && !segments.isEmpty()) {
+                    boolean anySpeech = false;
+                    for (JsonNode segment : segments) {
+                        if (segment.path("no_speech_prob").asDouble(0) < 0.6) {
+                            anySpeech = true;
+                            break;
+                        }
+                    }
+                    if (!anySpeech) {
+                        return java.util.Optional.empty();
+                    }
+                }
+                return language.isBlank() ? java.util.Optional.empty()
+                        : java.util.Optional.of(new String[] {language, text});
+            }
+        } catch (Exception e) {
+            log.debug("Language detection failed for {}", filename, e);
+            return java.util.Optional.empty();
+        }
+    }
+
+    /**
+     * As above, with a hint for the speech model: words it should expect, such as the candidate's own name, which
+     * it otherwise tends to hear as a commoner one ("Sahil" for "Sai").
+     */
+    public TranscriptionResult transcribe(byte[] audioData, String filename, String hint) {
         // A webm/opus blob this small is a container header with no audio.
         // Whisper answers it with 400 "audio too short" (or "could not be
         // decoded"), which was logged as an error for every such chunk.
@@ -322,6 +406,9 @@ public class OpenAiStreamingService {
 
             if (whisperLanguage != null && !whisperLanguage.isBlank()) {
                 bodyBuilder.addFormDataPart("language", whisperLanguage.trim());
+            }
+            if (hint != null && !hint.isBlank()) {
+                bodyBuilder.addFormDataPart("prompt", hint.trim());
             }
 
             MultipartBody body = bodyBuilder.build();

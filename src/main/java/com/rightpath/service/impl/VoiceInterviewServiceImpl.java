@@ -74,6 +74,38 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     private static final Random random = new Random();
 
     private final CandidateInterviewScheduleRepository scheduleRepo;
+
+    /** Per-interview counters shared across pods: the language of the answer being recorded, the early stop. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.rightpath.service.state.SharedStateStore sharedState;
+
+    /** Most an answer to a coding question can be rated when no code was written (spoken explanation only). */
+    @org.springframework.beans.factory.annotation.Value("${interview.coding.spoken-only-max-score:3}")
+    private int spokenOnlyCodingMax = 3;
+
+    /** Ends an interview early once the candidate is plainly not answering correctly (see shouldStopEarly). */
+    @org.springframework.beans.factory.annotation.Value("${interview.early-stop.enabled:true}")
+    private boolean earlyStopEnabled = true;
+
+    @org.springframework.beans.factory.annotation.Value("${interview.early-stop.min-rated-answers:8}")
+    private int earlyStopMinAnswers = 8;
+
+    @org.springframework.beans.factory.annotation.Value("${interview.early-stop.window:6}")
+    private int earlyStopWindow = 6;
+
+    @org.springframework.beans.factory.annotation.Value("${interview.early-stop.max-average:3.0}")
+    private double earlyStopMaxAverage = 3.0;
+
+    /** Distinct coding tasks an interview must include before it may close (re-asked tasks do not count again). */
+    @org.springframework.beans.factory.annotation.Value("${interview.coding.min-tasks:2}")
+    private int minCodingTasks = 2;
+
+    /** Put in front of an answer that was not spoken in English, for the interviewer, the grader and the reviewer. */
+    static final String NOT_IN_ENGLISH = "[NOT IN ENGLISH";
+
+    /** For noting on the record that the interview was opened in a second window. Field-injected: optional. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.rightpath.repository.ProctoringEventRepository proctoringEventRepository;
     private final VoiceConversationEntryRepository entryRepository;
     private final OpenAiStreamingService openAiStreamingService;
     private final InterviewContextService contextService;
@@ -84,6 +116,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     private final SimpMessagingTemplate messagingTemplate;
     private final TransactionTemplate transactionTemplate;
     private final InterviewConductPolicy conductPolicy;
+
+    /** Judges each rated answer correct or not. Field-injected so the existing constructor is unchanged. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.rightpath.service.InterviewLevelProgression levelProgression;
     private final InterviewReplyParser replyParser;
 
     /** The zone interview slots are written in; see {@link BusinessSchedule}. */
@@ -261,6 +297,71 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * from it, and a {@code [CODING]} buried after the greeting is text the
      * candidate reads rather than a signal the client acts on.</p>
      */
+    /** Fewer words than this, in answer to "introduce yourself", is a greeting, not an introduction. */
+    static final int INTRODUCTION_MIN_WORDS = 20;
+
+    /** How many times a too-short introduction is asked for again before the interview moves on. */
+    static final int INTRODUCTION_MAX_REASKS = 2;
+
+    static final List<String> INTRODUCTION_REASKS = List.of(
+            "[REPHRASE] [THEORY] Thank you. Before we get into the technical questions, I would like to know you a "
+                    + "little better. Could you please introduce yourself properly: what you have studied, the work "
+                    + "or internships you have done, and one or two projects you have built, with the technologies "
+                    + "you used?",
+            "[REPHRASE] [THEORY] I would still like to hear a bit more about you before we begin. A few sentences is "
+                    + "enough: tell me about your background, what you have worked on, and the project you are most "
+                    + "proud of.");
+
+    /** Words in a spoken answer, counting only those with a letter in them. */
+    static int wordCount(String text) {
+        if (text == null || text.isBlank()) {
+            return 0;
+        }
+        return (int) java.util.Arrays.stream(text.trim().split("\\s+"))
+                .filter(word -> word.codePoints().anyMatch(Character::isLetter))
+                .count();
+    }
+
+    /**
+     * The introduction asked again, when the answer to it was too short to be one ("hello", a name, or nothing), and
+     * it has been asked again fewer than {@link #INTRODUCTION_MAX_REASKS} times. Null otherwise.
+     */
+    private String introductionReask(Long scheduleId, String answer) {
+        java.util.List<VoiceConversationEntry> history = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(
+                scheduleId);
+        java.util.List<VoiceConversationEntry> asked = history.stream()
+                .filter(e -> e.getRole() == ConversationRole.INTERVIEWER).toList();
+        if (asked.isEmpty() || InterviewContextService.questionsAfterIntroduction(history) > 0
+                || !asksForIntroduction(asked.get(asked.size() - 1).getContent())) {
+            return null;
+        }
+        int reasked = asked.size() - 1;
+        if (reasked >= INTRODUCTION_MAX_REASKS || wordCount(answer) >= INTRODUCTION_MIN_WORDS) {
+            return null;
+        }
+        log.info("Interview {}: the introduction was {} word(s); asking for it again ({} of {})", scheduleId,
+                wordCount(answer), reasked + 1, INTRODUCTION_MAX_REASKS);
+        return INTRODUCTION_REASKS.get(Math.min(reasked, INTRODUCTION_REASKS.size() - 1));
+    }
+
+    /** The opening question when the generated one is not an introduction. */
+    static final String INTRODUCTION_QUESTION = "To start, could you please introduce yourself? Tell me about your "
+            + "background, what you have studied or worked on, and the projects you are most proud of.";
+
+    /** Whether a question asks the candidate to introduce themselves, rather than starting on a technical topic. */
+    static boolean asksForIntroduction(String question) {
+        if (question == null || question.isBlank()) {
+            return false;
+        }
+        String text = question.toLowerCase(java.util.Locale.ROOT);
+        if (CODING_OPENING.matcher(question).find()) {
+            return false;
+        }
+        return text.contains("introduce yourself") || text.contains("introduction")
+                || text.contains("about yourself") || text.contains("tell me about you")
+                || text.contains("your background") || text.contains("walk me through your");
+    }
+
     private String mergeWelcomeWithQuestion(String welcome, String question) {
         // The server's welcome is the only greeting. If the model greeted too, take that off so it is not said twice.
         question = com.rightpath.util.GreetingStripper.strip(question);
@@ -294,6 +395,20 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             Long scheduleId) {
         CandidateInterviewSchedule schedule = resolveSchedule(jobPrefix, email, scheduleId);
 
+        // This window becomes the only one that may run the interview. Any window that had it open is told it has
+        // been replaced, and its messages are refused from now on (VoiceInterviewWebSocketController).
+        String sessionId = java.util.UUID.randomUUID().toString();
+        boolean takenOver = schedule.getAttemptStatus() == AttemptStatus.IN_PROGRESS
+                && schedule.getActiveSessionId() != null;
+        schedule.setActiveSessionId(sessionId);
+        scheduleRepo.save(schedule);
+        if (takenOver) {
+            log.warn("Interview {} opened in another window; the earlier window is closed", schedule.getId());
+            messagingTemplate.convertAndSend("/topic/interview/" + schedule.getId() + "/session-replaced",
+                    Map.of("sessionId", sessionId));
+            recordSessionTakeover(schedule);
+        }
+
         // Resume, rather than silently restart.
         //
         // This branch was an empty placeholder, so an interview already under
@@ -317,6 +432,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     .firstQuestionAudio(isCodeExplanation(question)
                             ? null
                             : textToSpeechService.generateTTSBase64(stripQuestionTypeTags(question)))
+                    .sessionId(sessionId)
                     .resumed(true)
                     .questionsAsked(schedule.getTotalQuestionsAsked())
                     // The original deadline, not a fresh one. A refresh used
@@ -373,6 +489,15 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         // greeting is merged into speech rather than into a tag block.
         ParsedInterviewReply parsedFirst = replyParser.parse(generatedQuestion.trim());
 
+        // Every interview opens with the candidate introducing themselves. The model was told so, but a later rule
+        // ("ask the next skill at Basic") reached it on the first turn too and it opened on a technical question. The
+        // opening is checked here, and replaced with the standard one if it is not an introduction.
+        if (!asksForIntroduction(parsedFirst.spokenText())) {
+            log.info("Interview {}: the first question was not an introduction; using the standard opening",
+                    schedule.getId());
+            parsedFirst = new ParsedInterviewReply(INTRODUCTION_QUESTION, null, TurnKind.NEW_QUESTION, null, false);
+        }
+
         // The greeting is the one fixed line in the interview. Merged into the
         // first message so the candidate hears it before the question, rather
         // than being greeted by a question.
@@ -384,7 +509,9 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 .interviewSchedule(schedule)
                 .role(ConversationRole.INTERVIEWER)
                 .content(firstQuestionClean)
-                .topic(parsedFirst.topic())
+                // The opening asks for an introduction, not a technical answer: no category, skill or level.
+                .topic(null)
+                .level(null)
                 .turnKind(TurnKind.NEW_QUESTION)
                 .build();
         entryRepository.save(entry);
@@ -403,6 +530,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
         return VoiceStartResponse.builder()
                 .scheduleId(schedule.getId())
+                .sessionId(sessionId)
                 .firstQuestion(firstQuestionRaw)      // raw with tags for frontend detection
                 .interviewerName(schedule.getInterviewerName())
                 .firstQuestionAudio(firstQuestionAudio)   // null for code explanation
@@ -445,6 +573,11 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     @Override
     public void processVoiceAnswer(Long scheduleId, VoiceAnswerRequest request) {
         boolean skipped = request.isSkipped();
+        // A record of answers that reach the server with nothing in them, for when a candidate says they were not heard.
+        if (!skipped && (request.getTranscript() == null || request.getTranscript().isBlank())
+                && (request.getCodeContent() == null || request.getCodeContent().isBlank())) {
+            log.warn("Interview {}: an answer arrived with no transcript and no code", scheduleId);
+        }
         
         // --- Phase 1: Save candidate answer (same as before) ---
         CandidateInterviewSchedule schedule = transactionTemplate.execute(status -> {
@@ -454,6 +587,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 throw new IllegalStateException("Interview is not active");
             }
             if (skipped) {
+                clearLanguageCount(scheduleId);
                 VoiceConversationEntry candidateEntry = VoiceConversationEntry.builder()
                         .interviewSchedule(s)
                         .role(ConversationRole.CANDIDATE)
@@ -483,6 +617,19 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     injectionGuard.recordAttempt(scheduleId, answerContent);
                 }
                 answerContent = injectionGuard.stripControlMarkers(answerContent);
+
+                // Transcription is pinned to English, which translates another language into English: an answer
+                // given in Telugu read as a fluent English one and was scored as such. When most of the answer's
+                // audio was in another language, the answer says so in front, is scored 0 when rated, and the
+                // candidate is asked to answer in English.
+                String spokenIn = nonEnglishLanguage(scheduleId);
+                if (spokenIn != null) {
+                    answerContent = NOT_IN_ENGLISH + ": the candidate answered in " + spokenIn + ". The text below is "
+                            + "a machine translation, not their English. It earns no marks, including for "
+                            + "communication.]\n" + answerContent;
+                    messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/language-warning",
+                            Map.of("language", spokenIn));
+                }
 
                 VoiceConversationEntry candidateEntry = VoiceConversationEntry.builder()
                         .interviewSchedule(s)
@@ -526,16 +673,24 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // it from the prompt alone, and it would answer the candidate's question and then carry on with another
             // interview question, or the server would end the interview on the question ceiling in the middle of one.
             boolean closingAsked = closingQuestionAlreadyAsked(scheduleId);
+            // This reply answers the closing question, not an interview question: it is never scored.
+            boolean answeringClosing = closingAsked;
             // The candidate may ask up to three things at the close. While they are still asking, and under the
             // limit, the interviewer answers and invites the next one; the final thank-you comes when they have
             // none left, or on the third.
             boolean moreQuestionsWelcome = closingAsked && !skipped
                     && looksLikeAQuestion(request.getTranscript())
                     && candidateRepliesToClosing(scheduleId) < MAX_CLOSING_QUESTIONS;
-            if (moreQuestionsWelcome) {
+            // "Yes" to "do you have any questions?" is not a question yet: they are about to ask one. It used to
+            // count as "no questions" and the interview ended on the goodbye. Now they are invited to go ahead.
+            boolean inviteQuestion = closingAsked && !skipped && !moreQuestionsWelcome
+                    && saysTheyHaveAQuestion(request.getTranscript())
+                    && candidateRepliesToClosing(scheduleId) < MAX_CLOSING_QUESTIONS;
+            if (moreQuestionsWelcome || inviteQuestion) {
+                moreQuestionsWelcome = true;
                 closingAsked = false;
             }
-            int turnsLeft = template.maxQuestions() - current.getTotalQuestionsAsked();
+            int turnsLeft = template.effectiveMax() - current.getTotalQuestionsAsked();
 
             String turnPrompt = contextService.buildNextQuestionPrompt(
                     current,
@@ -549,14 +704,32 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 turnPrompt += "\n\n" + FINAL_REPLY_DIRECTIVE;
             } else if (turnsLeft == 1) {
                 turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
+            } else if (!moreQuestionsWelcome && shouldStopEarly(scheduleId)) {
+                // The candidate is plainly not answering correctly. Carrying on only lengthens a result that is
+                // already clear, so the interview moves to its close, and is recorded as ended for that reason.
+                log.info("Interview {}: answers consistently below the mark; moving to close", scheduleId);
+                if (sharedState != null) {
+                    sharedState.set("early-stop:" + scheduleId, "1", java.time.Duration.ofHours(3));
+                }
+                turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
             }
-            String reply = openAiStreamingService.chatCompletion(
-                    contextService.buildContextMessages(current, turnPrompt));
+            // A greeting is not an introduction. "Hello" sent as the answer to "introduce yourself" was taken as one
+            // and the interview went straight on; the introduction is now asked again, up to twice.
+            String introductionReask = skipped || !closingAsked && !moreQuestionsWelcome
+                    ? introductionReask(scheduleId, skipped ? "" : request.getTranscript()) : null;
+            // The invitation is a fixed line, worded so the next reply is still read as part of the close.
+            String reply = introductionReask != null ? introductionReask
+                    : inviteQuestion
+                    ? INVITE_QUESTION
+                    : openAiStreamingService.chatCompletion(contextService.buildContextMessages(current, turnPrompt));
 
             if (reply == null || reply.isBlank()) {
                 log.error("Empty reply from the model for schedule {}", scheduleId);
                 sendResponseComplete(scheduleId,
-                        "Sorry, I did not catch that. Could you answer again?", false);
+                        // Said honestly: this is the interviewer failing to reply, not the candidate's speech going
+                        // unheard. "I did not catch that" made candidates think their microphone had failed.
+                        "Sorry, I had a technical problem on my side and could not process that. "
+                                + "Could you please give your answer again?", false);
                 return;
             }
 
@@ -566,6 +739,83 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // off some problems, and the candidate is then left guessing the input and output they must handle.
             if (isCodingQuestion(parsed) && !hasExamples(parsed.spokenText())) {
                 parsed = askForExamples(current, parsed, turnPrompt);
+            }
+
+            // A request to fix the code just submitted is a coding turn, whatever tags the model put on it: the
+            // notepad has to open, with the candidate's code put back in it, and it is a correction of the same
+            // task rather than a new one. It came back untagged, the notepad never opened, and the candidate had
+            // nowhere to correct their code.
+            if (!parsed.closing() && asksToCorrectCode(parsed.spokenText()) && lastAnswerHadCode(scheduleId)) {
+                String text = CODING_OPENING.matcher(parsed.spokenText()).find()
+                        ? parsed.spokenText()
+                        : InterviewConductPolicy.CODING_TAG + " " + parsed.spokenText();
+                TurnKind kind = parsed.turnKind() == TurnKind.NEW_QUESTION ? TurnKind.FOLLOW_UP : parsed.turnKind();
+                parsed = new ParsedInterviewReply(text, parsed.answerScore(), kind, parsed.topic(), false,
+                        parsed.level(), parsed.codeMismatch(), parsed.skill(), parsed.notEnglish(),
+                        parsed.competency());
+            }
+
+            // A coding problem is asked once. Once an answer to it has been submitted, it is rated and the interview
+            // moves on; asking the same problem again left the candidate re-submitting the same answer in a loop.
+            if (isCodingQuestion(parsed) && repeatsEarlierCodingProblem(scheduleId, parsed)) {
+                parsed = askForDifferentProblem(current, parsed, turnPrompt);
+            }
+
+            // A new question tests something not yet tested for its skill. Asking about the same competency again,
+            // reworded, was counted as new coverage when it showed nothing new.
+            if (!parsed.closing() && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)
+                    && repeatsCompetency(current, parsed)) {
+                parsed = askForDifferentCompetency(current, parsed, turnPrompt);
+            }
+
+            // The same question again, by its wording, under whatever competency name. The interviewer sees only the
+            // last few exchanges word for word, and asked questions again that had dropped out of its view.
+            if (introductionReask == null && !inviteQuestion && !parsed.closing()
+                    && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)) {
+                String earlier = InterviewContextService.repeatedQuestion(
+                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId), parsed.spokenText());
+                if (earlier != null) {
+                    parsed = askForUnaskedQuestion(current, parsed, turnPrompt, earlier);
+                }
+            }
+
+            // The resume questions come first and check the resume; they do not count towards a skill's levels, so
+            // whatever skill or level the model put on one is taken off.
+            boolean resumeQuestion = introductionReask == null && !inviteQuestion && !parsed.closing()
+                    && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)
+                    && contextService.inResumePhase(current);
+            if (resumeQuestion && (parsed.level() != null || parsed.skill() != null)) {
+                parsed = new ParsedInterviewReply(parsed.spokenText(), parsed.answerScore(), parsed.turnKind(),
+                        parsed.topic(), false, null, parsed.codeMismatch(), null, parsed.notEnglish(),
+                        parsed.competency());
+            }
+
+            // The question has to be the one the assessment plan calls for: the skill in progress until it is
+            // complete, a new skill at Basic, and the coding task where one is owed. The plan was only an
+            // instruction, and the interviewer left Python half-assessed and started Machine Learning at
+            // Intermediate. Checked here, and sent back once if it does not match.
+            if (current.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL
+                    && levelProgression != null && !parsed.closing() && !isClosingQuestion(parsed.spokenText())
+                    && !moreQuestionsWelcome && !closingAsked && current.getTotalQuestionsAsked() > 1
+                    && !resumeQuestion && introductionReask == null && !contextService.inResumePhase(current)
+                    && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)) {
+                java.util.List<String> required = contextService.requiredSkills(current);
+                com.rightpath.service.InterviewLevelProgression.Expected expected =
+                        levelProgression.expectedNext(historyWithScore(scheduleId, parsed.answerScore()), required);
+                String problem = planMismatch(expected, parsed, required);
+                if (problem != null) {
+                    parsed = askToFollowPlan(current, parsed, turnPrompt, problem, expected, required);
+                }
+            }
+
+            // Was the answer just given not in English? Either the speech check found it (the answer was saved
+            // marked), or the interviewer saw it in the text and the text is not plainly English. Decided once
+            // here, so the spoken notice, the score and the on-screen alert all agree.
+            boolean answerNotEnglish = !skipped && !answeringClosing
+                    && (lastAnswerMarkedNotEnglish(scheduleId)
+                            || (parsed.notEnglish() && !looksEnglish(request.getTranscript())));
+            if (answerNotEnglish && !parsed.closing()) {
+                parsed = withEnglishNotice(parsed);
             }
 
             // Closes when the model says it is done, or when the budget is
@@ -584,11 +834,32 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // a configuration problem, and holding the candidate longer does not
             // fix it.
             if (parsed.closing() && !ceilingHit && !closingAsked && !moreQuestionsWelcome) {
-                int remaining = template.maxQuestions() - current.getTotalQuestionsAsked();
+                int remaining = template.effectiveMax() - current.getTotalQuestionsAsked();
                 if (!topicCoverage.mayCloseOnCoverage(current, remaining)) {
                     ParsedInterviewReply redirected = askForOutstandingTopic(current);
                     if (redirected != null) {
                         parsed = redirected;
+                        finished = false;
+                    }
+                }
+            }
+
+            // The completion gate (technical round). The interview may not close, or move to its closing question,
+            // until every required skill has been taken through its levels (to Expert, or until it stopped) and the
+            // distinct coding tasks are done. It closed before with skills and coding still untested. Not applied
+            // when the interview is ending for poor performance or the question budget is nearly spent.
+            boolean wantsToClose = (parsed.closing() || isClosingQuestion(parsed.spokenText()))
+                    && !ceilingHit && !closingAsked && !moreQuestionsWelcome;
+            boolean stoppingEarly = sharedState != null && sharedState.get("early-stop:" + scheduleId).isPresent();
+            if (wantsToClose && !stoppingEarly && levelProgression != null && turnsLeft > 2
+                    && current.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
+                String gap = levelProgression.completionGap(
+                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId),
+                        contextService.requiredSkills(current), minCodingTasks);
+                if (gap != null) {
+                    ParsedInterviewReply continued = askToContinue(current, gap);
+                    if (continued != null) {
+                        parsed = continued;
                         finished = false;
                     }
                 }
@@ -604,6 +875,7 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             String spoken = parsed.spokenText();
             ParsedInterviewReply turn = parsed;
             boolean completed = finished;
+            java.util.concurrent.atomic.AtomicBoolean mismatchFlagged = new java.util.concurrent.atomic.AtomicBoolean();
 
             transactionTemplate.execute(status -> {
                 CandidateInterviewSchedule s = scheduleRepo.findById(scheduleId).orElseThrow();
@@ -612,8 +884,21 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 // the reply it gives to it. Written back onto the answer it is
                 // about, so difficulty and the reviewer both read it where it
                 // belongs rather than off the question that followed.
-                if (turn.hasScore() && !skipped) {
-                    applyScoreToLastAnswer(s.getId(), turn.answerScore());
+                // The interviewer found the answer was not in English, including another language written out in
+                // English letters, which the speech check cannot see. Marked, scored 0, and the candidate is told.
+                // An answer that is plainly English is not marked otherwise, whatever the tag says: the flag was
+                // put on an off-topic English answer and it scored 0 for "not answered in English".
+                boolean notEnglish = answerNotEnglish;
+                if (turn.notEnglish() && !notEnglish) {
+                    log.info("Interview {}: the not-English flag was ignored on an answer that is in English", scheduleId);
+                }
+                if (notEnglish && !skipped && !answeringClosing) {
+                    markLastAnswerNotEnglish(s.getId());
+                }
+                // Replies to the closing question ("yes", "no questions") are not answers to grade.
+                if ((turn.hasScore() || turn.codeMismatch() || notEnglish) && !skipped && !answeringClosing) {
+                    mismatchFlagged.set(applyScoreToLastAnswer(s.getId(),
+                            notEnglish ? Integer.valueOf(0) : turn.answerScore(), turn.codeMismatch()));
                 }
 
                 entryRepository.save(VoiceConversationEntry.builder()
@@ -621,6 +906,10 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         .role(ConversationRole.INTERVIEWER)
                         .content(spoken)
                         .topic(turn.hasTopic() ? turn.topic() : null)
+                        .level(levelOf(turn))
+                        .skill(levelOf(turn) == null && turn.closing() ? null
+                                : contextService.canonicalSkill(s, turn.skill()))
+                        .competency(levelOf(turn) == null ? null : turn.competency())
                         .turnKind(turn.turnKind())
                         .build());
 
@@ -633,7 +922,11 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     // interview that simply finished stamped nothing, so the
                     // commonest outcome of all reached the reviewer's screen
                     // as "how this interview ended was not recorded".
-                    s.setCompletionReason(CompletionReason.NATURAL_COMPLETION);
+                    boolean stoppedEarly = sharedState != null
+                            && sharedState.get("early-stop:" + scheduleId).isPresent();
+                    s.setCompletionReason(stoppedEarly
+                            ? CompletionReason.EARLY_TERMINATION_POOR_PERFORMANCE
+                            : CompletionReason.NATURAL_COMPLETION);
                     advanceApplicationAfterInterview(s);
                 } else {
                     // Every turn spends from the ceiling, probes included —
@@ -648,7 +941,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 return null;
             });
 
-            sendResponseComplete(scheduleId, spoken, finished, parsed.closing() ? "ai_closed" : "question_limit");
+            sendResponseComplete(scheduleId, spoken, finished, parsed.closing() ? "ai_closed" : "question_limit",
+                    turn.turnKind(), mismatchFlagged.get(), answerNotEnglish);
 
             if (!isCodeExplanation(spoken)) {
                 textToSpeechService.generateAndStreamTTS(scheduleId, stripQuestionTypeTags(spoken));
@@ -782,14 +1076,17 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             }
 
             ParsedInterviewReply parsed = replyParser.parse(reply);
-            if (parsed.hasScore()) {
-                applyScoreToLastAnswer(schedule.getId(), parsed.answerScore());
+            if (parsed.hasScore() || parsed.codeMismatch()) {
+                applyScoreToLastAnswer(schedule.getId(), parsed.answerScore(), parsed.codeMismatch());
             }
             entryRepository.save(VoiceConversationEntry.builder()
                     .interviewSchedule(schedule)
                     .role(ConversationRole.INTERVIEWER)
                     .content(parsed.spokenText())
                     .topic(parsed.hasTopic() ? parsed.topic() : null)
+                    .level(levelOf(parsed))
+                    .skill(parsed.closing() ? null : parsed.skill())
+                    .competency(levelOf(parsed) == null ? null : parsed.competency())
                     .turnKind(parsed.turnKind())
                     .build());
             schedule.incrementQuestionsAsked();
@@ -803,6 +1100,138 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         }
     }
 
+    /** The language most of the answer just recorded was in, when that was not English; null otherwise. */
+    private String nonEnglishLanguage(Long scheduleId) {
+        if (sharedState == null) {
+            return null;
+        }
+        try {
+            long total = sharedState.get(AudioTranscriptionServiceKeys.total(scheduleId)).map(Long::parseLong).orElse(0L);
+            long foreign = sharedState.get(AudioTranscriptionServiceKeys.foreign(scheduleId)).map(Long::parseLong).orElse(0L);
+            String name = sharedState.get(AudioTranscriptionServiceKeys.name(scheduleId)).orElse("another language");
+            clearLanguageCount(scheduleId);
+            return foreign > 0 && foreign * 2 >= total ? capitalise(name) : null;
+        } catch (Exception e) {
+            log.debug("Could not read the language count for interview {}", scheduleId, e);
+            return null;
+        }
+    }
+
+    private void clearLanguageCount(Long scheduleId) {
+        if (sharedState == null) {
+            return;
+        }
+        sharedState.delete(AudioTranscriptionServiceKeys.total(scheduleId));
+        sharedState.delete(AudioTranscriptionServiceKeys.foreign(scheduleId));
+        sharedState.delete(AudioTranscriptionServiceKeys.name(scheduleId));
+        sharedState.delete(com.rightpath.service.AudioTranscriptionService.languageWarnedKey(scheduleId));
+        // Language checks still running for the answer just sent are not counted against the next one.
+        sharedState.increment(com.rightpath.service.AudioTranscriptionService.languageGenerationKey(scheduleId),
+                java.time.Duration.ofHours(3));
+    }
+
+    /**
+     * Marks the last answer as not in English when the interviewer saw it from the text, and tells the candidate.
+     * Left alone if the speech check had already marked it, so the candidate is not told twice.
+     */
+    private void markLastAnswerNotEnglish(Long scheduleId) {
+        try {
+            VoiceConversationEntry last = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId)
+                    .stream()
+                    .filter(e -> e.getRole() == ConversationRole.CANDIDATE)
+                    .reduce((first, second) -> second)
+                    .orElse(null);
+            if (last == null || last.getContent() == null || last.getContent().startsWith(NOT_IN_ENGLISH)) {
+                return;
+            }
+            last.setContent(NOT_IN_ENGLISH + ": the interviewer found this answer was not in English (another "
+                    + "language, or one written out in English letters). It earns no marks, including for "
+                    + "communication.]\n" + last.getContent());
+            entryRepository.save(last);
+            messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/language-warning",
+                    Map.of("source", "interviewer"));
+            log.info("Interview {}: the interviewer found the last answer was not in English", scheduleId);
+        } catch (Exception e) {
+            log.warn("Could not mark the last answer of interview {} as not in English", scheduleId, e);
+        }
+    }
+
+    private static String capitalise(String value) {
+        return value == null || value.isBlank() ? value
+                : Character.toUpperCase(value.charAt(0)) + value.substring(1);
+    }
+
+    /** Key names, kept in one place with the service that writes them. */
+    private static final class AudioTranscriptionServiceKeys {
+        static String total(Long id) {
+            return com.rightpath.service.AudioTranscriptionService.languageTotalKey(id);
+        }
+
+        static String foreign(Long id) {
+            return com.rightpath.service.AudioTranscriptionService.languageForeignKey(id);
+        }
+
+        static String name(Long id) {
+            return com.rightpath.service.AudioTranscriptionService.languageNameKey(id);
+        }
+    }
+
+    /** Whether the question this answer replied to asked for code. */
+    private boolean answeredCodingQuestion(Long scheduleId, VoiceConversationEntry answer) {
+        VoiceConversationEntry question = null;
+        for (VoiceConversationEntry entry : entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId)) {
+            if (entry.getId() != null && entry.getId().equals(answer.getId())) {
+                break;
+            }
+            if (entry.getRole() == ConversationRole.INTERVIEWER) {
+                question = entry;
+            }
+        }
+        return question != null && question.getContent() != null
+                && CODING_OPENING.matcher(question.getContent()).find();
+    }
+
+    /**
+     * Whether the candidate has plainly stopped answering correctly: once enough answers are rated, the last few
+     * average below the mark. Only rated, non-introduction answers count, so one bad question never ends anything.
+     */
+    boolean shouldStopEarly(Long scheduleId) {
+        if (!earlyStopEnabled) {
+            return false;
+        }
+        List<Integer> scores = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId).stream()
+                .filter(e -> e.getRole() == ConversationRole.CANDIDATE && e.getAnswerScore() != null)
+                .map(VoiceConversationEntry::getAnswerScore)
+                .skip(1) // the introduction
+                .toList();
+        if (scores.size() < earlyStopMinAnswers) {
+            return false;
+        }
+        List<Integer> recent = scores.subList(scores.size() - Math.min(earlyStopWindow, scores.size()), scores.size());
+        double average = recent.stream().mapToInt(Integer::intValue).average().orElse(10);
+        return average < earlyStopMaxAverage;
+    }
+
+    /**
+     * Notes on the proctoring record that the interview was opened in another window while it was running, so a
+     * reviewer can see it. Best effort: failing to record it must not stop the candidate opening the interview.
+     */
+    private void recordSessionTakeover(CandidateInterviewSchedule schedule) {
+        if (proctoringEventRepository == null) {
+            return;
+        }
+        try {
+            proctoringEventRepository.save(com.rightpath.entity.ProctoringEvent.builder()
+                    .schedule(schedule)
+                    .eventType("interview_opened_elsewhere")
+                    .details("The interview was opened in another browser window while it was running. The earlier "
+                            + "window was closed and the interview continued in the new one.")
+                    .build());
+        } catch (Exception e) {
+            log.warn("Could not record the second window for interview {}", schedule.getId(), e);
+        }
+    }
+
     /**
      * Puts the rating the model just gave onto the answer it was rating.
      *
@@ -810,17 +1239,45 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * difficulty signal on the next turn; failing the turn over it would cost
      * the candidate an answer.</p>
      */
-    private void applyScoreToLastAnswer(Long scheduleId, Integer score) {
+    private boolean applyScoreToLastAnswer(Long scheduleId, Integer score, boolean codeMismatch) {
         try {
-            entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId).stream()
+            VoiceConversationEntry last = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId)
+                    .stream()
                     .filter(e -> e.getRole() == ConversationRole.CANDIDATE)
                     .reduce((first, second) -> second)
-                    .ifPresent(last -> {
-                        last.setAnswerScore(score);
-                        entryRepository.save(last);
-                    });
+                    .orElse(null);
+            if (last == null) {
+                return false;
+            }
+            // Code that solves a different problem than the one asked earns nothing, whatever rating came with it.
+            // Only an answer that carried code can be one: the flag is ignored on a spoken answer.
+            boolean hasCode = last.getCodeContent() != null && !last.getCodeContent().isBlank();
+            boolean mismatch = codeMismatch && hasCode;
+            Integer applied = mismatch ? Integer.valueOf(0) : score;
+            // An answer not spoken in English earns nothing: what was rated was a machine translation.
+            if (applied != null && last.getContent() != null && last.getContent().startsWith(NOT_IN_ENGLISH)) {
+                applied = 0;
+            }
+            // A coding question answered only by talking has not shown coding: the approach can earn a little,
+            // never a coding score. It was being rated 7/10 for a spoken outline.
+            if (applied != null && !hasCode && answeredCodingQuestion(scheduleId, last)) {
+                applied = Math.min(applied, spokenOnlyCodingMax);
+            }
+            if (applied != null) {
+                last.setAnswerScore(applied);
+                if (levelProgression != null) {
+                    last.setAnswerCorrect(levelProgression.isCorrect(applied));
+                }
+            }
+            if (mismatch) {
+                last.setCodeMismatch(true);
+                log.info("Interview {}: submitted code solves a different problem; scored 0", scheduleId);
+            }
+            entryRepository.save(last);
+            return mismatch;
         } catch (Exception e) {
             log.warn("Could not attach the answer score for interview {}", scheduleId, e);
+            return false;
         }
     }
 
@@ -887,6 +1344,51 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     + "other questions for us. Do NOT ask an interview question, do NOT start a new topic, do not "
                     + "end the interview in this reply and do not include [INTERVIEW_COMPLETE].";
 
+    /** Said when the candidate answers "yes" to the closing question without asking yet. */
+    static final String INVITE_QUESTION = "Of course, please go ahead. Anything you would like to ask about the role "
+            + "or the process, I'm happy to answer.";
+
+    /**
+     * Whether a reply to "do you have any questions?" means "yes, I do" without the question itself: a short yes,
+     * not a no, and not already a question (that is answered directly).
+     */
+    static boolean saysTheyHaveAQuestion(String transcript) {
+        if (transcript == null || transcript.isBlank()) {
+            return false;
+        }
+        String text = transcript.trim().toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z' ]", " ")
+                .replaceAll("\\s+", " ").trim();
+        if (text.isEmpty() || text.split(" ").length > 15
+                || text.matches("^(no|nope|nothing|not really|none|i don'?t|i do not|that'?s all|no thanks).*")) {
+            return false;
+        }
+        return text.matches("^(yes|yeah|yep|yup|ya|yah|sure|ok yes|okay yes|haan|ha|i do|i have|i've got|i got|one "
+                + "question|a question|a few questions|few questions|actually yes|yes i do|yes i have).*");
+    }
+
+    private static final java.util.Set<String> ENGLISH_WORDS = java.util.Set.of(
+            "the", "a", "an", "is", "are", "was", "were", "be", "to", "of", "and", "in", "on", "for", "with", "it",
+            "that", "this", "as", "by", "we", "you", "i", "my", "our", "can", "used", "use", "which", "from", "or",
+            "have", "has", "will", "would", "what", "how", "when", "where", "so", "but", "not", "do", "does", "they",
+            "there", "then", "if", "at", "into", "about", "like", "also", "its", "their", "easily");
+
+    /**
+     * Whether an answer is plainly English: enough of its words are common English words. Another language written
+     * out in English letters ("nenu project lo work chesanu") has almost none, so it is still caught.
+     */
+    static boolean looksEnglish(String transcript) {
+        if (transcript == null) {
+            return false;
+        }
+        String[] words = transcript.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z' ]", " ").trim()
+                .split("\\s+");
+        if (words.length < 4) {
+            return false;
+        }
+        long common = java.util.Arrays.stream(words).filter(ENGLISH_WORDS::contains).count();
+        return common * 4 >= words.length;
+    }
+
     private static final String FINAL_REPLY_DIRECTIVE =
             "The candidate has replied to your closing question, so this is your FINAL reply. If they asked "
                     + "something, answer it in a sentence or two in general terms (no salary, offers or how the "
@@ -912,6 +1414,18 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             return isClosingQuestion(entry.getContent());
         }
         return false;
+    }
+
+    /**
+     * The level to record for a turn, or null when the turn is not an interview question. The closing question
+     * ("any questions for us?") and the goodbye were saved with whatever level the model put on them, so the
+     * transcript labelled "do you have any questions for us" as Expert.
+     */
+    private static String levelOf(ParsedInterviewReply reply) {
+        if (reply == null || reply.closing() || isClosingQuestion(reply.spokenText())) {
+            return null;
+        }
+        return reply.level();
     }
 
     /** The closing question in any of its wordings, including "any other questions for us?" after an answer. */
@@ -1000,7 +1514,12 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 if (isCodingQuestion(retry) && hasExamples(retry.spokenText())) {
                     Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
                     String topic = retry.topic() != null ? retry.topic() : original.topic();
-                    return new ParsedInterviewReply(retry.spokenText(), score, retry.turnKind(), topic, false);
+                    return new ParsedInterviewReply(retry.spokenText(), score, retry.turnKind(), topic, false,
+                            retry.level() != null ? retry.level() : original.level(),
+                            original.codeMismatch() || retry.codeMismatch(),
+                            retry.skill() != null ? retry.skill() : original.skill(),
+                            original.notEnglish() || retry.notEnglish(),
+                            retry.competency() != null ? retry.competency() : original.competency());
                 }
             }
         } catch (Exception e) {
@@ -1008,6 +1527,361 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         }
         return original;
     }
+
+    /**
+     * The conversation so far with the rating this reply gives the last answer put on it, so the plan counts that
+     * answer: its score arrives in the same reply as the next question, and without it the plan lagged an answer.
+     */
+    private java.util.List<VoiceConversationEntry> historyWithScore(Long scheduleId, Integer score) {
+        java.util.List<VoiceConversationEntry> history =
+                new java.util.ArrayList<>(entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId));
+        if (score == null) {
+            return history;
+        }
+        for (int i = history.size() - 1; i >= 0; i--) {
+            VoiceConversationEntry entry = history.get(i);
+            if (entry.getRole() == ConversationRole.CANDIDATE) {
+                if (entry.getAnswerScore() == null) {
+                    history.set(i, VoiceConversationEntry.builder().role(ConversationRole.CANDIDATE)
+                            .content(entry.getContent()).codeContent(entry.getCodeContent()).answerScore(score)
+                            .build());
+                }
+                break;
+            }
+        }
+        return history;
+    }
+
+    /** What is wrong with a question against the plan, in words for the interviewer; null when it matches. */
+    static String planMismatch(com.rightpath.service.InterviewLevelProgression.Expected expected,
+            ParsedInterviewReply reply, java.util.List<String> required) {
+        if (expected == null) {
+            return null;
+        }
+        java.util.List<String> problems = new java.util.ArrayList<>();
+        String skill = com.rightpath.service.InterviewLevelProgression.canonical(reply.skill(), required);
+        // The tag can say one skill while the question moves to another: "Let's shift our focus to machine learning
+        // now" went out tagged Python, so it passed as Python, a skip on it counted against Python, and the next
+        // question went "back" to Python. What the question says it moves to is checked as well as its tag.
+        String announced = announcedSkillSwitch(reply.spokenText(), required);
+        if (announced != null && !announced.equals(expected.skill())) {
+            problems.add("it moves on to " + announced + ", but the skill in progress is " + expected.skill()
+                    + (announced.equals(skill) ? "" : ", and its [SKILL] tag does not say " + announced));
+        } else if (!expected.skill().equals(skill)) {
+            problems.add("it is on " + (reply.skill() == null ? "no named skill" : reply.skill())
+                    + ", but the skill in progress is " + expected.skill());
+        }
+        if (!expected.level().equals(reply.level())) {
+            problems.add("it is at " + (reply.level() == null ? "no level" : reply.level())
+                    + ", but " + expected.skill() + " is to be asked at " + expected.level());
+        }
+        if (expected.coding() && !isCodingQuestion(reply)) {
+            problems.add(expected.skill() + " owes its coding task at " + expected.level() + ", and this is not one");
+        }
+        return problems.isEmpty() ? null : String.join("; ", problems);
+    }
+
+    /** "Let's shift our focus to …", "moving on to …", "now let's talk about …": the words that start a new skill. */
+    private static final String SWITCH_WORDS = "(?:shift|shifting|switch|switching|move|moving|turn|turning|go|going"
+            + "|transition|transitioning|change|changing|return|returning|back)\\b[^.?!\\n]{0,40}?\\b(?:to|onto|towards)\\b"
+            + "|\\blet'?s (?:talk|discuss|chat)(?: a bit| now)? about\\b|\\bnow,? (?:on|for|about)\\b";
+
+    /**
+     * The required skill a question says it is moving on to, by its own words, or null when it announces no switch.
+     * Only an announced switch counts: a Python question that happens to mention machine learning is still Python.
+     */
+    static String announcedSkillSwitch(String text, java.util.List<String> required) {
+        if (text == null || text.isBlank() || required == null || required.isEmpty()) {
+            return null;
+        }
+        String lower = text.toLowerCase(java.util.Locale.ROOT);
+        String found = null;
+        int foundAt = Integer.MAX_VALUE;
+        for (String skill : required) {
+            if (skill == null || skill.isBlank()) {
+                continue;
+            }
+            String name = java.util.regex.Pattern.quote(skill.trim().toLowerCase(java.util.Locale.ROOT));
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("(?:" + SWITCH_WORDS + ")[^.?!\\n]{0,25}?(?<![a-z0-9])" + name + "(?![a-z0-9])")
+                    .matcher(lower);
+            // The first switch the question announces is the one it makes.
+            if (m.find() && m.start() < foundAt) {
+                foundAt = m.start();
+                found = skill.trim();
+            }
+        }
+        return found;
+    }
+
+    /** Asks once for the question the plan calls for; the original stands if the second try does not match either. */
+    private ParsedInterviewReply askToFollowPlan(CandidateInterviewSchedule schedule, ParsedInterviewReply original,
+            String turnPrompt, String problem,
+            com.rightpath.service.InterviewLevelProgression.Expected expected, java.util.List<String> required) {
+        try {
+            log.info("Interview {}: question sent back, {}", schedule.getId(), problem);
+            String directive = "Your question does not follow the assessment plan: " + problem + ". Keep your [SCORE] "
+                    + "for the last answer, acknowledge it briefly, and ask your next question on " + expected.skill()
+                    + " at " + expected.level()
+                    + (expected.coding() ? ", as a coding task ([CODING] with a Task type line and two examples)" : "")
+                    + ", tagged [SKILL:" + expected.skill() + "] [LEVEL:" + expected.level() + "] with its [TOPIC] and "
+                    + "[COMPETENCY].";
+            String reply = openAiStreamingService.chatCompletion(
+                    contextService.buildContextMessages(schedule, turnPrompt + "\n\n" + directive));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply retry = replyParser.parse(reply);
+                if (!retry.closing() && planMismatch(expected, retry, required) == null) {
+                    Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
+                    return new ParsedInterviewReply(retry.spokenText(), score, TurnKind.NEW_QUESTION,
+                            retry.topic() != null ? retry.topic() : original.topic(), false, retry.level(),
+                            original.codeMismatch() || retry.codeMismatch(), retry.skill(),
+                            original.notEnglish() || retry.notEnglish(), retry.competency());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not bring interview {} back to its plan", schedule.getId(), e);
+        }
+        log.warn("Interview {}: the question still did not follow the plan after one retry", schedule.getId());
+        // It goes out as it is, but filed under the skill it really asks about, so the answer (or a skip) counts
+        // there and the next question does not swing back to the skill the tag wrongly named.
+        String announced = announcedSkillSwitch(original.spokenText(), required);
+        if (announced != null && !announced.equals(
+                com.rightpath.service.InterviewLevelProgression.canonical(original.skill(), required))) {
+            return new ParsedInterviewReply(original.spokenText(), original.answerScore(), original.turnKind(),
+                    original.topic(), original.closing(), original.level(), original.codeMismatch(), announced,
+                    original.notEnglish(), original.competency());
+        }
+        return original;
+    }
+
+    /** Said first, every time an answer was not in English, before the interviewer re-asks the question. */
+    static final String ENGLISH_NOTICE = "You are speaking in another language, but this interview can only be done "
+            + "in English, so this answer won't be evaluated. Please answer in English.";
+
+    /** The reply with the English notice in front (after the coding tag, if any), unless it already says so. */
+    static ParsedInterviewReply withEnglishNotice(ParsedInterviewReply reply) {
+        String text = reply.spokenText() == null ? "" : reply.spokenText();
+        if (text.toLowerCase(java.util.Locale.ROOT).contains("won't be evaluated")) {
+            return reply;
+        }
+        java.util.regex.Matcher coding = CODING_OPENING.matcher(text);
+        String noticed = coding.find()
+                ? text.substring(0, coding.end()) + " " + ENGLISH_NOTICE + " " + text.substring(coding.end()).trim()
+                : ENGLISH_NOTICE + " " + text;
+        return new ParsedInterviewReply(noticed.trim(), reply.answerScore(), reply.turnKind(), reply.topic(),
+                reply.closing(), reply.level(), reply.codeMismatch(), reply.skill(), true, reply.competency());
+    }
+
+    /** Whether the answer just saved was marked by the speech check as not in English. */
+    private boolean lastAnswerMarkedNotEnglish(Long scheduleId) {
+        return entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId).stream()
+                .filter(e -> e.getRole() == ConversationRole.CANDIDATE)
+                .reduce((first, second) -> second)
+                .map(e -> e.getContent() != null && e.getContent().startsWith(NOT_IN_ENGLISH))
+                .orElse(false);
+    }
+
+    /** Wordings that ask the candidate to fix the code they have just written. */
+    private static final java.util.regex.Pattern CORRECT_CODE = java.util.regex.Pattern.compile(
+            "\\b(fix|correct|update|modify|change|rewrite|revise|improve|debug|adjust)\\b[^.?!\\n]{0,60}"
+                    + "\\b(code|function|solution|implementation|logic|program|loop|method|query)\\b",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** Whether a reply asks the candidate to fix their code ("could you correct your function?"). */
+    static boolean asksToCorrectCode(String text) {
+        return text != null && CORRECT_CODE.matcher(text).find();
+    }
+
+    /** Whether the candidate's latest answer included code. */
+    private boolean lastAnswerHadCode(Long scheduleId) {
+        return entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId).stream()
+                .filter(e -> e.getRole() == ConversationRole.CANDIDATE)
+                .reduce((first, second) -> second)
+                .map(e -> e.getCodeContent() != null && !e.getCodeContent().isBlank())
+                .orElse(false);
+    }
+
+    /** Whether the interviewer's latest question was itself a correction of a coding task. */
+    private static boolean lastQuestionWasCorrection(List<VoiceConversationEntry> entries) {
+        for (int i = entries.size() - 1; i >= 0; i--) {
+            VoiceConversationEntry entry = entries.get(i);
+            if (entry.getRole() == ConversationRole.INTERVIEWER) {
+                return entry.getContent() != null && CODING_OPENING.matcher(entry.getContent()).find()
+                        && entry.getTurnKind() != null && entry.getTurnKind() != TurnKind.NEW_QUESTION;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether this coding question is one already asked in this interview. A re-ask is allowed only when the
+     * candidate has not yet sent any code for it (they could not see the notepad), so it is not a repeat.
+     */
+    private boolean repeatsEarlierCodingProblem(Long scheduleId, ParsedInterviewReply reply) {
+        List<VoiceConversationEntry> entries = entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId);
+        java.util.Set<String> asked = problemWords(reply.spokenText());
+        if (asked.size() < 4) {
+            return false;
+        }
+        boolean answeredWithCode = entries.stream()
+                .filter(e -> e.getRole() == ConversationRole.CANDIDATE)
+                .reduce((first, second) -> second)
+                .map(e -> e.getCodeContent() != null && !e.getCodeContent().isBlank())
+                .orElse(false);
+        if (reply.turnKind() == TurnKind.REPHRASE && !answeredWithCode) {
+            return false;
+        }
+        // One correction of the code just submitted is allowed; a second one on the same task is a repeat.
+        if (reply.turnKind() != TurnKind.NEW_QUESTION && answeredWithCode && !lastQuestionWasCorrection(entries)) {
+            return false;
+        }
+        return entries.stream()
+                .filter(e -> e.getRole() == ConversationRole.INTERVIEWER && e.getContent() != null
+                        && CODING_OPENING.matcher(e.getContent()).find())
+                .anyMatch(e -> similarity(asked, problemWords(e.getContent())) >= 0.8);
+    }
+
+    /** The words of a coding problem's statement: no tag, task type or examples, so wording around it is ignored. */
+    static java.util.Set<String> problemWords(String text) {
+        if (text == null) {
+            return java.util.Set.of();
+        }
+        String statement = text.replaceAll("(?i)\\[\\s*CODING\\s*\\]", " ")
+                .replaceAll("(?im)^\\s*task type:.*$", " ")
+                .replaceAll("(?is)example\\s*1.*", " ")
+                .toLowerCase(java.util.Locale.ROOT);
+        java.util.Set<String> words = new java.util.HashSet<>();
+        for (String word : statement.split("[^a-z0-9]+")) {
+            if (word.length() > 2) {
+                words.add(word);
+            }
+        }
+        return words;
+    }
+
+    /** Share of words two problem statements have in common (Jaccard), 0 to 1. */
+    static double similarity(java.util.Set<String> a, java.util.Set<String> b) {
+        if (a.isEmpty() || b.isEmpty()) {
+            return 0;
+        }
+        java.util.Set<String> common = new java.util.HashSet<>(a);
+        common.retainAll(b);
+        java.util.Set<String> all = new java.util.HashSet<>(a);
+        all.addAll(b);
+        return (double) common.size() / all.size();
+    }
+
+    /**
+     * Asks once for a different question in place of a repeated coding problem. If the second try still repeats it,
+     * the original stands rather than stalling the interview; it is logged so it can be seen.
+     */
+    private ParsedInterviewReply askForDifferentProblem(CandidateInterviewSchedule schedule,
+            ParsedInterviewReply original, String turnPrompt) {
+        try {
+            String reply = openAiStreamingService.chatCompletion(contextService.buildContextMessages(schedule,
+                    turnPrompt + "\n\n" + NEW_PROBLEM_DIRECTIVE));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply retry = replyParser.parse(reply);
+                if (!isCodingQuestion(retry)
+                        || (hasExamples(retry.spokenText()) && !repeatsEarlierCodingProblem(schedule.getId(), retry))) {
+                    Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
+                    return new ParsedInterviewReply(retry.spokenText(), score, TurnKind.NEW_QUESTION,
+                            retry.topic() != null ? retry.topic() : original.topic(), retry.closing(),
+                            retry.level() != null ? retry.level() : original.level(),
+                            original.codeMismatch() || retry.codeMismatch(),
+                            retry.skill() != null ? retry.skill() : original.skill(),
+                            original.notEnglish() || retry.notEnglish(),
+                            retry.competency() != null ? retry.competency() : original.competency());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not replace a repeated coding problem in interview {}", schedule.getId(), e);
+        }
+        log.warn("Interview {} asked a coding problem again after it was answered", schedule.getId());
+        return original;
+    }
+
+    /** Whether this question's competency was already tested for the same skill in this interview. */
+    private boolean repeatsCompetency(CandidateInterviewSchedule schedule, ParsedInterviewReply reply) {
+        if (reply.competency() == null || reply.skill() == null) {
+            return false;
+        }
+        java.util.List<String> required = contextService.requiredSkills(schedule);
+        String skill = contextService.canonicalSkill(schedule, reply.skill());
+        String wanted = reply.competency().toLowerCase().replaceAll("[^a-z0-9+#]", "");
+        if (wanted.isEmpty()) {
+            return false;
+        }
+        return com.rightpath.service.InterviewLevelProgression.competenciesTested(
+                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()),
+                        required.isEmpty() ? java.util.List.of(skill) : required, skill)
+                .stream()
+                .anyMatch(c -> c.toLowerCase().replaceAll("[^a-z0-9+#]", "").equals(wanted));
+    }
+
+    /** Asks once for a question not asked before; the original stands if the second try repeats too. */
+    private ParsedInterviewReply askForUnaskedQuestion(CandidateInterviewSchedule schedule,
+            ParsedInterviewReply original, String turnPrompt, String earlier) {
+        try {
+            log.info("Interview {}: question sent back, it repeats an earlier one", schedule.getId());
+            String reply = openAiStreamingService.chatCompletion(contextService.buildContextMessages(schedule,
+                    turnPrompt + "\n\nYour question repeats one already asked in this interview: \"" + earlier
+                            + "\". Keep your [SCORE] for the last answer and ask a question that tests something no "
+                            + "earlier question did, on the same skill and at the same level, with all its tags. Do "
+                            + "not reword the earlier question."));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply retry = replyParser.parse(reply);
+                if (!retry.closing() && InterviewContextService.repeatedQuestion(
+                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()),
+                        retry.spokenText()) == null) {
+                    Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
+                    return new ParsedInterviewReply(retry.spokenText(), score, TurnKind.NEW_QUESTION,
+                            retry.topic() != null ? retry.topic() : original.topic(), false,
+                            retry.level() != null ? retry.level() : original.level(),
+                            original.codeMismatch() || retry.codeMismatch(),
+                            retry.skill() != null ? retry.skill() : original.skill(),
+                            original.notEnglish() || retry.notEnglish(), retry.competency());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not replace a repeated question in interview {}", schedule.getId(), e);
+        }
+        return original;
+    }
+
+    /** Asks once for a question on a different competency; the original stands if the second try repeats too. */
+    private ParsedInterviewReply askForDifferentCompetency(CandidateInterviewSchedule schedule,
+            ParsedInterviewReply original, String turnPrompt) {
+        try {
+            String reply = openAiStreamingService.chatCompletion(contextService.buildContextMessages(schedule,
+                    turnPrompt + "\n\nYour question tests \"" + original.competency() + "\", which was already tested "
+                            + "for " + original.skill() + ". Keep your [SCORE] for the last answer and ask a question "
+                            + "on a DIFFERENT competency of " + original.skill() + " at the same level, with all its "
+                            + "tags. Do not reword the earlier question."));
+            if (reply != null && !reply.isBlank()) {
+                ParsedInterviewReply retry = replyParser.parse(reply);
+                if (!retry.closing() && !repeatsCompetency(schedule, retry)) {
+                    Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
+                    return new ParsedInterviewReply(retry.spokenText(), score, TurnKind.NEW_QUESTION,
+                            retry.topic() != null ? retry.topic() : original.topic(), false,
+                            retry.level() != null ? retry.level() : original.level(),
+                            original.codeMismatch() || retry.codeMismatch(),
+                            retry.skill() != null ? retry.skill() : original.skill(),
+                            original.notEnglish() || retry.notEnglish(), retry.competency());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Could not replace a repeated competency in interview {}", schedule.getId(), e);
+        }
+        return original;
+    }
+
+    private static final String NEW_PROBLEM_DIRECTIVE =
+            "Your reply asked a coding problem that was already asked in this interview, and the candidate's answer "
+                    + "to it has been recorded and rated. Do NOT ask it again or reword it. Keep your [SCORE] for "
+                    + "their last answer, say in at most one sentence what was right or missing in it (never the "
+                    + "solution), then ask a DIFFERENT question: a new coding problem on different ground, with its "
+                    + "Task type line and exactly two examples, or a question on another skill.";
 
     private static final String CODING_EXAMPLES_DIRECTIVE =
             "Your reply asked a coding question without examples. Send the SAME coding question again, starting "
@@ -1038,7 +1912,27 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         } catch (Exception e) {
             log.warn("Could not get a farewell for interview {}", schedule.getId(), e);
         }
-        return new ParsedInterviewReply(text, score, original.turnKind(), original.topic(), true);
+        return new ParsedInterviewReply(text, score, original.turnKind(), original.topic(), true, original.level(),
+                original.codeMismatch(), original.skill(), original.notEnglish(), original.competency());
+    }
+
+    /**
+     * Asks once for the next question instead of a close, saying what the assessment still lacks. Null when the model
+     * still closes: it is not asked again, so this can never loop.
+     */
+    private ParsedInterviewReply askToContinue(CandidateInterviewSchedule schedule, String gap) {
+        try {
+            log.info("Holding the close on interview {}: {}", schedule.getId(), gap);
+            String reply = openAiStreamingService.chatCompletion(contextService.buildContextMessages(schedule, gap));
+            if (reply == null || reply.isBlank()) {
+                return null;
+            }
+            ParsedInterviewReply parsed = replyParser.parse(reply);
+            return parsed.closing() || isClosingQuestion(parsed.spokenText()) ? null : parsed;
+        } catch (Exception e) {
+            log.warn("Could not continue interview {} past an early close", schedule.getId(), e);
+            return null;
+        }
     }
 
     private ParsedInterviewReply askForOutstandingTopic(CandidateInterviewSchedule schedule) {
@@ -1243,6 +2137,38 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
         CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
                 .orElseThrow(() -> new ResourceNotFoundException("Schedule not found: " + scheduleId));
         sendResponseComplete(scheduleId, schedule, response, isComplete, endReason);
+    }
+
+    /**
+     * As above, and says whether the turn is a new question, a follow-up or a rephrase. The browser uses it to put the
+     * candidate's last code back in the notepad when they are asked to fix it, instead of a blank page.
+     */
+    private void sendResponseComplete(Long scheduleId, String response, boolean isComplete, String endReason,
+            com.rightpath.enums.TurnKind turnKind, boolean codeMismatch, boolean notEnglish) {
+        CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
+                .orElseThrow(() -> new ResourceNotFoundException("Schedule not found: " + scheduleId));
+        Map<String, Object> message = new HashMap<>();
+        if (endReason != null && isComplete) {
+            message.put("reason", endReason);
+        }
+        message.put("response", response);
+        message.put("questionsAsked", schedule.getTotalQuestionsAsked());
+        message.put("isComplete", isComplete);
+        message.put("terminated", false);
+        if (turnKind != null) {
+            message.put("turnKind", turnKind.name());
+        }
+        if (notEnglish) {
+            // Carried on the reply itself, so the "please answer in English" alert shows with the interviewer's words
+            // and cannot be missed the way a separate message could be.
+            message.put("notEnglish", true);
+        }
+        if (codeMismatch) {
+            // The candidate is told their last code did not answer the question, so they are not left thinking it
+            // counted.
+            message.put("codeMismatch", true);
+        }
+        messagingTemplate.convertAndSend("/topic/interview/" + scheduleId + "/response-complete", message);
     }
 
     private void sendResponseComplete(Long scheduleId, String response, boolean isComplete) {

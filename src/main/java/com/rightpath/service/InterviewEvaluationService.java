@@ -70,13 +70,82 @@ public class InterviewEvaluationService {
         this.objectMapper = new ObjectMapper();
     }
 
+    /**
+     * The pass mark: the share of the ROLE's requirements, out of 100, a candidate must show to pass (default 60). It
+     * is measured against everything the job needs (its skills, responsibilities and the depth its experience level
+     * calls for), not against the questions that happened to be answered, so answering a few questions well is not a
+     * pass. Every core skill must also have been shown. Set {@code interview.evaluation.pass-mark} in every
+     * environment if it is changed.
+     */
+    @org.springframework.beans.factory.annotation.Value("${interview.evaluation.pass-mark:60}")
+    private double scopePassMark = 60;
+
+    /** The candidate's name as on their account, so the summary uses the same name the interview did. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CandidateNameResolver nameResolver;
+
+    /** Works out, from the rated answers, the level each skill really reached (see {@link #applyRecordedLevels}). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private InterviewLevelProgression levelProgression;
+
+    /** Output limit for the grading call. gpt-4o allows up to 16384; the grading JSON needs several thousand. */
+    @org.springframework.beans.factory.annotation.Value("${openai.evaluation.max-tokens:12000}")
+    private int evaluationMaxTokens = 12000;
+
+    /** Why the last call to the model failed, for the message, when it said. */
+    private String reasonSuffix() {
+        String reason = openAiStreamingService.lastChatFailure();
+        return reason == null || reason.isBlank() ? "" : " (" + reason + ")";
+    }
+
+    /** What a reply that could not be read is recorded as. Never stored: it is retried instead. */
+    private static final String UNABLE_TO_EVALUATE = "UNABLE_TO_EVALUATE";
+
+    /** Waits before each retry of a background evaluation: the first try, then after 15 s, then after 45 s. */
+    private static final long[] RETRY_DELAYS_MS = {0, 15_000, 45_000};
+
+    /**
+     * Interviews being graded in the background right now. An interview can be ended by two paths at once (the
+     * interviewer closing it and the browser ending it), and each starts an evaluation; the second is dropped so the
+     * model is not called twice and two results do not race to be saved.
+     */
+    private final Set<Long> inFlight = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Grades a finished interview in the background, retrying a failed attempt.
+     *
+     * <p>It used to try once and log the failure. A timeout or a rate limit from the model then left a completed
+     * interview with no result at all until someone pressed Re-evaluate, which is why results sometimes appeared on
+     * their own and sometimes did not.</p>
+     */
     @Async("transcriptionExecutor")
     public void triggerEvaluationAsync(Long scheduleId) {
+        if (!inFlight.add(scheduleId)) {
+            log.info("Evaluation for schedule {} is already running; not starting another", scheduleId);
+            return;
+        }
         try {
-            evaluateInterview(scheduleId);
-            log.info("Async evaluation completed for schedule {}", scheduleId);
-        } catch (Exception e) {
-            log.error("Async evaluation failed for schedule {}", scheduleId, e);
+            for (int attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
+                try {
+                    if (RETRY_DELAYS_MS[attempt] > 0) {
+                        Thread.sleep(RETRY_DELAYS_MS[attempt]);
+                    }
+                    evaluateInterview(scheduleId);
+                    log.info("Async evaluation completed for schedule {} (attempt {})", scheduleId, attempt + 1);
+                    return;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    log.warn("Async evaluation for schedule {} interrupted", scheduleId);
+                    return;
+                } catch (Exception e) {
+                    log.warn("Async evaluation attempt {} of {} failed for schedule {}: {}",
+                            attempt + 1, RETRY_DELAYS_MS.length, scheduleId, e.toString());
+                }
+            }
+            log.error("Async evaluation gave up for schedule {} after {} attempts; it will be graded when its "
+                    + "result is next opened, or with Re-evaluate", scheduleId, RETRY_DELAYS_MS.length);
+        } finally {
+            inFlight.remove(scheduleId);
         }
     }
 
@@ -101,10 +170,19 @@ public class InterviewEvaluationService {
         CandidateInterviewSchedule schedule = scheduleRepo.findById(scheduleId)
                 .orElseThrow(() -> new RuntimeException("Schedule not found: " + scheduleId));
 
-        // Return cached evaluation if already generated
-        if (schedule.getEvaluationJson() != null && !schedule.getEvaluationJson().isBlank()) {
+        // Return cached evaluation if already generated — unless what is stored is a failed grading. Those were
+        // saved before failures stopped being stored, and served from cache they showed "not scored yet" for good,
+        // so they are graded again here instead.
+        VoiceEvaluationResult cached = schedule.getEvaluationJson() == null || schedule.getEvaluationJson().isBlank()
+                ? null
+                : parseEvaluation(schedule.getEvaluationJson());
+        if (cached != null && UNABLE_TO_EVALUATE.equals(cached.getRecommendation())) {
+            log.warn("Schedule {} holds a failed evaluation; grading it again", scheduleId);
+            schedule.setEvaluationJson(null);
+            cached = null;
+        }
+        if (cached != null) {
             log.info("Returning cached evaluation for schedule {}", scheduleId);
-            VoiceEvaluationResult cached = parseEvaluation(schedule.getEvaluationJson());
             List<VoiceConversationEntry> cachedEntries = entryRepository
                     .findByInterviewScheduleIdOrderByTimestampAsc(scheduleId);
             cached.setSpeechAnalysis(calculateSpeechAnalysis(cachedEntries));
@@ -143,6 +221,14 @@ public class InterviewEvaluationService {
         StringBuilder transcript = new StringBuilder();
         transcript.append("Position: ").append(schedule.getJobPrefix()).append("\n");
         transcript.append("Candidate: ").append(schedule.getEmail()).append("\n");
+        // The summary called candidates by the name on their resume, or one misheard in their speech, rather than the
+        // one the interview used. The account name is given, and only that one may be used.
+        String candidateName = nameResolver == null ? null
+                : nameResolver.firstName(schedule.getEmail()).orElse(null);
+        transcript.append(candidateName != null
+                ? "Candidate name: " + candidateName + " (refer to the candidate only by this name, never by a name "
+                        + "in the resume or one heard in the answers)\n"
+                : "Candidate name: not on file (do not name the candidate)\n");
         // Named so the grader weighs a behavioural round as one, rather than
         // marking it down for technical depth it was never meant to ask about.
         transcript.append("Round: ").append(schedule.getEffectiveRound().getDisplayName()).append("\n\n");
@@ -152,7 +238,10 @@ public class InterviewEvaluationService {
         int questionNumber = 0;
         for (VoiceConversationEntry entry : entries) {
             String speaker = switch (entry.getRole()) {
-                case INTERVIEWER -> schedule.getInterviewerName() + " (Question " + (++questionNumber) + ")";
+                case INTERVIEWER -> schedule.getInterviewerName() + " (Question " + (++questionNumber)
+                        + (entry.getSkill() != null ? " · skill: " + entry.getSkill() : "")
+                        + (entry.getCompetency() != null ? " · competency: " + entry.getCompetency() : "")
+                        + (entry.getLevel() != null ? " · level: " + entry.getLevel() : "") + ")";
                 case CANDIDATE -> "Candidate";
                 case SYSTEM -> "System";
             };
@@ -161,6 +250,15 @@ public class InterviewEvaluationService {
             // re-judging every answer cold. A coded answer that ran correctly is easy to under-rate without it.
             if (entry.getRole() == ConversationRole.CANDIDATE && entry.getAnswerScore() != null) {
                 transcript.append("[Rated at the time: ").append(entry.getAnswerScore()).append("/10]\n");
+            }
+            // A reviewer's correction replaces the rating at the time; both stay on record.
+            if (entry.getRole() == ConversationRole.CANDIDATE && entry.getReviewedScore() != null) {
+                transcript.append("[Reviewer changed this to ").append(entry.getReviewedScore()).append("/10: ")
+                        .append(entry.getReviewNote() == null ? "" : entry.getReviewNote()).append("]\n");
+            }
+            if (entry.getRole() == ConversationRole.CANDIDATE && Boolean.TRUE.equals(entry.getCodeMismatch())) {
+                transcript.append("[MISMATCH: this code solves a different problem than the one asked. It earns no ")
+                        .append("credit for that question.]\n");
             }
             transcript.append("\n");
         }
@@ -175,10 +273,22 @@ public class InterviewEvaluationService {
                 Map.of("role", "user", "content", prompt)
         );
 
-        String evaluationJson = openAiStreamingService.chatCompletion(messages);
+        // A long JSON reply: its own output limit, a low temperature for consistent grading, and JSON mode so the
+        // reply is one complete object. Under the shared 2000-token limit it was cut off and could not be read.
+        String evaluationJson = openAiStreamingService.chatCompletion(messages, evaluationMaxTokens, 0.2, true);
+        if (evaluationJson == null || evaluationJson.isBlank()) {
+            throw new IllegalStateException("The AI evaluation could not be completed"
+                    + reasonSuffix() + ". Please try Re-evaluate again in a minute.");
+        }
 
-        // Parse evaluation
+        // Parse evaluation. A reply that cannot be read is an error to retry, never a result to store: stored, it
+        // was served from cache as an empty evaluation from then on.
         VoiceEvaluationResult result = parseEvaluation(evaluationJson);
+        if (UNABLE_TO_EVALUATE.equals(result.getRecommendation())) {
+            log.error("Schedule {}: the evaluation reply could not be read{}", scheduleId, reasonSuffix());
+            throw new IllegalStateException("The AI evaluation came back incomplete" + reasonSuffix()
+                    + ". Please try Re-evaluate again in a minute.");
+        }
 
         // The overall follows from the area scores and the configured weights, rather than being a separate number
         // the model chose. See EvaluationScoreReconciler.
@@ -187,6 +297,23 @@ public class InterviewEvaluationService {
         if (Math.abs(modelOverall - result.getOverallScore()) >= 1.0) {
             log.info("Schedule {}: the model's overall score {} was replaced by the weighted area score {}",
                     scheduleId, modelOverall, result.getOverallScore());
+        }
+
+        // The skill report covers the job's skills and nothing else: each under the job's own name, and every one of
+        // them present, a skill nobody asked about shown as not assessed rather than missing or scored zero.
+        if (schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
+            List<String> required = requiredSkills(schedule.getJobPrefix());
+            alignSkillsToJob(result, required);
+            if (levelProgression != null) {
+                applyRecordedLevels(result, levelProgression.demonstratedLevels(entries, required));
+            }
+        }
+
+        // Measured against everything the interview should have covered, not only what it reached.
+        applyScope(result);
+        if (result.getScopeScore() != null) {
+            log.info("Schedule {}: {} of the expected scope earned ({} concepts)", scheduleId,
+                    result.getScopeScore(), result.getExpectedConcepts().size());
         }
 
         // Add speech analysis
@@ -204,21 +331,39 @@ public class InterviewEvaluationService {
             result.setRecommendation(null);
         }
 
+        // Pass or fail is decided by the numbers against the role, not by the grader's recommendation: a candidate
+        // scored 62% against the role was failed because the grader said Lean No Hire, and nobody could say what the
+        // threshold was. The recommendation is brought into line, and a disagreement is flagged for a person.
+        List<String> required = schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL
+                ? requiredSkills(schedule.getJobPrefix()) : List.of();
+        String graderSaid = result.getRecommendation();
+        decide(result, scopePassMark, required);
+        if (decidable && result.getRecommendation() != null
+                && !result.getRecommendation().equals(graderSaid)) {
+            log.info("Schedule {}: recommendation {} changed to {} to match the role fit ({})", scheduleId,
+                    graderSaid, result.getRecommendation(), result.getResultReason());
+        }
+
         applyTriage(schedule, result, entries);
+        if (decidable && graderSaid != null && !graderSaid.equals(result.getRecommendation())) {
+            List<String> reasons = new ArrayList<>(result.getReviewReasons() == null ? List.of()
+                    : result.getReviewReasons());
+            reasons.add("The AI evaluator recommended " + graderSaid.replace('_', ' ').toLowerCase(java.util.Locale.ROOT)
+                    + ", but the role fit decided otherwise: " + result.getResultReason()
+                    + " Worth a look before acting on it.");
+            result.setReviewReasons(reasons);
+            result.setNeedsHumanReview(true);
+            schedule.setNeedsHumanReview(true);
+        }
 
         // Stored as the enriched result rather than the model's raw reply, so a
         // cached read returns the review flags too. Serialising ours also drops
         // any stray prose the model wrapped its JSON in.
         schedule.setEvaluationJson(serialise(result, evaluationJson));
 
-        // B4: Set interviewResult based on recommendation
-        String recommendation = result.getRecommendation();
-        if (recommendation != null && decidable) {
-            if (PASS_RECOMMENDATIONS.contains(recommendation)) {
-                schedule.setInterviewResult(InterviewResult.PASSED);
-            } else if (FAIL_RECOMMENDATIONS.contains(recommendation)) {
-                schedule.setInterviewResult(InterviewResult.FAILED);
-            }
+        // The result follows the pass mark (see decide), and only when enough was asked to decide at all.
+        if (decidable && result.getMeetsPassMark() != null) {
+            schedule.setInterviewResult(result.getMeetsPassMark() ? InterviewResult.PASSED : InterviewResult.FAILED);
         }
 
         persistEvaluation(schedule, resultBefore);
@@ -256,6 +401,17 @@ public class InterviewEvaluationService {
                 - Staying generic after being asked for an example, or avoiding a whole area (conflict and failure are the
                   usual ones), is a negative, not a neutral result.
                 - A competency that was never asked about is not assessed. Do not mark technical skill in this round.
+                ROLE REQUIREMENTS IN THIS ROUND (they replace the SKILL list described above): this round tests how
+                the person works, not what technology they know, and technical skills were assessed in L2. So
+                "expectedConcepts" lists the BEHAVIOURAL requirements of this role, never its technical skills:
+                - RESPONSIBILITY: what the job description says the person will do that depends on how they work
+                  (owning deliverables, working with stakeholders or clients, mentoring, handling production issues
+                  under pressure, working in a team), each as a requirement in its own right.
+                - EXPERIENCE: what the experience level expects of conduct (a fresher: learning quickly, asking for
+                  help, taking feedback; a senior: leading, deciding under ambiguity, handling conflict, mentoring).
+                - Use "requirement": "SKILL" only for a soft skill the job names (communication, leadership), with
+                  "skill" left null.
+                Usually 6 to 10 requirements; mark the ones the role cannot do without as CORE.
                 """;
         }
         return shared + """
@@ -278,6 +434,11 @@ public class InterviewEvaluationService {
                                          CompletionReason completionReason, int totalQuestionsAsked,
                                          String facts) {
         String categorySection = categoryFormatter.buildEvaluationCategorySection(jobPrefix, round);
+        // Technical round: a score per skill as well as per category, so the report says how the candidate did in
+        // Java, in SQL, in React, and not only in "Technical Skills".
+        if (round == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
+            categorySection = SKILL_SCORES_TEMPLATE + System.lineSeparator() + "                    " + categorySection;
+        }
 
         // Try to load custom SUMMARY prompt
         String customInstructions = "";
@@ -331,12 +492,101 @@ public class InterviewEvaluationService {
                     "confidence": <number 0.0-1.0>,
                     "strengths": ["<strength 1>", "<strength 2>", "<strength 3>"],
                     "areasForImprovement": ["<area 1>", "<area 2>", "<area 3>"],
+                    "expectedConcepts": [{"concept": "<a requirement of this role the interview should have tested>", "requirement": "<SKILL | RESPONSIBILITY | EXPERIENCE>", "skill": "<the required skill it belongs to, as the job names it, or null>", "importance": "<CORE | SUPPORTING>", "area": "<AREA>", "status": "<CORRECT | PARTIAL | INCORRECT | NOT_ASKED>", "questionNumbers": [<questions that tested it>]}],
+                    "questionAreas": [{"questionNumber": <n>, "area": "<AREA>"}],
+                    "answerNotes": [{"questionNumber": <n>, "gotRight": "<what the answer got right>", "missed": "<what cost it the missing marks>"}],
+                    "improvementPlan": [{"skill": "<skill or area>", "gap": "<what fell short in this interview>", "action": "<what to study and practise to close it>", "priority": "<HIGH | MEDIUM | LOW>"}],
+                    "verdict": "<3-4 sentences, as a senior interviewer to the hiring manager>",
+                    "observedSeniority": "<Fresher | Junior | Mid-level | Senior | Lead> (job asks for <experience>)",
+                    "notCovered": ["<what the job needs that was never tested>"],
+                    "depthGaps": ["<topic: what depth was missing>"],
                     %s
                 }
 
                 %s
 
                 %s
+
+                %s
+                IMPORTANT — JUDGE LIKE A SENIOR INTERVIEWER, NOT A QUESTION COUNTER. Read the job, the plan and the
+                transcript as a person deciding whether to hire would. Separate three things: what the candidate KNOWS
+                (correct answers), how DEEP it goes (can they say why, handle a follow-up, debug, weigh trade-offs, or
+                only recite a definition), and what was NEVER TESTED. A correct but textbook answer is shallow; say so.
+                - "verdict": 3-4 plain sentences for the hiring manager: what kind of candidate this is (for example
+                  "a solid junior backend developer who knows CRUD and REST well but has not worked with
+                  transactions or performance"), whether they are ready for THIS role at its stated experience
+                  level, and what they would need.
+                - "observedSeniority": the level the answers actually showed, one of "Fresher", "Junior",
+                  "Mid-level", "Senior", "Lead", followed by " (job asks for <the job's experience>)".
+                - "notCovered": what the job needs that this interview never tested (from expectedConcepts marked
+                  NOT_ASKED, said in words a recruiter understands), each with why the role needs it ("RAG: the role
+                  builds retrieval pipelines; not reached"). Empty if everything was covered.
+                - "depthGaps": where answers were correct but not deep enough for THIS role at its experience level,
+                  each naming the topic, the depth the role needs and what was missing ("JWT: the role secures public
+                  APIs; knows the flow but not how expiry and refresh are handled").
+                Base every word on this transcript only.
+                IMPORTANT: An answer marked [NOT IN ENGLISH] was not given in English; its text is a machine
+                translation. It earns NO credit in any category, communication included.
+                IMPORTANT: A coding question answered only by talking, with no [CODE] submitted, has not shown coding:
+                it earns at most partial credit for the approach, and never a strong programming score.
+                IMPORTANT: The recommendation must match the scores. A candidate whose answers were mostly rated low,
+                or whose interview ended early for poor performance, is not a hire, however the summary reads.
+                IMPORTANT: Where "skillScores" is asked for, give ONE entry for EVERY required skill in the JOB
+                above, plus any skill from the resume that the interview actually tested and the role uses. Name each
+                skill as the job names it. "category" is the scoring category it counts towards, from the categories
+                above. Score each skill only on the questions that tested it, and list them in "questionNumbers"; a
+                required skill no question tested gets an empty list and is not assessed, never a middling score.
+                "highestLevel" and "onResume" mean the same as for the categories.
+                IMPORTANT: In "answerNotes" give, for EVERY numbered question the candidate answered or skipped (not the
+                closing questions), one short phrase for what the answer got right and one for what it missed or got
+                wrong: the reason it did not score 10. For an answer rated 7/10, "missed" says what the other 3 marks
+                were for. Name the actual concept ("did not mention that @Transactional rolls back only on unchecked
+                exceptions"), never just "lacked depth". A full-marks answer has an empty "missed"; a skipped or
+                unanswered one has an empty "gotRight" and "missed" says it was not answered. Explain the rating the
+                answer was given at the time; if you disagree with it, say so in "missed".
+                IMPORTANT: "improvementPlan" says where and how the candidate can improve, as 3 to 6 concrete steps,
+                most important first. Each names the skill or area, the gap this interview showed (cite the question
+                where there is one, e.g. "Q7: could not explain overfitting beyond the definition"), and an action
+                specific enough to follow: the exact topics to study and a practice task (e.g. "Study bias-variance
+                trade-off, regularisation (L1/L2) and cross-validation; train a model on a small dataset and compare
+                train and validation error with and without regularisation"). Cover the weakest required skills, the
+                depth gaps and the most important areas never tested. HIGH is a gap that matters most for this role.
+                No general advice ("practise more", "improve communication") and nothing the candidate already did
+                well.
+                IMPORTANT — THIS INTERVIEW ONLY. You are grading one interview with one candidate. Use only the job,
+                the plan and the transcript given here; never draw on any other candidate, interview or conversation,
+                and never credit something the candidate did not say in this transcript.
+                IMPORTANT — THE ROLE FIRST. The result is decided by how much of what THIS ROLE needs the candidate
+                showed, not by how well they answered the questions that happened to be asked. Before you score
+                anything, read the JOB above as a hiring manager would and list in "expectedConcepts" what a person
+                must be able to do to be hired for it, usually 10 to 18 requirements, built the same way however the
+                interview went and never shortened to fit what was asked:
+                - SKILL: for EVERY required skill, the concepts that skill needs at the depth this role uses it (for
+                  Python in a data role: data structures, file and error handling, writing clean functions; not
+                  trivia). Name the skill in "skill".
+                - RESPONSIBILITY: the main things the job description says the person will DO (build and deploy ML
+                  models, design REST APIs, write production SQL), each as a requirement in its own right. Name the
+                  skill it mostly rests on in "skill", or null.
+                - EXPERIENCE: the depth the job's experience level calls for (a fresher: correct fundamentals and simple
+                  application; 3+ years: design choices, debugging real failures, trade-offs, performance), as one or
+                  two requirements.
+                Mark each CORE when the role cannot be done without it (the main required skills and the main
+                responsibilities) and SUPPORTING otherwise; usually about half are core. Then mark each one: CORRECT
+                (shown well, at the depth the role needs), PARTIAL (partly shown, or only at a shallower depth),
+                INCORRECT (asked and answered wrongly, skipped or not answered) or NOT_ASKED (never reached). Judge
+                from the whole transcript: a requirement can be shown by several answers, a coding task or a project
+                the candidate explained. A requirement never reached earns nothing: covering 5 of 10 is not the whole
+                job. The server weighs core requirements double and passes the candidate only at the pass mark with
+                every core skill shown, so mark honestly and never mark a requirement CORRECT on a textbook definition
+                alone when the role needs it applied.
+                IMPORTANT: In "questionAreas" give, for EVERY numbered interviewer question including the introduction,
+                the area it was about, one of COMMUNICATION, FRONTEND, BACKEND, DATABASE, PROGRAMMING, DEVOPS_CLOUD,
+                SYSTEM_DESIGN, TESTING, BEHAVIOURAL, OTHER. Use the same areas for "expectedConcepts". The introduction
+                and questions about the candidate themselves are COMMUNICATION.
+                IMPORTANT: The recommendation must follow the role requirements. A candidate who leaves most of them, or
+                any core skill, NOT_ASKED or INCORRECT has not shown they can do this job, however well they answered
+                the few questions they did: do not recommend HIRE or STRONG_HIRE for them. The "verdict" says plainly
+                which of the role's core requirements were shown and which were not.
                 IMPORTANT: Return ONLY the JSON object, no additional text or markdown.
                 IMPORTANT: Scores must be on a 0-10 scale (not 0-100).
                 IMPORTANT: Score every category on the evidence in the transcript. Use the full range: 9-10 for
@@ -344,17 +594,34 @@ public class InterviewEvaluationService {
                 mostly incorrect or very shallow answers; 0-2 for no relevant answer. A skipped question is a missing
                 answer, not a wrong one: never invent evidence for a category that was not asked about, and say in
                 its feedback that it was not covered.
+                IMPORTANT: Where an answer carries "[Reviewer changed this to n/10: reason]", a person has reviewed it:
+                use THEIR score and reason for that answer, not the rating at the time, everywhere it counts.
                 IMPORTANT: Answers carry "[Rated at the time: n/10]" from the interviewer. Treat those as strong
                 evidence: a category's score should sit close to the ratings of the answers that bear on it, and move
                 away from them only for a reason you state in its feedback.
-                IMPORTANT: For a coding answer, judge the [CODE] and [RUN OUTPUT] themselves. Code that is correct and
-                produces the expected output is a strong answer (8-10 for the programming and problem-solving areas it
-                demonstrates) even if the spoken explanation was brief; never score it down for answers to other
-                questions. Score down only for wrong output, errors, or code that was never run.
+                IMPORTANT: Code marked [MISMATCH], or any code you can see solves a different problem than the question
+                before it asked, earns NO credit for that question, however good it is.
+                IMPORTANT: For a coding answer, judge the [CODE] itself by reading it and tracing the examples by hand.
+                The interview notepad has no compiler, so code is never run: never score it down for not being run.
+                The answer may be code in any language, pseudocode or step-by-step logic; judge the correctness and
+                completeness of the approach, edge cases and complexity, not syntax. A framework task (for example a
+                Spring Boot CRUD API) is answered as a rough sketch of the key classes, annotations, signatures and
+                flow: judge whether the right pieces are there and wired correctly, and never mark it down for missing
+                imports, configuration, getters and setters or unfinished method bodies. Code or logic that is correct is
+                a strong answer (8-10 for the programming and problem-solving areas it demonstrates) even if the
+                spoken explanation was brief; never score it down for answers to other questions. Score down only for
+                logic that is wrong, misses cases, or does not solve the problem.
                 IMPORTANT: Each interviewer line in the transcript is numbered ("Question 3"). For every category, list in
                 "questionNumbers" the numbers of the interviewer questions that bear on it: the ones its score and
                 feedback are based on. A question may count toward more than one category. Use an empty list for a
                 category that was never asked about, and say so in its feedback. Use only numbers that appear.
+                IMPORTANT: Where a category carries "highestLevel", give the highest level the candidate actually
+                demonstrated in that area (BASIC, INTERMEDIATE, ADVANCED or EXPERT), judged from their answers and
+                not from the level of the questions asked. A level only counts if they answered it well; levels never
+                reached are simply not claimed. Use NONE when the area was asked about but even Basic was not shown,
+                and also for an area never asked about. "mapped" is true when the candidate's resume, projects or
+                introduction showed this area, false when it did not. It records what they claimed, not what they can
+                do: never raise a score for it.
                 IMPORTANT: Each category's "feedback" must be 2-3 plain sentences that cite what the candidate actually
                 said: what they got right, where they fell short, and what they should do to improve.
                 IMPORTANT: "overallScore" should be consistent with the category scores and their weights.
@@ -367,8 +634,49 @@ public class InterviewEvaluationService {
 
                 Interview Transcript:
                 %s
-                """, transcriptRules, categorySection, facts, gradingRules(round), customInstructions,
+                """, transcriptRules, categorySection, scopeContext(jobPrefix, round), facts, gradingRules(round),
+                customInstructions,
                 earlyTerminationContext, injectionGuard.fence(transcript));
+    }
+
+    /** The per-skill part of the grader's JSON, technical round only. */
+    private static final String SKILL_SCORES_TEMPLATE = "\"skillScores\": [{\"skill\": \"<a required skill of the job>\", "
+            + "\"category\": \"<the scoring category it counts towards>\", \"onResume\": <true | false>, "
+            + "\"score\": <0-10>, \"highestLevel\": \"<NONE | BASIC | INTERMEDIATE | ADVANCED | EXPERT>\", "
+            + "\"questionNumbers\": [<questions that tested it>], \"feedback\": \"<1-2 sentences>\"}],";
+
+    /** Longest the interview plan given to the grader may be: enough for the plan, not a second transcript. */
+    private static final int MAX_PLAN_CHARS = 8000;
+
+    /**
+     * What the interview was for: the job, and the plan the interviewer was given for this round. The grader used to
+     * see only the transcript, so it graded the questions that happened to be asked as if they were the whole job.
+     */
+    private String scopeContext(String jobPrefix, com.rightpath.enums.InterviewRound round) {
+        StringBuilder sb = new StringBuilder("JOB\n");
+        try {
+            sb.append(placeholderResolver.resolveJobPlaceholders(
+                    "Title: {{jobTitle}}\nRole: {{role}}\nRequired skills: {{skills}}\nExperience: {{experience}}\n"
+                            + "Education: {{education}}\nJob description: {{jobDescription}}",
+                    jobPrefix));
+        } catch (Exception e) {
+            log.debug("Could not describe job {} for the grader", jobPrefix, e);
+            sb.append("Job ").append(jobPrefix);
+        }
+        try {
+            String plan = jobPromptService.getInterviewPrompt(jobPrefix, round, com.rightpath.enums.PromptStage.START);
+            if (plan != null && !plan.isBlank()) {
+                plan = placeholderResolver.resolveJobPlaceholders(plan, jobPrefix)
+                        .replaceAll("\\{\\{[a-zA-Z]+}}", "");
+                if (plan.length() > MAX_PLAN_CHARS) {
+                    plan = plan.substring(0, MAX_PLAN_CHARS) + "\n[plan shortened]";
+                }
+                sb.append("\n\nINTERVIEW PLAN (the instructions the interviewer was given for this round)\n").append(plan);
+            }
+        } catch (Exception e) {
+            log.debug("No interview plan for job {} round {}", jobPrefix, round, e);
+        }
+        return sb.toString();
     }
 
     /**
@@ -394,7 +702,7 @@ public class InterviewEvaluationService {
      */
     private void applyTriage(CandidateInterviewSchedule schedule, VoiceEvaluationResult result,
                              List<VoiceConversationEntry> entries) {
-        List<String> reasons = reviewTriage.reviewReasons(schedule, result, entries);
+        List<String> reasons = new ArrayList<>(reviewTriage.reviewReasons(schedule, result, entries));
         result.setReviewReasons(reasons);
         result.setNeedsHumanReview(!reasons.isEmpty());
         schedule.setNeedsHumanReview(!reasons.isEmpty());
@@ -440,6 +748,213 @@ public class InterviewEvaluationService {
             }
         }
         return result;
+    }
+
+    /** The level a category reports, normalised, or null when absent or not one of the five known values. */
+    private String highestLevelOf(JsonNode scoreNode) {
+        String raw = textOrNull(scoreNode, "highestLevel");
+        if (raw == null) {
+            return null;
+        }
+        String level = raw.trim().toUpperCase();
+        return List.of("NONE", "BASIC", "INTERMEDIATE", "ADVANCED", "EXPERT").contains(level) ? level : null;
+    }
+
+    private static final List<String> AREAS = List.of("COMMUNICATION", "FRONTEND", "BACKEND", "DATABASE",
+            "PROGRAMMING", "DEVOPS_CLOUD", "SYSTEM_DESIGN", "TESTING", "BEHAVIOURAL", "OTHER");
+
+    /** An area name the grader gave, normalised to one of {@link #AREAS}; anything else is OTHER. */
+    private static String areaOf(String raw) {
+        if (raw == null) {
+            return "OTHER";
+        }
+        String area = raw.trim().toUpperCase().replace(' ', '_').replace('&', '_').replace("__", "_");
+        if (area.startsWith("DEVOPS") || area.startsWith("CLOUD")) {
+            return "DEVOPS_CLOUD";
+        }
+        if (area.startsWith("BEHAVIO")) {
+            return "BEHAVIOURAL";
+        }
+        return AREAS.contains(area) ? area : "OTHER";
+    }
+
+    /**
+     * Applies the score against the full scope: each expected concept counts 1 answered well, a half partly, nothing
+     * wrong or never asked. The overall becomes that share out of 10, so half the concepts covered can never score as
+     * the whole job; the mean over what was asked stays as the assessed score. Too short a list (under 3) is not a
+     * scope, and the weighted area score stands.
+     */
+    static void applyScope(VoiceEvaluationResult result) {
+        List<VoiceEvaluationResult.Concept> concepts = result.getExpectedConcepts();
+        if (concepts == null || concepts.size() < 3) {
+            return;
+        }
+        // A core requirement (one the role cannot be done without) counts double: missing it costs more than missing
+        // a supporting one.
+        double credit = 0;
+        double total = 0;
+        int reached = 0;
+        for (VoiceEvaluationResult.Concept concept : concepts) {
+            double weight = weightOf(concept);
+            total += weight;
+            credit += weight * creditOf(concept);
+            if (!"NOT_ASKED".equals(concept.getStatus())) {
+                reached++;
+            }
+        }
+        double scope = Math.round(credit / total * 1000.0) / 10.0;
+        result.setScopeScore(scope);
+        if (result.getAssessedScore() == null) {
+            result.setAssessedScore(result.getOverallScore());
+        }
+        result.setOverallScore(Math.round(scope) / 10.0);
+        result.setCoverage(Math.round((double) reached / concepts.size() * 1000.0) / 1000.0);
+    }
+
+    /** What the candidate earned out of 100: the scope score where there is one, otherwise the overall score. */
+    private static double weightOf(VoiceEvaluationResult.Concept concept) {
+        return "CORE".equals(concept.getImportance()) ? 2 : 1;
+    }
+
+    private static double creditOf(VoiceEvaluationResult.Concept concept) {
+        return switch (concept.getStatus() == null ? "" : concept.getStatus()) {
+            case "CORRECT" -> 1;
+            case "PARTIAL" -> 0.5;
+            default -> 0;
+        };
+    }
+
+    /**
+     * Decides pass or fail against the role, and says why.
+     *
+     * <p>Passed when the role fit (the share of the role's requirements shown, see {@link #applyScope}) is at the pass
+     * mark or above AND every core required skill was shown at least in part. Answering the questions that were asked
+     * is not enough: a requirement never reached counts as not shown, and a core skill the candidate could not show at
+     * all is a fail however high the rest scored. The recommendation is brought into line with the result.</p>
+     */
+    static void decide(VoiceEvaluationResult result, double passMark, List<String> required) {
+        double fit = earnedOutOf100(result);
+        List<VoiceEvaluationResult.Concept> concepts = result.getExpectedConcepts() == null ? List.of()
+                : result.getExpectedConcepts();
+
+        // Core skills: required skills with a core requirement among the concepts. Missing when none of their
+        // concepts was answered even in part.
+        java.util.Map<String, double[]> coreSkills = new java.util.LinkedHashMap<>();
+        for (VoiceEvaluationResult.Concept concept : concepts) {
+            String skill = InterviewLevelProgression.canonical(concept.getSkill(), required);
+            if (skill == null) {
+                continue;
+            }
+            double[] tally = coreSkills.computeIfAbsent(skill, s -> new double[2]); // [credit, core?]
+            tally[0] += creditOf(concept);
+            if ("CORE".equals(concept.getImportance())) {
+                tally[1] = 1;
+            }
+        }
+        List<String> missingCore = new ArrayList<>();
+        coreSkills.forEach((skill, tally) -> {
+            if (tally[1] > 0 && tally[0] == 0) {
+                missingCore.add(skill);
+            }
+        });
+
+        boolean meets = fit >= passMark && missingCore.isEmpty();
+        long shown = concepts.stream().filter(c -> creditOf(c) > 0).count();
+        long core = concepts.stream().filter(c -> "CORE".equals(c.getImportance())).count();
+        long coreShown = concepts.stream().filter(c -> "CORE".equals(c.getImportance()) && creditOf(c) > 0).count();
+
+        StringBuilder reason = new StringBuilder(String.format(java.util.Locale.ROOT,
+                "Role fit %.0f%% against a pass mark of %.0f%%.", fit, passMark));
+        if (!concepts.isEmpty()) {
+            reason.append(String.format(java.util.Locale.ROOT, " Showed %d of the role's %d requirements", shown,
+                    concepts.size()));
+            if (core > 0) {
+                reason.append(String.format(java.util.Locale.ROOT, " (%d of %d core)", coreShown, core));
+            }
+            reason.append('.');
+        }
+        if (!missingCore.isEmpty()) {
+            reason.append(" Core skill").append(missingCore.size() == 1 ? "" : "s").append(" not shown: ")
+                    .append(String.join(", ", missingCore)).append('.');
+        }
+        reason.append(meets ? " Passed." : fit >= passMark ? " Not passed: every core skill must be shown."
+                : " Not passed.");
+
+        result.setPassMark(passMark);
+        result.setMeetsPassMark(meets);
+        result.setMissingCoreSkills(missingCore);
+        result.setResultReason(reason.toString());
+
+        String recommendation = result.getRecommendation();
+        if (recommendation != null) {
+            if (meets && FAIL_RECOMMENDATIONS.contains(recommendation)) {
+                result.setRecommendation("LEAN_HIRE");
+            } else if (!meets && PASS_RECOMMENDATIONS.contains(recommendation)) {
+                result.setRecommendation("LEAN_NO_HIRE");
+            }
+        }
+    }
+
+    static double earnedOutOf100(VoiceEvaluationResult result) {
+        return result.getScopeScore() != null ? result.getScopeScore() : result.getOverallScore() * 10;
+    }
+
+    /** The job's required skills as it lists them; empty when there are none or they cannot be read. */
+    private List<String> requiredSkills(String jobPrefix) {
+        try {
+            String skills = placeholderResolver.resolveJobPlaceholders("{{skills}}", jobPrefix);
+            return skills == null || skills.isBlank() || skills.contains("{{") ? List.of()
+                    : com.rightpath.util.SkillMatcher.parseSkills(skills);
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    /**
+     * Keeps the per-skill scores to the job's skills, under the job's names, and adds any required skill the grader
+     * left out as not assessed. A skill that is none of the job's (a scoring category, or a topic such as "Data
+     * Cleaning") is dropped from the skill report; it still counts through its category.
+     */
+    static void alignSkillsToJob(VoiceEvaluationResult result, List<String> required) {
+        if (required == null || required.isEmpty() || result.getSkillScores() == null) {
+            return;
+        }
+        java.util.Map<String, VoiceEvaluationResult.SkillScore> byName = new java.util.LinkedHashMap<>();
+        for (VoiceEvaluationResult.SkillScore score : result.getSkillScores()) {
+            String named = InterviewLevelProgression.canonical(score.getSkill(), required);
+            if (named == null || byName.containsKey(named)) {
+                continue;
+            }
+            score.setSkill(named);
+            byName.put(named, score);
+        }
+        List<VoiceEvaluationResult.SkillScore> aligned = new ArrayList<>();
+        for (String skill : required) {
+            aligned.add(byName.getOrDefault(skill, VoiceEvaluationResult.SkillScore.builder()
+                    .skill(skill).score(0).highestLevel("NONE").questionNumbers(List.of())
+                    .feedback("Not assessed: no question in this interview tested this skill.")
+                    .assessed(false).build()));
+        }
+        result.setSkillScores(aligned);
+    }
+
+    /**
+     * Each skill's "highest level" as its answers show it, level by level, instead of the grader's own pick. The grader
+     * called Machine Learning "Intermediate" above level cards showing its Advanced and Expert questions answered
+     * correctly. A skill with no rated, levelled answers keeps the grader's level.
+     */
+    static void applyRecordedLevels(VoiceEvaluationResult result, java.util.Map<String, String> recorded) {
+        if (result.getSkillScores() == null || recorded == null || recorded.isEmpty()) {
+            return;
+        }
+        for (VoiceEvaluationResult.SkillScore score : result.getSkillScores()) {
+            String level = recorded.get(score.getSkill());
+            if (level != null && score.isAssessed() && !level.equals(score.getHighestLevel())) {
+                log.info("Skill {}: highest level {} from the answers, not the grader's {}", score.getSkill(), level,
+                        score.getHighestLevel());
+                score.setHighestLevel(level);
+            }
+        }
     }
 
     /** Keeps a stated confidence inside 0..1 — models do return 85 for "85%". */
@@ -538,6 +1053,8 @@ public class InterviewEvaluationService {
                             .weight(scoreNode.path("weight").asDouble())
                             .feedback(textOrNull(scoreNode, "feedback"))
                             .questionNumbers(questionNumbersOf(scoreNode))
+                            .highestLevel(highestLevelOf(scoreNode))
+                            .mapped(scoreNode.path("mapped").isBoolean() ? scoreNode.path("mapped").asBoolean() : null)
                             .build());
                 }
             }
@@ -560,7 +1077,126 @@ public class InterviewEvaluationService {
                     ? clampConfidence(node.path("confidence").asDouble())
                     : null;
 
+            List<VoiceEvaluationResult.Concept> concepts = new ArrayList<>();
+            if (node.path("expectedConcepts").isArray()) {
+                for (JsonNode c : node.path("expectedConcepts")) {
+                    String name = textOrNull(c, "concept");
+                    if (name == null || name.isBlank()) {
+                        continue;
+                    }
+                    String status = textOrNull(c, "status");
+                    status = status == null ? "NOT_ASKED" : status.trim().toUpperCase();
+                    if (!List.of("CORRECT", "PARTIAL", "INCORRECT", "NOT_ASKED").contains(status)) {
+                        status = "NOT_ASKED";
+                    }
+                    String requirement = textOrNull(c, "requirement");
+                    requirement = requirement == null ? null : requirement.trim().toUpperCase();
+                    if (requirement != null && !List.of("SKILL", "RESPONSIBILITY", "EXPERIENCE").contains(requirement)) {
+                        requirement = "SKILL";
+                    }
+                    String importance = textOrNull(c, "importance");
+                    importance = importance == null ? null
+                            : "CORE".equalsIgnoreCase(importance.trim()) ? "CORE" : "SUPPORTING";
+                    String conceptSkill = textOrNull(c, "skill");
+                    concepts.add(VoiceEvaluationResult.Concept.builder()
+                            .concept(name.trim())
+                            .area(areaOf(textOrNull(c, "area")))
+                            .status(status)
+                            .questionNumbers(questionNumbersOf(c))
+                            .requirement(requirement)
+                            .skill(conceptSkill == null || conceptSkill.isBlank() ? null : conceptSkill.trim())
+                            .importance(importance)
+                            .build());
+                }
+            }
+            List<VoiceEvaluationResult.QuestionArea> questionAreas = new ArrayList<>();
+            if (node.path("questionAreas").isArray()) {
+                for (JsonNode q : node.path("questionAreas")) {
+                    if (q.path("questionNumber").canConvertToInt() && q.path("questionNumber").asInt() > 0) {
+                        questionAreas.add(new VoiceEvaluationResult.QuestionArea(
+                                q.path("questionNumber").asInt(), areaOf(textOrNull(q, "area"))));
+                    }
+                }
+            }
+
+            List<String> notCovered = new ArrayList<>();
+            if (node.path("notCovered").isArray()) {
+                node.path("notCovered").forEach(n -> {
+                    if (!n.asText().isBlank()) notCovered.add(n.asText().trim());
+                });
+            }
+            List<String> depthGaps = new ArrayList<>();
+            if (node.path("depthGaps").isArray()) {
+                node.path("depthGaps").forEach(n -> {
+                    if (!n.asText().isBlank()) depthGaps.add(n.asText().trim());
+                });
+            }
+
+            List<VoiceEvaluationResult.SkillScore> skillScores = new ArrayList<>();
+            if (node.path("skillScores").isArray()) {
+                for (JsonNode sNode : node.path("skillScores")) {
+                    String skill = textOrNull(sNode, "skill");
+                    if (skill == null || skill.isBlank()) {
+                        continue;
+                    }
+                    List<Integer> numbers = questionNumbersOf(sNode);
+                    boolean assessed = numbers == null || !numbers.isEmpty();
+                    skillScores.add(VoiceEvaluationResult.SkillScore.builder()
+                            .skill(skill.trim())
+                            .category(textOrNull(sNode, "category"))
+                            .mapped(sNode.path("onResume").isBoolean() ? sNode.path("onResume").asBoolean() : null)
+                            .score(assessed ? Math.max(0, Math.min(10, sNode.path("score").asDouble())) : 0)
+                            .highestLevel(highestLevelOf(sNode))
+                            .questionNumbers(numbers)
+                            .feedback(textOrNull(sNode, "feedback"))
+                            .assessed(assessed)
+                            .build());
+                }
+            }
+
+            List<VoiceEvaluationResult.AnswerNote> answerNotes = new ArrayList<>();
+            if (node.path("answerNotes").isArray()) {
+                for (JsonNode n : node.path("answerNotes")) {
+                    if (!n.path("questionNumber").canConvertToInt() || n.path("questionNumber").asInt() <= 0) {
+                        continue;
+                    }
+                    String gotRight = textOrNull(n, "gotRight");
+                    String missed = textOrNull(n, "missed");
+                    if ((gotRight == null || gotRight.isBlank()) && (missed == null || missed.isBlank())) {
+                        continue;
+                    }
+                    answerNotes.add(new VoiceEvaluationResult.AnswerNote(n.path("questionNumber").asInt(),
+                            gotRight == null ? "" : gotRight.trim(), missed == null ? "" : missed.trim()));
+                }
+            }
+
+            List<VoiceEvaluationResult.ImprovementItem> improvementPlan = new ArrayList<>();
+            if (node.path("improvementPlan").isArray()) {
+                for (JsonNode i : node.path("improvementPlan")) {
+                    String action = textOrNull(i, "action");
+                    if (action == null || action.isBlank()) {
+                        continue;
+                    }
+                    String priority = textOrNull(i, "priority");
+                    priority = priority == null ? "MEDIUM" : priority.trim().toUpperCase();
+                    if (!List.of("HIGH", "MEDIUM", "LOW").contains(priority)) {
+                        priority = "MEDIUM";
+                    }
+                    improvementPlan.add(new VoiceEvaluationResult.ImprovementItem(
+                            textOrNull(i, "skill"), textOrNull(i, "gap"), action.trim(), priority));
+                }
+            }
+
             return VoiceEvaluationResult.builder()
+                    .improvementPlan(improvementPlan)
+                    .answerNotes(answerNotes)
+                    .skillScores(skillScores)
+                    .verdict(textOrNull(node, "verdict"))
+                    .observedSeniority(textOrNull(node, "observedSeniority"))
+                    .notCovered(notCovered)
+                    .depthGaps(depthGaps)
+                    .expectedConcepts(concepts)
+                    .questionAreas(questionAreas)
                     .confidence(confidence)
                     .overallScore(node.path("overallScore").asDouble())
                     .recommendation(textOrNull(node, "recommendation"))

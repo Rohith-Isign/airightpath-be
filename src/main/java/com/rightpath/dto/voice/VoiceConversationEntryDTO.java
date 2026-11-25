@@ -34,7 +34,16 @@ import com.rightpath.entity.VoiceConversationEntry;
  * @param codeLanguage           the language it was written in
  * @param codeOutput             what it printed when last run
  * @param answerScore            the interviewer's 0-10 read on a candidate turn
+ * @param answerCorrect          whether that score met the pass mark when it was given, or null if not rated
+ * @param reviewedScore          a reviewer's score for the answer, when they changed the AI's; the AI's is kept
+ * @param reviewNote             why the reviewer changed it
+ * @param reviewedBy             who changed it
+ * @param reviewedAt             when it was changed
+ * @param codeMismatch           true when the submitted code solved a different problem than the one asked
  * @param topic                  the category an interviewer turn was asking about
+ * @param skill                  the specific skill an interviewer turn tested, such as "Spring Boot"
+ * @param competency             what within the skill an interviewer turn tested
+ * @param level                  BASIC, INTERMEDIATE, ADVANCED or EXPERT for a technical-round question, else null
  * @param turnKind               NEW_QUESTION, FOLLOW_UP or REPHRASE
  * @param injectionSuspected     set on a candidate turn that tried to instruct the model
  * @param timestamp              when the turn was recorded
@@ -53,7 +62,16 @@ public record VoiceConversationEntryDTO(
         String codeLanguage,
         String codeOutput,
         Integer answerScore,
+        Boolean answerCorrect,
+        Integer reviewedScore,
+        String reviewNote,
+        String reviewedBy,
+        LocalDateTime reviewedAt,
+        Boolean codeMismatch,
         String topic,
+        String skill,
+        String competency,
+        String level,
         String turnKind,
         Boolean injectionSuspected,
         LocalDateTime timestamp) {
@@ -80,7 +98,16 @@ public record VoiceConversationEntryDTO(
                 entry.getCodeLanguage(),
                 entry.getCodeOutput(),
                 entry.getAnswerScore(),
+                entry.getAnswerCorrect(),
+                entry.getReviewedScore(),
+                entry.getReviewNote(),
+                entry.getReviewedBy(),
+                entry.getReviewedAt(),
+                entry.getCodeMismatch(),
                 entry.getTopic(),
+                entry.getSkill(),
+                entry.getCompetency(),
+                entry.getLevel(),
                 entry.getTurnKind() != null ? entry.getTurnKind().name() : null,
                 entry.getInjectionSuspected(),
                 entry.getTimestamp());

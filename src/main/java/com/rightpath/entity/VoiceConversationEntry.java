@@ -85,6 +85,35 @@ public class VoiceConversationEntry {
     private Integer answerScore;
 
     /**
+     * Whether {@link #answerScore} met the pass mark in force when it was given (see InterviewLevelProgression).
+     * Stored rather than worked out on reading, so a later change to the pass mark does not rewrite how past
+     * answers were judged. Null where the answer was not rated, and on every INTERVIEWER row.
+     */
+    private Boolean answerCorrect;
+
+    /**
+     * A reviewer's score for this answer, 0-10, when they disagreed with the AI's. The AI's own {@link #answerScore}
+     * is never overwritten, so the original assessment stays on record beside the change. The grader uses this score
+     * on the next re-evaluation. Null when no reviewer has changed it.
+     */
+    private Integer reviewedScore;
+
+    /** Why the reviewer changed the score. Required with a score. */
+    @Column(length = 1000)
+    private String reviewNote;
+
+    /** Who changed it, and when. */
+    private String reviewedBy;
+    private java.time.LocalDateTime reviewedAt;
+
+    /**
+     * Set on a CANDIDATE turn whose submitted code solved a different problem than the one asked (a prime check
+     * sent for a palindrome question). Such an answer is scored 0 and earns no credit; the flag says why, to the
+     * candidate at the time, to the grader and to the reviewer. Null otherwise.
+     */
+    private Boolean codeMismatch;
+
+    /**
      * The evaluation category an INTERVIEWER turn was asking about.
      *
      * <p>What makes coverage checkable: without it "have we asked about
@@ -93,6 +122,30 @@ public class VoiceConversationEntry {
      */
     @Column(length = 80)
     private String topic;
+
+    /**
+     * The specific skill an INTERVIEWER question tests ("Java", "Spring Boot", "SQL"), from the job's required skills or
+     * a job-relevant skill on the resume. The topic is the scoring category it counts towards; the skill is what is
+     * actually being tested, and the level progression and the skill-wise report run on it. Null on older turns, on
+     * the introduction and closing, and on every CANDIDATE row.
+     */
+    @Column(length = 80)
+    private String skill;
+
+    /**
+     * What within the skill an INTERVIEWER question tests ("list comprehensions", "overfitting"), as the interviewer
+     * named it. Lets the report show which competencies were covered and stops the same one being tested twice.
+     */
+    @Column(length = 120)
+    private String competency;
+
+    /**
+     * How deep this INTERVIEWER question goes: BASIC, INTERMEDIATE, ADVANCED or EXPERT. Set on the technical
+     * round only, and null on a behavioural question, on a turn the model did not label, and on every CANDIDATE
+     * row and every turn recorded before levels were asked for. The column is added by the schema update, nullable.
+     */
+    @Column(length = 16)
+    private String level;
 
     /** Whether this INTERVIEWER turn opened new ground, pressed, or re-asked. */
     @Enumerated(EnumType.STRING)
