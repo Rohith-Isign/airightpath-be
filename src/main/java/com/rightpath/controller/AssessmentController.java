@@ -68,6 +68,28 @@ public class AssessmentController {
 	@Autowired
 	private ResultRepository resultRepository;
 
+	@Autowired
+	private com.rightpath.util.BusinessSchedule businessSchedule;
+
+	/** The application's own JSON mapper, so the list's dates and fields read exactly as they always have. */
+	@Autowired
+	private ObjectMapper objectMapper;
+
+	/**
+	 * What a candidate's assessment list never carries: the paper and its answers, and where the paper is stored.
+	 * The list returned the whole entity, so every question (with its correct answer) was readable in the browser's
+	 * network panel before the exam had even started. The paper is fetched when the exam is opened, and only then.
+	 */
+	private static final java.util.Set<String> HIDDEN_FROM_LIST = java.util.Set.of(
+			"questionPaper", "answerKey", "fileName", "containerName", "uploadedBy");
+
+	/** Staff: anyone who can assign assessments or read every application. Candidates have neither. */
+	private static boolean isStaff(org.springframework.security.core.Authentication authentication) {
+		return authentication != null && authentication.getAuthorities().stream()
+				.map(org.springframework.security.core.GrantedAuthority::getAuthority)
+				.anyMatch(a -> a.equals("ASSESSMENT_ASSIGN") || a.equals("JOB_APPLICATION_READ_ALL"));
+	}
+
 	/**
 	 * Constructor-based dependency injection for AssessmentService.
 	 *
@@ -242,10 +264,26 @@ public class AssessmentController {
 	 * @return ResponseEntity with list of assessments or error message
 	 */
 	@GetMapping("getCandidateAssessments/{candidateEmail}")
-	public ResponseEntity<?> getCandidateAssessments(@PathVariable String candidateEmail) {
+	public ResponseEntity<?> getCandidateAssessments(@PathVariable String candidateEmail,
+			org.springframework.security.core.Authentication authentication) {
+		// A candidate sees their own list only; anyone else's email in the path is refused.
+		if (!isStaff(authentication)
+				&& (authentication == null || !candidateEmail.equalsIgnoreCase(authentication.getName()))) {
+			log.warn("Assessment list for {} refused to {}", candidateEmail,
+					authentication == null ? "an anonymous caller" : authentication.getName());
+			return ResponseEntity.status(HttpStatus.FORBIDDEN).body("You can only view your own assessments.");
+		}
 		try {
 			List<Assessment> assessments = assessmentService.getCandidateAssessments(candidateEmail);
-			return ResponseEntity.ok(assessments);
+			// Details only: what the exam is and when. Never the paper, its answers or where it is stored.
+			List<Map<String, Object>> list = assessments.stream().map(assessment -> {
+				Map<String, Object> details = objectMapper.convertValue(assessment,
+						new TypeReference<Map<String, Object>>() {
+						});
+				details.keySet().removeAll(HIDDEN_FROM_LIST);
+				return details;
+			}).toList();
+			return ResponseEntity.ok(list);
 		} catch (IllegalStateException e) {
 			log.warn("Could not load assessments for {}: {}", candidateEmail, e.getMessage());
 			return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(e.getMessage());
@@ -259,8 +297,27 @@ public class AssessmentController {
 	 * @return ResponseEntity with assessment details
 	 */
 	@GetMapping("fetchAssessment/{id}")
-	public ResponseEntity<Map<String, Object>> fetchAssessmentDetails(@PathVariable Long id) {
+	public ResponseEntity<Map<String, Object>> fetchAssessmentDetails(@PathVariable Long id,
+			org.springframework.security.core.Authentication authentication) {
 		Assessment assessment = assessmentService.fetchAssessmentDetails(id);
+		// The paper goes to staff, or to the candidate it was assigned to once their exam window has opened: any
+		// signed-in user could read any paper by its id, at any time, before the exam began.
+		if (!isStaff(authentication)) {
+			boolean own = authentication != null && assessment.getCandidateEmail() != null
+					&& assessment.getCandidateEmail().equalsIgnoreCase(authentication.getName());
+			if (!own) {
+				log.warn("Paper {} refused to {}: not their assessment", id,
+						authentication == null ? "an anonymous caller" : authentication.getName());
+				return ResponseEntity.status(HttpStatus.FORBIDDEN)
+						.body(Map.of("message", "This assessment is not assigned to you."));
+			}
+			// The exam window is wall-clock time in the business zone, as it was set; compared the same way.
+			if (assessment.getStartTime() != null && businessSchedule.now().isBefore(assessment.getStartTime())) {
+				log.warn("Paper {} refused to {}: the exam has not started", id, authentication.getName());
+				return ResponseEntity.status(HttpStatus.FORBIDDEN)
+						.body(Map.of("message", "This assessment has not started yet."));
+			}
+		}
 		Map<String, Object> response = new HashMap<>();
 		response.put("assessmentType", assessment.getAssessmentType());
 		response.put("questions", assessment.getQuestionPaper()); // Assuming this column contains JSON string
