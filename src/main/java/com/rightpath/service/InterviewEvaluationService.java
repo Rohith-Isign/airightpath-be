@@ -263,10 +263,16 @@ public class InterviewEvaluationService {
             transcript.append("\n");
         }
 
+        // The role's requirements are the same list every time this job is graded: written once, then reused, so a
+        // re-evaluation marks the same list and two candidates for the job are measured against the same one.
+        String jobHash = jobHash(schedule.getJobPrefix());
+        List<VoiceEvaluationResult.Concept> fixedRequirements = loadRequirements(schedule.getJobPrefix(),
+                schedule.getEffectiveRound(), jobHash);
+
         // Build evaluation prompt for this job including categories & transcript
         String prompt = buildEvaluationPrompt(schedule.getJobPrefix(), schedule.getEffectiveRound(),
                 transcript.toString(), schedule.getCompletionReason(), schedule.getTotalQuestionsAsked(),
-                interviewFacts(entries));
+                interviewFacts(entries) + fixedRequirementsSection(fixedRequirements));
 
         List<Map<String, String>> messages = List.of(
                 Map.of("role", "system", "content", "You are an expert interview evaluator. Always respond with valid JSON only."),
@@ -275,7 +281,10 @@ public class InterviewEvaluationService {
 
         // A long JSON reply: its own output limit, a low temperature for consistent grading, and JSON mode so the
         // reply is one complete object. Under the shared 2000-token limit it was cut off and could not be read.
-        String evaluationJson = openAiStreamingService.chatCompletion(messages, evaluationMaxTokens, 0.2, true);
+        // Temperature 0 and a fixed seed: the same interview graded again gets the same reply, as far as the model
+        // allows. At 0.2 every re-evaluation drew a slightly different reading and a different score.
+        String evaluationJson = openAiStreamingService.chatCompletion(messages, evaluationMaxTokens, 0.0, true,
+                GRADING_SEED);
         if (evaluationJson == null || evaluationJson.isBlank()) {
             throw new IllegalStateException("The AI evaluation could not be completed"
                     + reasonSuffix() + ". Please try Re-evaluate again in a minute.");
@@ -307,6 +316,20 @@ public class InterviewEvaluationService {
             if (levelProgression != null) {
                 applyRecordedLevels(result, levelProgression.demonstratedLevels(entries, required));
             }
+        }
+
+        // The same requirements every time (the job's fixed list, or this list made the job's from now on), each
+        // marked from the ratings its answers were given rather than a fresh opinion, so the score does not move
+        // between evaluations of the same interview.
+        if (fixedRequirements.isEmpty()) {
+            saveRequirements(schedule.getJobPrefix(), schedule.getEffectiveRound(), jobHash, result.getExpectedConcepts());
+        } else {
+            alignToRequirements(result, fixedRequirements);
+        }
+        markFromRatings(result, entries);
+        if (levelProgression != null && schedule.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
+            applyRatedSkillScores(result, levelProgression.averageRatings(entries,
+                    requiredSkills(schedule.getJobPrefix())));
         }
 
         // Measured against everything the interview should have covered, not only what it reached.
@@ -812,6 +835,190 @@ public class InterviewEvaluationService {
     }
 
     /** What the candidate earned out of 100: the scope score where there is one, otherwise the overall score. */
+    /** The seed every grading call uses, so the same request gets the same reply. */
+    static final int GRADING_SEED = 20261125;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.rightpath.repository.RoleRequirementSetRepository roleRequirementRepo;
+
+    /** A hash of the job text the requirements are drawn from: a changed job gets a new list. */
+    private String jobHash(String jobPrefix) {
+        String text;
+        try {
+            text = placeholderResolver.resolveJobPlaceholders(
+                    "{{jobTitle}}|{{role}}|{{skills}}|{{experience}}|{{education}}|{{jobDescription}}", jobPrefix);
+        } catch (Exception e) {
+            text = jobPrefix;
+        }
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return Integer.toHexString(text.hashCode());
+        }
+    }
+
+    /** The job's fixed requirements for this round, or empty when none has been made yet. */
+    private List<VoiceEvaluationResult.Concept> loadRequirements(String jobPrefix,
+            com.rightpath.enums.InterviewRound round, String jobHash) {
+        if (roleRequirementRepo == null) {
+            return List.of();
+        }
+        try {
+            return roleRequirementRepo.findFirstByJobPrefixAndRoundAndJobHashOrderByIdAsc(jobPrefix, round, jobHash)
+                    .map(set -> {
+                        try {
+                            return List.of(objectMapper.readValue(set.getRequirementsJson(),
+                                    VoiceEvaluationResult.Concept[].class));
+                        } catch (Exception e) {
+                            log.warn("Requirements for job {} could not be read; making them again", jobPrefix, e);
+                            return List.<VoiceEvaluationResult.Concept>of();
+                        }
+                    })
+                    .orElse(List.of());
+        } catch (Exception e) {
+            log.warn("Could not load the requirements for job {}", jobPrefix, e);
+            return List.of();
+        }
+    }
+
+    /** Keeps this evaluation's requirements as the job's list, when it has enough of them to be one. */
+    private void saveRequirements(String jobPrefix, com.rightpath.enums.InterviewRound round, String jobHash,
+            List<VoiceEvaluationResult.Concept> concepts) {
+        if (roleRequirementRepo == null || concepts == null || concepts.size() < 3) {
+            return;
+        }
+        try {
+            List<VoiceEvaluationResult.Concept> list = concepts.stream()
+                    .map(c -> VoiceEvaluationResult.Concept.builder().concept(c.getConcept()).area(c.getArea())
+                            .requirement(c.getRequirement()).skill(c.getSkill()).importance(c.getImportance())
+                            .build())
+                    .toList();
+            roleRequirementRepo.save(com.rightpath.entity.RoleRequirementSet.builder().jobPrefix(jobPrefix)
+                    .round(round).jobHash(jobHash).requirementsJson(objectMapper.writeValueAsString(list)).build());
+            log.info("Job {} ({}): {} role requirements fixed for every evaluation from now on", jobPrefix, round,
+                    list.size());
+        } catch (Exception e) {
+            // Another evaluation of the same job saved its list first: that one stands.
+            log.debug("Requirements for job {} not saved", jobPrefix, e);
+        }
+    }
+
+    /** The fixed list, for the grader to mark as it stands. Empty when there is none yet. */
+    static String fixedRequirementsSection(List<VoiceEvaluationResult.Concept> fixed) {
+        if (fixed == null || fixed.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder("\n\nROLE REQUIREMENTS FOR THIS JOB (fixed). Every interview for this job "
+                + "is marked against this same list. Return \"expectedConcepts\" with EXACTLY these requirements, in "
+                + "this order, with the same wording, requirement, skill and importance; do not add, drop, merge or "
+                + "reword any. Fill in only \"status\" and \"questionNumbers\" for each:\n");
+        for (int i = 0; i < fixed.size(); i++) {
+            VoiceEvaluationResult.Concept c = fixed.get(i);
+            sb.append(i + 1).append(". ").append(c.getConcept()).append(" [").append(c.getRequirement())
+                    .append(c.getSkill() == null ? "" : ", " + c.getSkill()).append(", ")
+                    .append(c.getImportance() == null ? "SUPPORTING" : c.getImportance()).append("]\n");
+        }
+        return sb.toString();
+    }
+
+    private static String squashed(String text) {
+        return text == null ? "" : text.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]", "");
+    }
+
+    /**
+     * Puts the grader's marks onto the job's fixed list, so the list itself never changes between evaluations: by
+     * position when the grader returned the same number of requirements (it is asked to keep the order), else by
+     * wording. A fixed requirement the grader left out is not reached.
+     */
+    static void alignToRequirements(VoiceEvaluationResult result, List<VoiceEvaluationResult.Concept> fixed) {
+        List<VoiceEvaluationResult.Concept> marked = result.getExpectedConcepts() == null ? List.of()
+                : result.getExpectedConcepts();
+        Map<String, VoiceEvaluationResult.Concept> byWording = new java.util.HashMap<>();
+        marked.forEach(c -> byWording.putIfAbsent(squashed(c.getConcept()), c));
+        List<VoiceEvaluationResult.Concept> aligned = new ArrayList<>();
+        for (int i = 0; i < fixed.size(); i++) {
+            VoiceEvaluationResult.Concept f = fixed.get(i);
+            VoiceEvaluationResult.Concept m = byWording.get(squashed(f.getConcept()));
+            if (m == null && marked.size() == fixed.size()) {
+                m = marked.get(i);
+            }
+            aligned.add(VoiceEvaluationResult.Concept.builder().concept(f.getConcept()).area(f.getArea())
+                    .requirement(f.getRequirement()).skill(f.getSkill()).importance(f.getImportance())
+                    .status(m == null ? "NOT_ASKED" : m.getStatus())
+                    .questionNumbers(m == null ? List.of() : m.getQuestionNumbers())
+                    .build());
+        }
+        result.setExpectedConcepts(aligned);
+    }
+
+    /**
+     * Each requirement's status from the ratings of the answers that showed it, not from a fresh opinion: those
+     * ratings were given as the interview ran (or set by a reviewer) and do not change, so neither does the mark.
+     * An average of 7/10 or more is shown, 4 to 7 partly shown, below 4 not shown; a requirement no question showed
+     * is not reached. A requirement shown only by unrated turns (the introduction) keeps the grader's mark.
+     */
+    static void markFromRatings(VoiceEvaluationResult result, List<VoiceConversationEntry> entries) {
+        if (result.getExpectedConcepts() == null || result.getExpectedConcepts().isEmpty()) {
+            return;
+        }
+        Map<Integer, Double> ratingByQuestion = ratingsByQuestion(entries);
+        for (VoiceEvaluationResult.Concept concept : result.getExpectedConcepts()) {
+            List<Integer> numbers = concept.getQuestionNumbers();
+            if (numbers == null || numbers.isEmpty()) {
+                concept.setStatus("NOT_ASKED");
+                continue;
+            }
+            java.util.OptionalDouble average = numbers.stream().map(ratingByQuestion::get)
+                    .filter(java.util.Objects::nonNull).mapToDouble(Double::doubleValue).average();
+            if (average.isEmpty()) {
+                continue;
+            }
+            double avg = average.getAsDouble();
+            concept.setStatus(avg >= 7 ? "CORRECT" : avg >= 4 ? "PARTIAL" : "INCORRECT");
+        }
+    }
+
+    /**
+     * The rating of the answer to each numbered question: the reviewer's if one was set, else the rating at the
+     * time; a skipped question is 0. Numbered as the transcript numbers them, interviewer turns in order.
+     */
+    static Map<Integer, Double> ratingsByQuestion(List<VoiceConversationEntry> entries) {
+        Map<Integer, Double> ratings = new java.util.HashMap<>();
+        int number = 0;
+        boolean answered = true;
+        for (VoiceConversationEntry entry : entries) {
+            if (entry.getRole() == ConversationRole.INTERVIEWER) {
+                number++;
+                answered = false;
+            } else if (entry.getRole() == ConversationRole.CANDIDATE && !answered && number > 0) {
+                answered = true;
+                boolean skipped = entry.getContent() != null && SKIPPED_CONTENT.equals(entry.getContent().trim());
+                Integer score = entry.getReviewedScore() != null ? entry.getReviewedScore() : entry.getAnswerScore();
+                if (skipped) {
+                    ratings.put(number, 0.0);
+                } else if (score != null) {
+                    ratings.put(number, score.doubleValue());
+                }
+            }
+        }
+        return ratings;
+    }
+
+    /** Each skill's score as the average rating of its answers, where it has any, in place of the grader's pick. */
+    static void applyRatedSkillScores(VoiceEvaluationResult result, Map<String, Double> averages) {
+        if (result.getSkillScores() == null || averages == null) {
+            return;
+        }
+        for (VoiceEvaluationResult.SkillScore score : result.getSkillScores()) {
+            Double average = averages.get(score.getSkill());
+            if (average != null && score.isAssessed()) {
+                score.setScore(Math.round(average * 10.0) / 10.0);
+            }
+        }
+    }
+
     private static double weightOf(VoiceEvaluationResult.Concept concept) {
         return "CORE".equals(concept.getImportance()) ? 2 : 1;
     }

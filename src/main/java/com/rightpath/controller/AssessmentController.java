@@ -296,6 +296,44 @@ public class AssessmentController {
 	 * @param id Assessment ID
 	 * @return ResponseEntity with assessment details
 	 */
+	@Autowired
+	private com.rightpath.service.ExamSessionLock examSessionLock;
+
+	/**
+	 * Takes or keeps this browser tab's hold on an assessment while its exam page is open (called on opening, then
+	 * every 15 seconds). An aptitude or coding exam could be opened in two browsers at once; a second tab is now
+	 * refused with 409 until the first is closed or stops renewing its hold.
+	 */
+	@PostMapping("/assessments/{id}/session/heartbeat")
+	@PreAuthorize("hasAuthority('ASSESSMENT_SUBMIT')")
+	public ResponseEntity<?> assessmentHeartbeat(@PathVariable Long id, @RequestParam("sessionId") String sessionId,
+			org.springframework.security.core.Authentication authentication) {
+		Assessment assessment = assessmentRepository.findById(id)
+				.orElseThrow(() -> new EntityNotFoundException("Assessment not found"));
+		if (authentication == null || assessment.getCandidateEmail() == null
+				|| !assessment.getCandidateEmail().equalsIgnoreCase(authentication.getName())) {
+			return ResponseEntity.status(HttpStatus.FORBIDDEN)
+					.body(Map.of("message", "This assessment is not assigned to you."));
+		}
+		if (!examSessionLock.claim(com.rightpath.service.ExamSessionLock.ASSESSMENT, id, sessionId)) {
+			return ResponseEntity.status(HttpStatus.CONFLICT)
+					.body(Map.of("message", com.rightpath.service.ExamSessionLock.OPEN_ELSEWHERE));
+		}
+		return ResponseEntity.ok().build();
+	}
+
+	/** Gives this tab's hold on an assessment back, when its exam page is closed, left or submitted. */
+	@PostMapping("/assessments/{id}/session/release")
+	@PreAuthorize("hasAuthority('ASSESSMENT_SUBMIT')")
+	public ResponseEntity<?> assessmentRelease(@PathVariable Long id, @RequestParam("sessionId") String sessionId,
+			org.springframework.security.core.Authentication authentication) {
+		assessmentRepository.findById(id)
+				.filter(a -> authentication != null && a.getCandidateEmail() != null
+						&& a.getCandidateEmail().equalsIgnoreCase(authentication.getName()))
+				.ifPresent(a -> examSessionLock.release(com.rightpath.service.ExamSessionLock.ASSESSMENT, id, sessionId));
+		return ResponseEntity.ok().build();
+	}
+
 	@GetMapping("fetchAssessment/{id}")
 	public ResponseEntity<Map<String, Object>> fetchAssessmentDetails(@PathVariable Long id,
 			org.springframework.security.core.Authentication authentication) {

@@ -405,9 +405,46 @@ public class InterviewController {
 	            req.getEmail(),
 	            req.getFromDate(),
 	            req.getToDate(),
-	            req.getScheduleId());
+	            req.getScheduleId(),
+	            req.getSessionId());
 	    return ResponseEntity.ok(response);
 	}
+
+	/**
+	 * Keeps this tab's hold on the interview while it is open (every 15 seconds), so no other browser or tab can open
+	 * it at the same time. 409 when another tab holds it: this one has been replaced and must stop.
+	 */
+	@PostMapping("/voice/{id}/heartbeat")
+	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
+	public ResponseEntity<?> voiceHeartbeat(@PathVariable Long id, @RequestParam("sessionId") String sessionId,
+			org.springframework.security.core.Authentication authentication) {
+		var owned = scheduleRepo.findByIdAndEmail(id, authentication.getName());
+		if (owned.isEmpty()) {
+			throw new org.springframework.security.access.AccessDeniedException(
+					"Interview " + id + " is not assigned to the authenticated candidate");
+		}
+		String active = owned.get().getActiveSessionId();
+		boolean ours = active == null || active.equals(sessionId);
+		if (!ours || !examSessionLock.claim(com.rightpath.service.ExamSessionLock.INTERVIEW, id, sessionId)) {
+			return ResponseEntity.status(org.springframework.http.HttpStatus.CONFLICT)
+					.body(Map.of("message", com.rightpath.service.ExamSessionLock.OPEN_ELSEWHERE));
+		}
+		return ResponseEntity.ok().build();
+	}
+
+	/** Gives this tab's hold on the interview back, when the page is closed or left. */
+	@PostMapping("/voice/{id}/release")
+	@PreAuthorize("hasAuthority('INTERVIEW_ANSWER')")
+	public ResponseEntity<?> voiceRelease(@PathVariable Long id, @RequestParam("sessionId") String sessionId,
+			org.springframework.security.core.Authentication authentication) {
+		if (scheduleRepo.findByIdAndEmail(id, authentication.getName()).isPresent()) {
+			examSessionLock.release(com.rightpath.service.ExamSessionLock.INTERVIEW, id, sessionId);
+		}
+		return ResponseEntity.ok().build();
+	}
+
+	@Autowired
+	private com.rightpath.service.ExamSessionLock examSessionLock;
 	
 	
 	@PostMapping("/voice/{id}/end")

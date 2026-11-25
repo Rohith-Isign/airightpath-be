@@ -35,4 +35,13 @@ public interface VoiceInterviewService {
 	 */
 	VoiceStartResponse startVoiceInterview(String jobPrefix, String email, Long fromDate, Long toDate,
 			Long scheduleId);
+
+	/**
+	 * As above, from a browser tab with its own session id. The interview runs in one tab at a time: a start from a
+	 * different tab while this one holds it is refused (see {@link com.rightpath.service.ExamSessionLock}).
+	 */
+	default VoiceStartResponse startVoiceInterview(String jobPrefix, String email, Long fromDate, Long toDate,
+			Long scheduleId, String clientSessionId) {
+		return startVoiceInterview(jobPrefix, email, fromDate, toDate, scheduleId);
+	}
 }

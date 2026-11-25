@@ -257,6 +257,15 @@ public class OpenAiStreamingService {
      */
     public String chatCompletion(List<Map<String, String>> messages, int maxTokens, double temperature,
             boolean jsonMode) {
+        return chatCompletion(messages, maxTokens, temperature, jsonMode, null);
+    }
+
+    /**
+     * As above, with a fixed seed: the same request then gets the same reply as far as OpenAI can make it. Used for
+     * grading, where the same interview re-evaluated must come back with the same result.
+     */
+    public String chatCompletion(List<Map<String, String>> messages, int maxTokens, double temperature,
+            boolean jsonMode, Integer seed) {
         lastChatFailure = null;
         // Said plainly, once per call. An empty key sends a request OpenAI
         // refuses, the refusal is swallowed below, and the candidate is told only
@@ -276,6 +285,9 @@ public class OpenAiStreamingService {
             requestBody.put("max_tokens", maxTokens);
             if (jsonMode) {
                 requestBody.put("response_format", Map.of("type", "json_object"));
+            }
+            if (seed != null) {
+                requestBody.put("seed", seed);
             }
 
             String json = objectMapper.writeValueAsString(requestBody);
