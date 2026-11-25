@@ -122,13 +122,22 @@ public class AudioTranscriptionService {
      * language is heard. Ignored when the answer has already been sent (the generation has moved on).
      */
     private void countLanguage(Long scheduleId, int chunkIndex, String generation,
-            java.util.Optional<String[]> language) {
+            java.util.Optional<String[]> language, String englishText) {
         if (language.isEmpty()
                 || !generation.equals(sharedState.get(languageGenerationKey(scheduleId)).orElse("0"))) {
             return;
         }
         sharedState.increment(languageTotalKey(scheduleId), LAST_PUBLISHED_TTL);
         if (!looksForeign(language.get()[0], language.get()[1])) {
+            return;
+        }
+        // The speech model takes Indian-accented English for an Indian language and writes the English words out in
+        // that language's script ("spoke" for "scope", in Telugu letters), so a candidate answering in English was
+        // told they had not. Before it counts, the model is asked whether that text is really the language or English
+        // spelled in its script; only a confirmed one counts.
+        if (!openAiStreamingService.confirmNotEnglish(language.get()[0], language.get()[1], englishText)) {
+            log.info("Chunk {} for schedule {}: detected as {}, but it was English spoken with an accent; not counted",
+                    chunkIndex, scheduleId, language.get()[0]);
             return;
         }
         sharedState.increment(languageForeignKey(scheduleId), LAST_PUBLISHED_TTL);
@@ -162,15 +171,17 @@ public class AudioTranscriptionService {
                 // script, and a candidate in a silent room was told they had not answered in English.
                 java.util.concurrent.CompletableFuture
                         .supplyAsync(() -> openAiStreamingService.detectLanguage(audioData, filename), LANGUAGE_CHECKS)
-                        .thenCombine(heard, (language, words) -> {
+                        // On the language-check threads, never the transcription one: the count below may ask the
+                        // model whether the speech was really another language, and that must not hold transcripts up.
+                        .thenCombineAsync(heard, (language, words) -> {
                             if (hasSpeech(words)) {
-                                countLanguage(scheduleId, chunkIndex, generation, language);
+                                countLanguage(scheduleId, chunkIndex, generation, language, words);
                             } else if (language.isPresent()) {
                                 log.info("Ignored the language check for chunk {} of schedule {}: no words in it "
                                         + "(it guessed {})", chunkIndex, scheduleId, language.get()[0]);
                             }
                             return null;
-                        })
+                        }, LANGUAGE_CHECKS)
                         .exceptionally(e -> {
                             log.debug("No language check for chunk {} of schedule {}", chunkIndex, scheduleId, e);
                             return null;

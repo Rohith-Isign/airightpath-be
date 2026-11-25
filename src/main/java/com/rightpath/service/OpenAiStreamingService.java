@@ -389,6 +389,40 @@ public class OpenAiStreamingService {
     }
 
     /**
+     * Whether speech the language check took for another language really was that language, or English spoken with
+     * an accent that the speech model wrote out in that language's script.
+     *
+     * <p>Indian-accented English is regularly identified as Telugu or Hindi, and the unrestricted transcript then
+     * spells the English words in that script. Read as text, the two are easy to tell apart: real Telugu has Telugu
+     * grammar and words; transliterated English is English words, in English order, in Telugu letters. The English
+     * transcript of the same audio is given too. True when it was the other language. When the question cannot be
+     * asked, the detection stands, as it did before.</p>
+     */
+    public boolean confirmNotEnglish(String language, String nativeText, String englishText) {
+        String prompt = "A speech recognizer listened to part of a spoken job-interview answer.\n"
+                + "Left to choose the language, it decided it was " + language + " and wrote:\n<<<" + nativeText + ">>>\n"
+                + "Told the speech was English, it wrote:\n<<<" + (englishText == null ? "" : englishText) + ">>>\n\n"
+                + "Indian-accented English is often mistaken for an Indian language and written phonetically in that "
+                + "language's script: English words, in English word order, spelled in " + language + " letters. "
+                + "Was the speaker really speaking " + language + " (its own grammar and words, perhaps with a few "
+                + "English technical terms), or speaking English (perhaps accented, perhaps with a word or two of "
+                + language + ")? Reply with JSON only: {\"spoken\": \"english\"} or {\"spoken\": \"other\"}.";
+        try {
+            String reply = chatCompletion(List.of(
+                    Map.of("role", "system", "content", "You identify the language a person was speaking. JSON only."),
+                    Map.of("role", "user", "content", prompt)), 30, 0.0, true, 1);
+            if (reply == null || reply.isBlank()) {
+                return true;
+            }
+            String spoken = objectMapper.readTree(reply).path("spoken").asText("");
+            return !"english".equalsIgnoreCase(spoken.trim());
+        } catch (Exception e) {
+            log.debug("Could not confirm the language of a chunk; keeping the detection", e);
+            return true;
+        }
+    }
+
+    /**
      * As above, with a hint for the speech model: words it should expect, such as the candidate's own name, which
      * it otherwise tends to hear as a commoner one ("Sahil" for "Sai").
      */
