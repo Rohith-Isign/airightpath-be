@@ -181,11 +181,52 @@ public class InterviewContextService {
         return (double) both.size() / either.size();
     }
 
-    /** An earlier question this one repeats (by its wording), or null. Follow-ups and rephrases are not checked. */
+    /**
+     * Whether two questions are the same question: most of their meaning words shared (0.6 of all of them), or nearly
+     * all the words of the shorter one found in the longer one, which catches the same question with a few words added
+     * around it ("In your project, how would you ...").
+     */
+    public static boolean sameQuestion(String a, String b) {
+        if (similarity(a, b) >= 0.6) {
+            return true;
+        }
+        java.util.Set<String> x = keyWords(questionPart(a));
+        java.util.Set<String> y = keyWords(questionPart(b));
+        int smaller = Math.min(x.size(), y.size());
+        if (smaller < 4) {
+            return false;
+        }
+        java.util.Set<String> both = new java.util.HashSet<>(x);
+        both.retainAll(y);
+        return (double) both.size() / smaller >= 0.8;
+    }
+
+    /** An earlier question this one repeats (by its wording), or null. */
     public static String repeatedQuestion(List<VoiceConversationEntry> history, String question) {
-        for (VoiceConversationEntry entry : history) {
+        return repeatedQuestion(history, question, false);
+    }
+
+    /**
+     * As above. A follow-up or rephrase is meant to stay close to the question it presses, so for one the current
+     * question (from the last new question on) is left out; any question before it still counts. A follow-up was the
+     * way a question already done came back.
+     */
+    public static String repeatedQuestion(List<VoiceConversationEntry> history, String question, boolean followUp) {
+        int end = history.size();
+        if (followUp) {
+            for (int i = history.size() - 1; i >= 0; i--) {
+                VoiceConversationEntry entry = history.get(i);
+                if (entry.getRole() == com.rightpath.enums.ConversationRole.INTERVIEWER
+                        && (entry.getTurnKind() == null
+                                || entry.getTurnKind() == com.rightpath.enums.TurnKind.NEW_QUESTION)) {
+                    end = i;
+                    break;
+                }
+            }
+        }
+        for (VoiceConversationEntry entry : history.subList(0, end)) {
             if (entry.getRole() == com.rightpath.enums.ConversationRole.INTERVIEWER
-                    && similarity(entry.getContent(), question) >= 0.6) {
+                    && sameQuestion(entry.getContent(), question)) {
                 return questionPart(entry.getContent());
             }
         }

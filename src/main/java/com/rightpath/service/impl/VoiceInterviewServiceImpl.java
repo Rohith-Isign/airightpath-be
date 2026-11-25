@@ -782,6 +782,16 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 parsed = askForDifferentProblem(current, parsed, turnPrompt);
             }
 
+            // A new coding problem marked as a follow-up is a new question: the page clears the notepad for it, and the
+            // plan and repeat checks below treat it as one.
+            if (!parsed.closing() && newProblemAsFollowUp(scheduleId, parsed)) {
+                log.info("Interview {}: a new coding problem was marked as a follow-up; treated as a new question",
+                        scheduleId);
+                parsed = new ParsedInterviewReply(parsed.spokenText(), parsed.answerScore(), TurnKind.NEW_QUESTION,
+                        parsed.topic(), false, parsed.level(), parsed.codeMismatch(), parsed.skill(),
+                        parsed.notEnglish(), parsed.competency());
+            }
+
             // A new question tests something not yet tested for its skill. Asking about the same competency again,
             // reworded, was counted as new coverage when it showed nothing new.
             if (!parsed.closing() && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)
@@ -791,14 +801,12 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
             // The same question again, by its wording, under whatever competency name. The interviewer sees only the
             // last few exchanges word for word, and asked questions again that had dropped out of its view.
-            if (introductionReask == null && !inviteQuestion && !parsed.closing()
-                    && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)) {
-                String earlier = InterviewContextService.repeatedQuestion(
-                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId), parsed.spokenText());
-                if (earlier != null) {
-                    parsed = askForUnaskedQuestion(current, parsed, turnPrompt, earlier);
-                }
+            // Follow-ups are checked too, against every question before the one they press: a question already done
+            // came back tagged as a follow-up.
+            if (introductionReask == null && !inviteQuestion && !parsed.closing()) {
+                parsed = withoutRepeat(current, parsed, turnPrompt);
             }
+            final String checkedForRepeat = parsed.spokenText();
 
             // The resume questions come first and check the resume; they do not count towards a skill's levels, so
             // whatever skill or level the model put on one is taken off.
@@ -885,6 +893,13 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         finished = false;
                     }
                 }
+            }
+
+            // The plan, coverage and completion checks above may have had the question written again; the new one is
+            // checked for repeats as well, since a question already done came back that way.
+            if (!finished && !parsed.closing() && introductionReask == null && !inviteQuestion
+                    && !moreQuestionsWelcome && !closingAsked && !parsed.spokenText().equals(checkedForRepeat)) {
+                parsed = withoutRepeat(current, parsed, turnPrompt);
             }
 
             // The interview is about to end, and the candidate's last words from the interviewer must be a goodbye. A
@@ -1782,6 +1797,30 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 .anyMatch(e -> similarity(asked, problemWords(e.getContent())) >= 0.8);
     }
 
+    /**
+     * Whether a coding reply marked as a follow-up is really a new problem: the question it follows was not a coding
+     * task, or it states a problem of its own (with examples) that is not the one in hand. The notepad brings the
+     * candidate's last code back for a follow-up, so that they can correct it; on a new problem marked as a follow-up
+     * the code written for the previous problem appeared under it.
+     */
+    boolean newProblemAsFollowUp(Long scheduleId, ParsedInterviewReply reply) {
+        if (!isCodingQuestion(reply) || !isFollowUp(reply)) {
+            return false;
+        }
+        VoiceConversationEntry inHand = null;
+        for (VoiceConversationEntry entry : entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId)) {
+            if (entry.getRole() == ConversationRole.INTERVIEWER
+                    && (entry.getTurnKind() == null || entry.getTurnKind() == TurnKind.NEW_QUESTION)) {
+                inHand = entry;
+            }
+        }
+        if (inHand == null || inHand.getContent() == null || !CODING_OPENING.matcher(inHand.getContent()).find()) {
+            return true;
+        }
+        return hasExamples(reply.spokenText())
+                && similarity(problemWords(reply.spokenText()), problemWords(inHand.getContent())) < 0.5;
+    }
+
     /** The words of a coding problem's statement: no tag, task type or examples, so wording around it is ignored. */
     static java.util.Set<String> problemWords(String text) {
         if (text == null) {
@@ -1860,6 +1899,19 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 .anyMatch(c -> c.toLowerCase().replaceAll("[^a-z0-9+#]", "").equals(wanted));
     }
 
+    private static boolean isFollowUp(ParsedInterviewReply reply) {
+        return reply.turnKind() != null && reply.turnKind() != TurnKind.NEW_QUESTION;
+    }
+
+    /** The reply, or a replacement asked for once when it repeats a question already asked in this interview. */
+    private ParsedInterviewReply withoutRepeat(CandidateInterviewSchedule schedule, ParsedInterviewReply reply,
+            String turnPrompt) {
+        String earlier = InterviewContextService.repeatedQuestion(
+                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()), reply.spokenText(),
+                isFollowUp(reply));
+        return earlier == null ? reply : askForUnaskedQuestion(schedule, reply, turnPrompt, earlier);
+    }
+
     /** Asks once for a question not asked before; the original stands if the second try repeats too. */
     private ParsedInterviewReply askForUnaskedQuestion(CandidateInterviewSchedule schedule,
             ParsedInterviewReply original, String turnPrompt, String earlier) {
@@ -1872,9 +1924,11 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                             + "not reword the earlier question."));
             if (reply != null && !reply.isBlank()) {
                 ParsedInterviewReply retry = replyParser.parse(reply);
-                if (!retry.closing() && InterviewContextService.repeatedQuestion(
-                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()),
-                        retry.spokenText()) == null) {
+                if (!retry.closing() && !original.spokenText().isBlank()
+                        && !InterviewContextService.sameQuestion(original.spokenText(), retry.spokenText())
+                        && InterviewContextService.repeatedQuestion(
+                                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()),
+                                retry.spokenText()) == null) {
                     Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
                     return new ParsedInterviewReply(retry.spokenText(), score, TurnKind.NEW_QUESTION,
                             retry.topic() != null ? retry.topic() : original.topic(), false,
