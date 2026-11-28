@@ -67,6 +67,9 @@ public class ApiSecurityConfig {
 					"/api/generate-otp", "/api/validate-otp").permitAll()
 			.requestMatchers(HttpMethod.PUT, "/api/update-password").permitAll()
 
+			// Uptime monitors and load balancers have no token. Returns only the status.
+			.requestMatchers(HttpMethod.GET, "/api/health").permitAll()
+
 			// The "confirm your slot" link in the acknowledgement mail. It is opened from a mail client, so there is
 			// no login; the controller refuses any request whose signed token does not match the application.
 			.requestMatchers(HttpMethod.GET, "/api/job-applications/acknowledge").permitAll()
