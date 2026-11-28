@@ -96,6 +96,16 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
     @org.springframework.beans.factory.annotation.Value("${interview.early-stop.max-average:3.0}")
     private double earlyStopMaxAverage = 3.0;
 
+    /**
+     * Questions the interview may run past its question limit to cover the JD skills it has not yet covered. A limit
+     * smaller than the job's skills need used to end the interview with skills never asked; this is the ceiling on that
+     * extension, so a misconfigured job still ends.
+     */
+    @org.springframework.beans.factory.annotation.Value("${interview.coverage.max-extra-questions:30}")
+    private int coverageExtraQuestions = 30;
+
+    private static final String COVERAGE_EXTENSION_SEPARATOR = System.lineSeparator() + System.lineSeparator();
+
     /** Distinct coding tasks an interview must include before it may close (re-asked tasks do not count again). */
     @org.springframework.beans.factory.annotation.Value("${interview.coding.min-tasks:2}")
     private int minCodingTasks = 2;
@@ -712,6 +722,16 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 closingAsked = false;
             }
             int turnsLeft = template.effectiveMax() - current.getTotalQuestionsAsked();
+            // The JD skills not yet covered (technical round): each must reach Expert, stop at a level, or have had its
+            // share of the questions before the interview may end. While any is left, the question limit, the closing
+            // question and the early stop all wait, up to the extension ceiling.
+            java.util.List<String> uncovered = uncoveredSkills(current, template);
+            boolean coverageOwed = !uncovered.isEmpty()
+                    && current.getTotalQuestionsAsked() < template.effectiveMax() + coverageExtraQuestions;
+            if (coverageOwed && turnsLeft <= 2) {
+                log.info("Interview {}: question limit near but skills not yet covered ({}); continuing", scheduleId,
+                        uncovered);
+            }
 
             String turnPrompt = contextService.buildNextQuestionPrompt(
                     current,
@@ -723,9 +743,14 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 turnPrompt += "\n\n" + CLOSING_ANSWER_DIRECTIVE;
             } else if (closingAsked) {
                 turnPrompt += "\n\n" + FINAL_REPLY_DIRECTIVE;
+            } else if (coverageOwed && turnsLeft <= 2) {
+                // The budget note says the questions are nearly spent; without this the interviewer tries to close.
+                turnPrompt += COVERAGE_EXTENSION_SEPARATOR + "QUESTION LIMIT EXTENDED: these JD skills are not yet "
+                        + "covered: " + String.join(", ", uncovered) + ". Do NOT close or ask the closing question. "
+                        + "Ask the next question the assessment sequence names.";
             } else if (turnsLeft == 1) {
                 turnPrompt += "\n\n" + CLOSING_QUESTION_DIRECTIVE;
-            } else if (!moreQuestionsWelcome && shouldStopEarly(scheduleId)) {
+            } else if (!moreQuestionsWelcome && !coverageOwed && shouldStopEarly(scheduleId)) {
                 // The candidate is plainly not answering correctly. Carrying on only lengthens a result that is
                 // already clear, so the interview moves to its close, and is recorded as ended for that reason.
                 log.info("Interview {}: answers consistently below the mark; moving to close", scheduleId);
@@ -782,6 +807,16 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 parsed = askForDifferentProblem(current, parsed, turnPrompt);
             }
 
+            // A new coding problem marked as a follow-up is a new question: the page clears the notepad for it, and the
+            // plan and repeat checks below treat it as one.
+            if (!parsed.closing() && newProblemAsFollowUp(scheduleId, parsed)) {
+                log.info("Interview {}: a new coding problem was marked as a follow-up; treated as a new question",
+                        scheduleId);
+                parsed = new ParsedInterviewReply(parsed.spokenText(), parsed.answerScore(), TurnKind.NEW_QUESTION,
+                        parsed.topic(), false, parsed.level(), parsed.codeMismatch(), parsed.skill(),
+                        parsed.notEnglish(), parsed.competency());
+            }
+
             // A new question tests something not yet tested for its skill. Asking about the same competency again,
             // reworded, was counted as new coverage when it showed nothing new.
             if (!parsed.closing() && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)
@@ -791,14 +826,12 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
 
             // The same question again, by its wording, under whatever competency name. The interviewer sees only the
             // last few exchanges word for word, and asked questions again that had dropped out of its view.
-            if (introductionReask == null && !inviteQuestion && !parsed.closing()
-                    && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)) {
-                String earlier = InterviewContextService.repeatedQuestion(
-                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId), parsed.spokenText());
-                if (earlier != null) {
-                    parsed = askForUnaskedQuestion(current, parsed, turnPrompt, earlier);
-                }
+            // Follow-ups are checked too, against every question before the one they press: a question already done
+            // came back tagged as a follow-up.
+            if (introductionReask == null && !inviteQuestion && !parsed.closing()) {
+                parsed = withoutRepeat(current, parsed, turnPrompt);
             }
+            final String checkedForRepeat = parsed.spokenText();
 
             // The resume questions come first and check the resume; they do not count towards a skill's levels, so
             // whatever skill or level the model put on one is taken off.
@@ -822,7 +855,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                     && (parsed.turnKind() == null || parsed.turnKind() == TurnKind.NEW_QUESTION)) {
                 java.util.List<String> required = contextService.requiredSkills(current);
                 com.rightpath.service.InterviewLevelProgression.Expected expected =
-                        levelProgression.expectedNext(historyWithScore(scheduleId, parsed.answerScore()), required);
+                        levelProgression.expectedNext(historyWithScore(scheduleId, parsed.answerScore()), required,
+                                template.effectiveMax());
                 String problem = planMismatch(expected, parsed, required);
                 if (problem != null) {
                     parsed = askToFollowPlan(current, parsed, turnPrompt, problem, expected, required);
@@ -842,7 +876,8 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             // Closes when the model says it is done, or when the budget is
             // spent. The ceiling is enforced here rather than trusted to the
             // prompt: an interview that never ends is worse than one cut short.
-            boolean ceilingHit = conductPolicy.hasReachedCeiling(template, current.getTotalQuestionsAsked());
+            boolean ceilingHit = conductPolicy.hasReachedCeiling(template, current.getTotalQuestionsAsked())
+                    && !coverageOwed;
             // The candidate has answered the closing question, so this reply is the last one whatever the model says.
             boolean finished = !moreQuestionsWelcome && (parsed.closing() || ceilingHit || closingAsked);
 
@@ -872,11 +907,11 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
             boolean wantsToClose = (parsed.closing() || isClosingQuestion(parsed.spokenText()))
                     && !ceilingHit && !closingAsked && !moreQuestionsWelcome;
             boolean stoppingEarly = sharedState != null && sharedState.get("early-stop:" + scheduleId).isPresent();
-            if (wantsToClose && !stoppingEarly && levelProgression != null && turnsLeft > 2
+            if (wantsToClose && !stoppingEarly && levelProgression != null && (turnsLeft > 2 || coverageOwed)
                     && current.getEffectiveRound() == com.rightpath.enums.InterviewRound.L2_TECHNICAL) {
                 String gap = levelProgression.completionGap(
                         entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId),
-                        contextService.requiredSkills(current), minCodingTasks);
+                        contextService.requiredSkills(current), minCodingTasks, template.effectiveMax());
                 if (gap != null) {
                     ParsedInterviewReply continued = askToContinue(current, gap);
                     if (continued != null) {
@@ -884,6 +919,13 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                         finished = false;
                     }
                 }
+            }
+
+            // The plan, coverage and completion checks above may have had the question written again; the new one is
+            // checked for repeats as well, since a question already done came back that way.
+            if (!finished && !parsed.closing() && introductionReask == null && !inviteQuestion
+                    && !moreQuestionsWelcome && !closingAsked && !parsed.spokenText().equals(checkedForRepeat)) {
+                parsed = withoutRepeat(current, parsed, turnPrompt);
             }
 
             // The interview is about to end, and the candidate's last words from the interviewer must be a goodbye. A
@@ -1216,6 +1258,28 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
      * Whether the candidate has plainly stopped answering correctly: once enough answers are rated, the last few
      * average below the mark. Only rated, non-introduction answers count, so one bad question never ends anything.
      */
+    /**
+     * The JD's required skills not yet covered, technical round only: a skill is covered once it has reached Expert,
+     * stopped at a level, or had its share of the question limit. Weak answers on one skill used to end the whole
+     * interview, and a question limit too small for the job ended it, before the later skills were reached; the
+     * report then showed them as "not assessed" on a candidate who was never asked about them.
+     */
+    private java.util.List<String> uncoveredSkills(CandidateInterviewSchedule schedule,
+            EffectiveInterviewTemplate template) {
+        if (levelProgression == null
+                || schedule.getEffectiveRound() != com.rightpath.enums.InterviewRound.L2_TECHNICAL
+                || contextService.inResumePhase(schedule)) {
+            return java.util.List.of();
+        }
+        java.util.List<String> required = contextService.requiredSkills(schedule);
+        if (required == null || required.isEmpty()) {
+            return java.util.List.of();
+        }
+        return levelProgression.unfinished(
+                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()), required,
+                template.effectiveMax());
+    }
+
     boolean shouldStopEarly(Long scheduleId) {
         if (!earlyStopEnabled) {
             return false;
@@ -1762,6 +1826,30 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 .anyMatch(e -> similarity(asked, problemWords(e.getContent())) >= 0.8);
     }
 
+    /**
+     * Whether a coding reply marked as a follow-up is really a new problem: the question it follows was not a coding
+     * task, or it states a problem of its own (with examples) that is not the one in hand. The notepad brings the
+     * candidate's last code back for a follow-up, so that they can correct it; on a new problem marked as a follow-up
+     * the code written for the previous problem appeared under it.
+     */
+    boolean newProblemAsFollowUp(Long scheduleId, ParsedInterviewReply reply) {
+        if (!isCodingQuestion(reply) || !isFollowUp(reply)) {
+            return false;
+        }
+        VoiceConversationEntry inHand = null;
+        for (VoiceConversationEntry entry : entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(scheduleId)) {
+            if (entry.getRole() == ConversationRole.INTERVIEWER
+                    && (entry.getTurnKind() == null || entry.getTurnKind() == TurnKind.NEW_QUESTION)) {
+                inHand = entry;
+            }
+        }
+        if (inHand == null || inHand.getContent() == null || !CODING_OPENING.matcher(inHand.getContent()).find()) {
+            return true;
+        }
+        return hasExamples(reply.spokenText())
+                && similarity(problemWords(reply.spokenText()), problemWords(inHand.getContent())) < 0.5;
+    }
+
     /** The words of a coding problem's statement: no tag, task type or examples, so wording around it is ignored. */
     static java.util.Set<String> problemWords(String text) {
         if (text == null) {
@@ -1840,6 +1928,19 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                 .anyMatch(c -> c.toLowerCase().replaceAll("[^a-z0-9+#]", "").equals(wanted));
     }
 
+    private static boolean isFollowUp(ParsedInterviewReply reply) {
+        return reply.turnKind() != null && reply.turnKind() != TurnKind.NEW_QUESTION;
+    }
+
+    /** The reply, or a replacement asked for once when it repeats a question already asked in this interview. */
+    private ParsedInterviewReply withoutRepeat(CandidateInterviewSchedule schedule, ParsedInterviewReply reply,
+            String turnPrompt) {
+        String earlier = InterviewContextService.repeatedQuestion(
+                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()), reply.spokenText(),
+                isFollowUp(reply));
+        return earlier == null ? reply : askForUnaskedQuestion(schedule, reply, turnPrompt, earlier);
+    }
+
     /** Asks once for a question not asked before; the original stands if the second try repeats too. */
     private ParsedInterviewReply askForUnaskedQuestion(CandidateInterviewSchedule schedule,
             ParsedInterviewReply original, String turnPrompt, String earlier) {
@@ -1852,9 +1953,11 @@ public class VoiceInterviewServiceImpl implements VoiceInterviewService {
                             + "not reword the earlier question."));
             if (reply != null && !reply.isBlank()) {
                 ParsedInterviewReply retry = replyParser.parse(reply);
-                if (!retry.closing() && InterviewContextService.repeatedQuestion(
-                        entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()),
-                        retry.spokenText()) == null) {
+                if (!retry.closing() && !original.spokenText().isBlank()
+                        && !InterviewContextService.sameQuestion(original.spokenText(), retry.spokenText())
+                        && InterviewContextService.repeatedQuestion(
+                                entryRepository.findByInterviewScheduleIdOrderByTimestampAsc(schedule.getId()),
+                                retry.spokenText()) == null) {
                     Integer score = retry.answerScore() != null ? retry.answerScore() : original.answerScore();
                     return new ParsedInterviewReply(retry.spokenText(), score, TurnKind.NEW_QUESTION,
                             retry.topic() != null ? retry.topic() : original.topic(), false,

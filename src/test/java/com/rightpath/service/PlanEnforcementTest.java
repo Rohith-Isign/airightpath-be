@@ -68,6 +68,54 @@ class PlanEnforcementTest {
     }
 
     @Test
+    @DisplayName("a skill stays one block: it is not left at Basic and come back to later")
+    void oneBlockPerSkill() {
+        ask("Python", "BASIC", false);
+        answer(8, false);
+        ask("Python", "BASIC", true);
+        answer(8, true);
+        // Plenty of questions left: Python carries on, deeper, rather than handing over and returning later.
+        assertThat(progression.expectedNext(entries, JOB, 40).skill()).isEqualTo("Python");
+    }
+
+    @Test
+    @DisplayName("no skill may take the questions the later skills need")
+    void eachSkillGetsAFairShare() {
+        // A limit of 12, 6 kept for the introduction, resume and close: 6 left for 3 skills, so 2 each (one level).
+        ask("Python", "BASIC", false);
+        answer(8, false);
+        ask("Python", "BASIC", true);
+        answer(8, true);
+        assertThat(progression.expectedNext(entries, JOB, 12))
+                .isEqualTo(new InterviewLevelProgression.Expected("Machine Learning", "BASIC", false));
+        assertThat(progression.unfinished(entries, JOB, 12)).containsExactly("Machine Learning", "RAG");
+    }
+
+    @Test
+    @DisplayName("a skill that stops early hands its unused questions to the skills after it")
+    void unusedShareMovesOn() {
+        ask("Python", "BASIC", true);
+        answer(2, true); // stopped at Basic after one question
+        // 20 - 6 - 1 = 13 left for Machine Learning and RAG: 6 each, not the 4 an even three-way split would give.
+        String[] levels = {"BASIC", "BASIC", "INTERMEDIATE", "INTERMEDIATE", "ADVANCED"};
+        for (int i = 0; i < levels.length; i++) {
+            boolean coding = i == 1 || i == 2;
+            ask("Machine Learning", levels[i], coding);
+            answer(8, coding);
+        }
+        assertThat(progression.expectedNext(entries, JOB, 20).skill()).isEqualTo("Machine Learning");
+    }
+
+    @Test
+    @DisplayName("a skill that stops at Basic is left; the others still get their turn")
+    void stoppedSkillDoesNotBlockTheRest() {
+        ask("Python", "BASIC", true);
+        answer(2, true); // two questions a level, both needed: one miss stops Python at Basic
+        assertThat(progression.notStarted(entries, JOB)).containsExactly("Machine Learning", "RAG");
+        assertThat(progression.expectedNext(entries, JOB).skill()).isEqualTo("Machine Learning");
+    }
+
+    @Test
     @DisplayName("a question on another skill, or at the wrong level, or without its owed coding task, is a mismatch")
     void mismatches() {
         InterviewLevelProgression.Expected expected = new InterviewLevelProgression.Expected("Python", "INTERMEDIATE", false);

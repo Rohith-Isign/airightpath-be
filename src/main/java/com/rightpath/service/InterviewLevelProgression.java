@@ -517,10 +517,68 @@ public class InterviewLevelProgression {
     }
 
     /**
-     * The skill to ask about now: the one already in progress, until its levels are done and it owes no coding task;
-     * then the next required skill not yet started. One skill at a time, all its levels and its coding, before the next.
+     * Questions kept back from the skills' shares for the introduction, the resume questions and the close. Only used
+     * when the interview has a question limit.
+     */
+    @Value("${interview.level.reserved-questions:6}")
+    private int reservedQuestions = 6;
+
+    /** New questions (coding tasks included, follow-ups not) asked on a skill. */
+    static int questionsOn(List<VoiceConversationEntry> entries, List<String> required, String skill) {
+        int count = 0;
+        for (VoiceConversationEntry entry : entries) {
+            if (entry.getRole() == ConversationRole.INTERVIEWER && entry.getLevel() != null
+                    && (entry.getTurnKind() == null || entry.getTurnKind() == com.rightpath.enums.TurnKind.NEW_QUESTION)
+                    && skill.equals(canonical(entry.getSkill(), required))) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Whether a skill has used its fair share of the interview's question limit. Skills are still asked one at a time,
+     * each as one continuous block (coming back to a topic later reads to the candidate as a repeat), but no skill may
+     * take the questions the later ones need: a 1 h 51 min interview spent 40 questions on Core Java and Spring Boot and
+     * never reached HTML or CSS.
+     *
+     * <p>The share is what is left of the limit, after the reserve and the questions the earlier skills used, split
+     * evenly between this skill and those not yet started; so a skill that stopped early hands its unused questions on.
+     * Never less than one level's worth. No limit (0, or settings paused) means no share.</p>
+     */
+    boolean shareSpent(List<VoiceConversationEntry> entries, List<String> required, Map<String, SkillState> states,
+            String skill, int maxQuestions) {
+        if (maxQuestions <= 0 || required == null || required.isEmpty()) {
+            return false;
+        }
+        int spentOnOthers = 0;
+        int waiting = 0;
+        for (String other : required) {
+            if (other.equals(skill)) {
+                continue;
+            }
+            if (states.containsKey(other) || questionsOn(entries, required, other) > 0) {
+                spentOnOthers += questionsOn(entries, required, other);
+            } else {
+                waiting++;
+            }
+        }
+        int share = Math.max(Math.max(1, questionsPerLevel),
+                (maxQuestions - reservedQuestions - spentOnOthers) / (1 + waiting));
+        return questionsOn(entries, required, skill) >= share;
+    }
+
+    /**
+     * The skill to ask about now: the one already in progress, until its levels are done (or its share of the question
+     * limit is spent) and it owes no coding task; then the next required skill not yet started. One skill at a time,
+     * as one block, before the next.
      */
     String currentSkill(List<VoiceConversationEntry> entries, List<String> required, Map<String, SkillState> states) {
+        return currentSkill(entries, required, states, 0);
+    }
+
+    String currentSkill(List<VoiceConversationEntry> entries, List<String> required, Map<String, SkillState> states,
+            int maxQuestions) {
         String lastAsked = null;
         for (VoiceConversationEntry entry : entries) {
             if (entry.getRole() == ConversationRole.INTERVIEWER && entry.getSkill() != null) {
@@ -530,14 +588,33 @@ public class InterviewLevelProgression {
                 }
             }
         }
-        if (lastAsked != null && !isComplete(entries, required, states, lastAsked)) {
+        if (lastAsked != null && !isComplete(entries, required, states, lastAsked, maxQuestions)) {
             return lastAsked;
         }
-        return required.stream().filter(s -> !isComplete(entries, required, states, s))
-                .filter(s -> !states.containsKey(s))
+        final String last = lastAsked;
+        return required.stream().filter(s -> !isComplete(entries, required, states, s, maxQuestions))
+                .filter(s -> !states.containsKey(s) && !s.equals(last))
                 .findFirst()
-                .orElseGet(() -> required.stream().filter(s -> !isComplete(entries, required, states, s)).findFirst()
-                        .orElse(null));
+                .orElseGet(() -> required.stream()
+                        .filter(s -> !isComplete(entries, required, states, s, maxQuestions))
+                        .filter(s -> !shareSpent(entries, required, states, s, maxQuestions))
+                        .findFirst().orElse(null));
+    }
+
+    /** As {@link #isComplete}, also counting a skill whose share of the question limit is spent. */
+    private boolean isComplete(List<VoiceConversationEntry> entries, List<String> required,
+            Map<String, SkillState> states, String skill, int maxQuestions) {
+        boolean levelsDone = isDone(states.get(skill)) || shareSpent(entries, required, states, skill, maxQuestions);
+        return levelsDone && codingOwed(entries, required, skill).isEmpty();
+    }
+
+    /** Required skills not asked about at all yet. */
+    public List<String> notStarted(List<VoiceConversationEntry> entries, List<String> required) {
+        if (required == null) {
+            return List.of();
+        }
+        Map<String, SkillState> states = compute(entries, required);
+        return required.stream().filter(s -> !states.containsKey(s)).toList();
     }
 
     /** What the next new question must be: its skill, its level, and whether it has to be a coding task. */
@@ -550,11 +627,16 @@ public class InterviewLevelProgression {
      * has had its first question, so each level has one.
      */
     public Expected expectedNext(List<VoiceConversationEntry> entries, List<String> required) {
+        return expectedNext(entries, required, 0);
+    }
+
+    /** As above, within the interview's question limit (0 for none): see {@link #shareSpent}. */
+    public Expected expectedNext(List<VoiceConversationEntry> entries, List<String> required, int maxQuestions) {
         if (required == null || required.isEmpty()) {
             return null;
         }
         Map<String, SkillState> states = compute(entries, required);
-        String current = currentSkill(entries, required, states);
+        String current = currentSkill(entries, required, states, maxQuestions);
         if (current == null) {
             return null;
         }
@@ -568,8 +650,14 @@ public class InterviewLevelProgression {
 
     /** Required skills whose levels are not yet done: what still has to be assessed before the interview may close. */
     public List<String> unfinished(List<VoiceConversationEntry> entries, List<String> required) {
+        return unfinished(entries, required, 0);
+    }
+
+    /** As above; a skill whose share of the question limit is spent counts as done. */
+    public List<String> unfinished(List<VoiceConversationEntry> entries, List<String> required, int maxQuestions) {
         Map<String, SkillState> states = compute(entries, required);
-        return required.stream().filter(s -> !isDone(states.get(s))).toList();
+        return required.stream().filter(s -> !isDone(states.get(s)))
+                .filter(s -> !shareSpent(entries, required, states, s, maxQuestions)).toList();
     }
 
     /**
@@ -602,7 +690,12 @@ public class InterviewLevelProgression {
      * the minimum number of distinct coding tasks overall.
      */
     public String completionGap(List<VoiceConversationEntry> entries, List<String> required, int minCodingTasks) {
-        List<String> open = unfinished(entries, required);
+        return completionGap(entries, required, minCodingTasks, 0);
+    }
+
+    public String completionGap(List<VoiceConversationEntry> entries, List<String> required, int minCodingTasks,
+            int maxQuestions) {
+        List<String> open = unfinished(entries, required, maxQuestions);
         List<String> codingGaps = new ArrayList<>();
         for (String skill : required) {
             List<String> owed = codingOwed(entries, required, skill);
@@ -637,11 +730,17 @@ public class InterviewLevelProgression {
      * list may be used. Null when the job lists no skills.
      */
     public String buildSequenceDirective(List<VoiceConversationEntry> entries, List<String> required) {
+        return buildSequenceDirective(entries, required, 0);
+    }
+
+    /** As above, within the interview's question limit (0 for none). */
+    public String buildSequenceDirective(List<VoiceConversationEntry> entries, List<String> required,
+            int maxQuestions) {
         if (required == null || required.isEmpty()) {
             return null;
         }
         Map<String, SkillState> states = compute(entries, required);
-        String current = currentSkill(entries, required, states);
+        String current = currentSkill(entries, required, states, maxQuestions);
         StringBuilder sb = new StringBuilder("ASSESSMENT SEQUENCE — decided by the system; follow it exactly.\n")
                 .append("The job's skills are: ").append(String.join(", ", required))
                 .append(". Tag [SKILL] with one of these names only. Never assess a skill or domain outside this list ")
@@ -653,7 +752,7 @@ public class InterviewLevelProgression {
         }
         SkillState state = states.get(current);
         List<String> owed = codingOwed(entries, required, current);
-        Expected next = expectedNext(entries, required);
+        Expected next = expectedNext(entries, required, maxQuestions);
         if (next != null) {
             sb.append("YOUR NEXT NEW QUESTION: ").append(next.skill()).append(" at ").append(next.level())
                     .append(next.coding() ? ", as a coding task ([CODING], with its Task type)" : "")
@@ -673,7 +772,9 @@ public class InterviewLevelProgression {
             sb.append("Ask your next question on ").append(current).append(" at ")
                     .append(state == null ? "BASIC" : state.currentLevel())
                     .append(". Stay on ").append(current)
-                    .append(" until it reaches Expert or stops at a level; only then move to the next skill.");
+                    .append(" until the system moves you to the next skill (when it reaches Expert, stops at a ")
+                    .append("level, or has had its share of the interview's questions). Never come back to a skill ")
+                    .append("once you have moved on from it.");
             if (isCodingSkill(current)) {
                 sb.append(" ").append(current).append(" is a coding skill: it needs its own coding task ([CODING], ")
                         .append("tagged with this skill and the level) at each of ")
@@ -687,7 +788,7 @@ public class InterviewLevelProgression {
                 .append("yet tested for ").append(current);
         sb.append(tested.isEmpty() ? "." : ". Already tested: " + String.join("; ", tested) + ".");
         List<String> after = required.stream().filter(s -> !s.equals(current))
-                .filter(s -> !isComplete(entries, required, states, s)).toList();
+                .filter(s -> !isComplete(entries, required, states, s, maxQuestions)).toList();
         if (!after.isEmpty()) {
             sb.append("\nStill to come, in this order unless the resume shows a later one is the candidate's stronger ")
                     .append("skill: ").append(String.join(", ", after)).append('.');

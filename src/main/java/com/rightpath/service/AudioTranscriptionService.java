@@ -105,6 +105,10 @@ public class AudioTranscriptionService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private CandidateNameResolver nameResolver;
 
+    /** The technical vocabulary hinted to the speech model. Optional, so tests without it still run. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private TranscriptionVocabulary vocabulary;
+
     public AudioTranscriptionService(OpenAiStreamingService openAiStreamingService,
                                      SimpMessagingTemplate messagingTemplate,
                                      SharedStateStore sharedState) {
@@ -159,9 +163,12 @@ public class AudioTranscriptionService {
         java.util.concurrent.CompletableFuture<String> heard = new java.util.concurrent.CompletableFuture<>();
         try {
             String filename = String.format("chunk_%d.webm", chunkIndex);
-            String hint = nameResolver == null ? null : nameResolver.forInterview(scheduleId)
-                    .map(name -> "The speaker's name is " + name + ".")
-                    .orElse(null);
+            // The candidate's name and the technical terms they are likely to say (job, resume, question in hand), so
+            // the speech model spells them as written. Falls back to the name alone.
+            String hint = vocabulary != null ? vocabulary.hint(scheduleId)
+                    : nameResolver == null ? null : nameResolver.forInterview(scheduleId)
+                            .map(name -> "The speaker's name is " + name + ".")
+                            .orElse(null);
             // What was really spoken: checked alongside, on its own threads, and never waited for. The transcript
             // is published as soon as it is ready; the check counts towards the answer when it finishes.
             if (detectLanguage) {
@@ -193,6 +200,18 @@ public class AudioTranscriptionService {
             if (hint != null && result.getText() != null && result.getText().contains("speaker's name is")) {
                 result = new TranscriptionResult(
                         result.getText().replaceAll("(?i)the speaker's name is [^.]*\\.?", "").trim(),
+                        result.getDuration(), result.getWords());
+            }
+
+            // On a silent or very quiet chunk the model can say its hint back ("A technical interview answer
+            // mentioning Java, Spring Boot..."): nothing the candidate said.
+            if (hint != null && TranscriptionVocabulary.echoesHint(result.getText(), hint)) {
+                log.info("Dropped chunk {} for schedule {}: it was the speech hint said back", chunkIndex, scheduleId);
+                result = new TranscriptionResult("", result.getDuration(), result.getWords());
+            }
+            // Technical terms the model still spells its own way ("my sequel", "Java script", "J D B C").
+            if (result.getText() != null && !result.getText().isBlank()) {
+                result = new TranscriptionResult(com.rightpath.util.TechVocabulary.correct(result.getText()),
                         result.getDuration(), result.getWords());
             }
 

@@ -13,6 +13,12 @@ public class HealthController {
 
     private static final int MAX_ALLOWED_HEADERS = 2; // adjust limit as needed
 
+    /** Public liveness check: answers as long as the application can serve requests. */
+    @GetMapping("/api/health")
+    public java.util.Map<String, String> apiHealth() {
+        return java.util.Map.of("status", "UP");
+    }
+
     @GetMapping("/actuator/health")
     public Object health(HttpServletRequest request, HttpServletResponse response) throws IOException {
 
