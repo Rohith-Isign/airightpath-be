@@ -388,6 +388,20 @@ public class GlobalExceptionHandler {
                 "Uploaded file is too large.", req, null);
     }
 
+    /**
+     * An exception that already names its status, such as 410 for a recording that has been finished.
+     * Without this the catch-all below turns it into a 500, and a client told 500 keeps retrying.
+     */
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<ApiError> handleResponseStatus(
+            org.springframework.web.server.ResponseStatusException ex, HttpServletRequest req) {
+        HttpStatus status = HttpStatus.valueOf(ex.getStatusCode().value());
+        logger.warn("{} at {}: {}", status.value(), req.getRequestURI(), ex.getReason());
+        String code = status == HttpStatus.PAYLOAD_TOO_LARGE ? ErrorCodes.PAYLOAD_TOO_LARGE
+                : ErrorCodes.BUSINESS_ERROR;
+        return build(status, code, ex.getReason(), req, null);
+    }
+
     // ---------------------------------------------------------------------
     // 5xx - Infrastructure / unexpected
     // ---------------------------------------------------------------------
